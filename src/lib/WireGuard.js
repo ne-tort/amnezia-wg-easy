@@ -27,10 +27,14 @@ const {
   JMAX,
   S1,
   S2,
+  S3,
+  S4,
   H1,
   H2,
   H3,
   H4,
+  I1,
+  WG_QR_COMPACT,
 } = require('../config');
 
 module.exports = class WireGuard {
@@ -48,6 +52,8 @@ module.exports = class WireGuard {
           config = await fs.readFile(path.join(WG_PATH, 'wg0.json'), 'utf8');
           config = JSON.parse(config);
           debug('Configuration loaded.');
+          if (config.server.s3 === undefined) config.server.s3 = S3;
+          if (config.server.s4 === undefined) config.server.s4 = S4;
         } catch (err) {
           const privateKey = await Util.exec('wg genkey');
           const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
@@ -66,6 +72,8 @@ module.exports = class WireGuard {
               jmax: JMAX,
               s1: S1,
               s2: S2,
+              s3: S3,
+              s4: S4,
               h1: H1,
               h2: H2,
               h3: H3,
@@ -124,11 +132,12 @@ Jmin = ${config.server.jmin}
 Jmax = ${config.server.jmax}
 S1 = ${config.server.s1}
 S2 = ${config.server.s2}
+S3 = ${config.server.s3}
+S4 = ${config.server.s4}
 H1 = ${config.server.h1}
 H2 = ${config.server.h2}
 H3 = ${config.server.h3}
 H4 = ${config.server.h4}
-Jc = ${config.server.jc}
 `;
 
     for (const [clientId, client] of Object.entries(config.clients)) {
@@ -221,12 +230,13 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     return client;
   }
 
-  async getClientConfiguration({ clientId }) {
+  async getClientConfiguration({ clientId, forQR = false }) {
     const config = await this.getConfig();
     const client = await this.getClient({ clientId });
 
-    return `
-[Interface]
+    const omitI1 = forQR && WG_QR_COMPACT;
+
+    return `[Interface]
 PrivateKey = ${client.privateKey ? `${client.privateKey}` : 'REPLACE_ME'}
 Address = ${client.address}
 ${WG_DEFAULT_DNS ? `DNS = ${WG_DEFAULT_DNS}\n` : ''}\
@@ -236,12 +246,13 @@ Jmin = ${config.server.jmin}
 Jmax = ${config.server.jmax}
 S1 = ${config.server.s1}
 S2 = ${config.server.s2}
+S3 = ${config.server.s3}
+S4 = ${config.server.s4}
 H1 = ${config.server.h1}
 H2 = ${config.server.h2}
 H3 = ${config.server.h3}
 H4 = ${config.server.h4}
-
-[Peer]
+${omitI1 ? '' : `I1 = ${I1}\n\n`}[Peer]
 PublicKey = ${config.server.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
 }AllowedIPs = ${WG_ALLOWED_IPS}
@@ -250,10 +261,11 @@ Endpoint = ${WG_HOST}:${WG_PORT}`;
   }
 
   async getClientQRCodeSVG({ clientId }) {
-    const config = await this.getClientConfiguration({ clientId });
+    const config = await this.getClientConfiguration({ clientId, forQR: true });
     return QRCode.toString(config, {
       type: 'svg',
       width: 512,
+      errorCorrectionLevel: 'L',
     });
   }
 

@@ -302,6 +302,25 @@
                       </svg>
                     </a>
 
+                    <button v-if="client.downloadableConfig" @click="showConfig(client)"
+                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
+                      :title="$t('viewConfig')">
+                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    </button>
+                    <button v-if="client.downloadableConfig" @click="copyConfig(client)"
+                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
+                      :title="$t('copyConfig')">
+                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </button>
+
                     <!-- Delete -->
 
                     <button
@@ -346,7 +365,7 @@
         </div>
 
         <!-- QR Code-->
-        <div v-if="qrcode">
+        <div v-if="false">
           <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20">
             <div class="bg-white rounded-md shadow-lg relative p-8">
               <button @click="qrcode = null"
@@ -357,6 +376,37 @@
                 </svg>
               </button>
               <img :src="qrcode" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Config View Modal -->
+        <div v-if="configViewClient" class="fixed inset-0 z-20 flex items-center justify-center p-4 overflow-y-auto">
+          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeConfigView"></div>
+          <div class="relative w-full max-w-2xl my-8 bg-white dark:bg-neutral-700 rounded-md shadow-lg border border-gray-200 dark:border-neutral-600">
+            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-neutral-600">
+              <p class="font-bold text-gray-800 dark:text-neutral-200">{{ $t('viewConfig') }}</p>
+              <button @click="closeConfigView"
+                class="text-gray-600 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
+                <svg class="w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div class="px-6 py-4">
+              <textarea readonly :value="configViewText"
+                class="w-full p-3 font-mono text-sm bg-gray-100 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 rounded border border-gray-200 dark:border-neutral-500 resize-none overflow-y-auto block"
+                rows="18" style="max-height: 60vh;"></textarea>
+            </div>
+            <div class="flex gap-2 px-6 py-4 border-t border-gray-200 dark:border-neutral-600">
+              <button @click="copyFromConfigView"
+                class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">
+                {{ $t('copyConfig') }}
+              </button>
+              <button @click="closeConfigView"
+                class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
+                {{ $t('close') }}
+              </button>
             </div>
           </div>
         </div>

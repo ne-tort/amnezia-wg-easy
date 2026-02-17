@@ -29,6 +29,14 @@ class API {
     return json;
   }
 
+  async getConfiguration(clientId) {
+    const res = await fetch(`./api/wireguard/client/${clientId}/configuration`, {
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(res.statusText);
+    return res.text();
+  }
+
   async getCheckUpdate() {
     return this.call({
       method: 'get',

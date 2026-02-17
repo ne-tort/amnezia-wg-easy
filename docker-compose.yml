@@ -1,17 +1,20 @@
-volumes:
-  etc_amneziawg:
+# Amnezia WG-Easy — custom build (DPI patches, UI: no QR, Copy button)
+# Run: ./deploy.sh or docker compose up -d --build
 
 services:
   amnezia-wg-easy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: amnezia-wg-easy:local
+    container_name: amnezia-wg-easy
     env_file:
       - .env
-    image: ghcr.io/spcfox/amnezia-wg-easy
-    container_name: amnezia-wg-easy
-    volumes:
-      - ~/.amnezia-wg-easy:/etc/wireguard
     ports:
-      - "${WG_PORT}:51820/udp"
-      - "${PORT}:${PORT}/tcp"
+      - "${WG_PORT:-51820}:51820/udp"
+      - "${PORT:-51821}:${PORT:-51821}/tcp"
+    volumes:
+      - amnezia-wg-data:/etc/amnezia/amneziawg
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
@@ -21,3 +24,6 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
     devices:
       - /dev/net/tun:/dev/net/tun
+
+volumes:
+  amnezia-wg-data:

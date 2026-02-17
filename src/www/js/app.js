@@ -66,6 +66,8 @@ new Vue({
     clientEditAddress: null,
     clientEditAddressId: null,
     qrcode: null,
+    configViewClient: null,
+    configViewText: '',
 
     currentRelease: null,
     latestRelease: null,
@@ -159,6 +161,55 @@ new Vue({
     },
   },
   methods: {
+    async copyConfig(client) {
+      try {
+        const config = await this.api.getConfiguration(client.id);
+        const ta = document.createElement('textarea');
+        ta.value = config;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:2em;height:2em;padding:0;border:none;outline:none;boxShadow:none;background:transparent;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('Copy failed');
+        alert(this.$t('copiedToClipboard'));
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async showConfig(client) {
+      try {
+        const config = await this.api.getConfiguration(client.id);
+        this.configViewClient = client;
+        this.configViewText = config;
+      } catch (err) {
+        alert(err.message || 'Failed to load config');
+      }
+    },
+    closeConfigView() {
+      this.configViewClient = null;
+      this.configViewText = '';
+    },
+    copyFromConfigView() {
+      if (!this.configViewText) return;
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = this.configViewText;
+        ta.setAttribute('readonly', '');
+        ta.style.cssText = 'position:fixed;top:0;left:0;width:2em;height:2em;padding:0;border:none;outline:none;boxShadow:none;background:transparent;opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        const ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+        if (!ok) throw new Error('Copy failed');
+        alert(this.$t('copiedToClipboard'));
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
     dateTime: (value) => {
       return new Intl.DateTimeFormat(undefined, {
         year: 'numeric',
