@@ -11,13 +11,20 @@ module.exports.WG_PATH = process.env.WG_PATH || '/etc/amnezia/amneziawg/';
 module.exports.WG_DEVICE = process.env.WG_DEVICE || 'eth0';
 module.exports.WG_HOST = process.env.WG_HOST;
 module.exports.WG_PORT = process.env.WG_PORT || '51820';
-module.exports.WG_MTU = process.env.WG_MTU || null;
-module.exports.WG_PERSISTENT_KEEPALIVE = process.env.WG_PERSISTENT_KEEPALIVE || '0';
+// * MTU 1280 avoids fragmentation on mobile (large response packets often dropped otherwise). Set WG_MTU=none or empty to omit from client config.
+const _mtu = process.env.WG_MTU;
+module.exports.WG_MTU = (_mtu === '' || _mtu === 'none') ? null : (_mtu || '1280');
+// * PersistentKeepalive: 0 can break connectivity behind mobile NAT; 25 keeps tunnel alive. Override via WG_PERSISTENT_KEEPALIVE.
+module.exports.WG_PERSISTENT_KEEPALIVE = process.env.WG_PERSISTENT_KEEPALIVE !== undefined && process.env.WG_PERSISTENT_KEEPALIVE !== ''
+  ? process.env.WG_PERSISTENT_KEEPALIVE
+  : '25';
 module.exports.WG_DEFAULT_ADDRESS = process.env.WG_DEFAULT_ADDRESS || '10.8.0.x';
+// * Default DNS for client configs. 1.1.1.1 (Cloudflare) is often blocked in Russia; 8.8.8.8 works more reliably. Override via WG_DEFAULT_DNS.
 module.exports.WG_DEFAULT_DNS = typeof process.env.WG_DEFAULT_DNS === 'string'
   ? process.env.WG_DEFAULT_DNS
-  : '1.1.1.1';
-module.exports.WG_ALLOWED_IPS = process.env.WG_ALLOWED_IPS || '0.0.0.0/0, ::/0';
+  : '8.8.8.8';
+// * AllowedIPs: "0.0.0.0/0" only = IPv4 tunnel (often fixes mobile); "0.0.0.0/0, ::/0" = IPv4+IPv6. Override via WG_ALLOWED_IPS.
+module.exports.WG_ALLOWED_IPS = process.env.WG_ALLOWED_IPS || '0.0.0.0/0';
 
 module.exports.WG_PRE_UP = process.env.WG_PRE_UP || '';
 module.exports.WG_POST_UP = process.env.WG_POST_UP || `

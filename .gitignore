@@ -2,6 +2,7 @@
 /config
 /wg0.conf
 /wg0.json
+/vpn-client-test/wg0.conf
 /src/node_modules
 .DS_Store
 *.swp

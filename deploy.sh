@@ -23,8 +23,8 @@ if grep -E "^PASSWORD=" .env 2>/dev/null | grep -q "YOUR_ADMIN_PASSWORD"; then
     echo "[deploy] Generated random PASSWORD (saved in .env)"
 fi
 
-# Stop and remove old container (from this or previous deploy)
-docker rm -f amnezia-wg-easy 2>/dev/null || true
+# Stop and remove old containers (from this or previous deploy)
+docker rm -f amnezia-wg-easy amnezia-dns 2>/dev/null || true
 
 echo "[deploy] Building and starting..."
 docker compose up -d --build --force-recreate --remove-orphans
@@ -34,3 +34,4 @@ WG_HOST=$(grep -E "^WG_HOST=" .env 2>/dev/null | cut -d= -f2 || echo "localhost"
 PASSWORD=$(grep -E "^PASSWORD=" .env 2>/dev/null | cut -d= -f2- || echo "")
 echo "[deploy] Done. Web UI: http://${WG_HOST}:${PORT}"
 echo "[deploy] Password: ${PASSWORD}"
+echo "[deploy] Amnezia DNS: set WG_DEFAULT_DNS=10.8.0.1 in .env and re-download client configs to use it."

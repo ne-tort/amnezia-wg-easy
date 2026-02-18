@@ -2,6 +2,17 @@
 # Run: ./deploy.sh or docker compose up -d --build
 
 services:
+  amnezia-dns:
+    build:
+      context: amnezia-dns
+      dockerfile: Dockerfile
+    image: amnezia-dns:local
+    container_name: amnezia-dns
+    restart: always
+    networks:
+      amnezia-net:
+        ipv4_address: 172.29.172.254
+
   amnezia-wg-easy:
     build:
       context: .
@@ -10,9 +21,13 @@ services:
     container_name: amnezia-wg-easy
     env_file:
       - .env
+    depends_on:
+      - amnezia-dns
     ports:
-      - "${WG_PORT:-51820}:51820/udp"
-      - "${PORT:-51821}:${PORT:-51821}/tcp"
+      # VPN (UDP): host and container use same port so ListenPort in wg0.conf matches. Change via WG_PORT in .env.
+      - "${WG_PORT:-51820}:${WG_PORT:-51820}/udp"
+      # Web UI (TCP). Bind host: WEBUI_BIND_HOST (e.g. 127.0.0.1 or 0.0.0.0). PORT in .env.
+      - "${WEBUI_BIND_HOST:-0.0.0.0}:${PORT:-51821}:${PORT:-51821}/tcp"
     volumes:
       - amnezia-wg-data:/etc/amnezia/amneziawg
     restart: unless-stopped
@@ -24,6 +39,16 @@ services:
       - net.ipv4.conf.all.src_valid_mark=1
     devices:
       - /dev/net/tun:/dev/net/tun
+    networks:
+      - default
+      - amnezia-net
+
+networks:
+  amnezia-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.172.0/24
 
 volumes:
   amnezia-wg-data:

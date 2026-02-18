@@ -24,11 +24,16 @@ COPY --from=build_node_modules /node_modules /node_modules
 RUN apk add --no-cache \
     dpkg \
     dumb-init \
+    dnsmasq \
     iptables
 
 ENV DEBUG=Server,WireGuard
 
 RUN mkdir -p /etc/amnezia/amneziawg
 
+COPY config/dnsmasq-amnezia.conf /etc/dnsmasq-amnezia.conf
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 WORKDIR /app
-CMD ["/usr/bin/dumb-init", "node", "server.js"]
+CMD ["/entrypoint.sh"]
