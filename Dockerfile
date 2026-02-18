@@ -22,6 +22,7 @@ RUN apk add --no-cache \
 COPY --from=build_node_modules /node_modules /node_modules
 
 RUN apk add --no-cache \
+    bind-tools \
     dpkg \
     dumb-init \
     dnsmasq \
@@ -29,7 +30,13 @@ RUN apk add --no-cache \
 
 ENV DEBUG=Server,WireGuard
 
-RUN mkdir -p /etc/amnezia/amneziawg
+RUN mkdir -p /opt/amnezia/awg
+
+# * After amneziawg-go daemonizes, wait for UAPI socket before awg setconf (fixes "Unable to modify interface: Invalid argument").
+RUN mkdir -p /var/run/amneziawg && \
+    sed -i '/cmd.*amneziawg-go.*INTERFACE/a\
+		sleep 2;\
+		i=0; while [ \$i -lt 120 ]; do [ -S /var/run/amneziawg/\$INTERFACE.sock ] \&\& break; sleep 0.5; i=\$((i+1)); done' /usr/bin/awg-quick
 
 COPY config/dnsmasq-amnezia.conf /etc/dnsmasq-amnezia.conf
 COPY entrypoint.sh /entrypoint.sh

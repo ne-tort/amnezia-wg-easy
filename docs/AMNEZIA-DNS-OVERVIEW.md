@@ -48,6 +48,10 @@
 
 В репозитории amnezia-vpn/amnezia-client сервис DNS реализован так: образ на базе **Unbound** (mvance/unbound), конфиг с форвардом в Cloudflare DoT (1.1.1.1@853), контейнер в Docker-сети `amnezia-dns-net` с IP **172.29.172.254**.
 
+**Эталонные конфиги (источник):**
+- **Unbound** (`amnezia-dns/Dockerfile`): содержимое `forward-records.conf` скопировано из [amnezia-vpn/amnezia-client](https://github.com/amnezia-vpn/amnezia-client) → `client/server_scripts/dns/Dockerfile` (domain-insecure для coin/emc/lib/bazar/enum, stub-зоны emercoin, forward-zone на 1.1.1.1@853 и 1.0.0.1@853). Менять только при синхронизации с клиентом.
+- **dnsmasq** (`config/dnsmasq-amnezia.conf`): конфиг форварда в контейнере wg-easy: все запросы на 172.29.172.254 (Amnezia DNS). Опции: `listen-address=0.0.0.0`, `no-resolv`, `no-hosts`, `no-poll`, `server=172.29.172.254`. В клиенте Amnezia dnsmasq не используется (трафик к DNS идёт через iptables с VPN-контейнера).
+
 Чтобы поставить то же самое вручную на сервере (без приложения Amnezia):
 
 1. **Скрипт в нашем проекте** (рекомендуется):
@@ -69,7 +73,7 @@
 
 ## Связь с нашим проектом (amnezia-wg-fresh)
 
-**Amnezia DNS встроен в docker-compose.** При `docker compose up` поднимаются оба сервиса: **amnezia-wg-easy** и **amnezia-dns** (Unbound в сети `amnezia-net`, IP 172.29.172.254). В контейнере wg-easy при `WG_DEFAULT_DNS=10.8.0.1` запускается dnsmasq и форвардит все DNS-запросы на контейнер amnezia-dns.
+**Amnezia DNS встроен в docker-compose.** При `docker compose up` поднимаются оба сервиса: **amnezia-wg-easy** и **amnezia-dns** (Unbound в сети `amnezia-dns-net`, IP 172.29.172.254). В контейнере wg-easy при `WG_DEFAULT_DNS=10.8.0.1` запускается dnsmasq и форвардит все DNS-запросы на контейнер amnezia-dns.
 
 **Как использовать встроенный Amnezia DNS:**
 

@@ -74,7 +74,7 @@
 | Аспект | wg-easy | amnezia-wg-fresh |
 |--------|---------|------------------|
 | Демон | Автоопределение awg vs wg (`modinfo amneziawg`) | Всегда amneziawg (awg, awg-quick) |
-| Путь конфига | `/etc/wireguard/{name}.conf` | `WG_PATH/wg0.conf` (по умолчанию `/etc/amnezia/amneziawg/`) |
+| Путь конфига | `/etc/wireguard/{name}.conf` | `WG_PATH/wg0.conf` (по умолчанию `/opt/amnezia/awg/`) |
 | Параметры Amnezia | Jc, Jmin, Jmax, S1–S4, H1–H4, I1–I5 в БД (интерфейс + клиент) | Env + wg0.json, профили I1 (QUIC, DNS, SIP и т.д.) |
 
 ---

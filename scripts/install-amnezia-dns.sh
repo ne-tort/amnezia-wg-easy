@@ -13,7 +13,7 @@ NETWORK_NAME="amnezia-dns-net"
 DNS_IP="172.29.172.254"
 
 if [ ! -f "$DNS_DIR/Dockerfile" ]; then
-  echo "Error: $DNS_DIR/Dockerfile not found. Run from amnezia-wg-fresh root."
+  echo "Error: $DNS_DIR/Dockerfile not found. Run from repo root or set AMNEZIA_WG_FRESH_ROOT."
   exit 1
 fi
 

@@ -9,8 +9,10 @@ services:
     image: amnezia-dns:local
     container_name: amnezia-dns
     restart: always
+    logging:
+      driver: none
     networks:
-      amnezia-net:
+      amnezia-dns-net:
         ipv4_address: 172.29.172.254
 
   amnezia-wg-easy:
@@ -29,8 +31,11 @@ services:
       # Web UI (TCP). Bind host: WEBUI_BIND_HOST (e.g. 127.0.0.1 or 0.0.0.0). PORT in .env.
       - "${WEBUI_BIND_HOST:-0.0.0.0}:${PORT:-51821}:${PORT:-51821}/tcp"
     volumes:
-      - amnezia-wg-data:/etc/amnezia/amneziawg
+      - amnezia-wg-data:/opt/amnezia/awg
+      # * Mount host kernel modules so container can use amneziawg.ko if installed (same as Amnezia client).
+      - /lib/modules:/lib/modules:ro
     restart: unless-stopped
+    privileged: true
     cap_add:
       - NET_ADMIN
       - SYS_MODULE
@@ -41,11 +46,13 @@ services:
       - /dev/net/tun:/dev/net/tun
     networks:
       - default
-      - amnezia-net
+      - amnezia-dns-net
 
 networks:
-  amnezia-net:
+  amnezia-dns-net:
     driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: amn0
     ipam:
       config:
         - subnet: 172.29.172.0/24

@@ -44,6 +44,6 @@ stub-zone:\n\
 forward-zone:\n\
  name: .\n\
  forward-tls-upstream: yes\n\
- forward-addr: 1.1.1.1@853\n\
- forward-addr: 1.0.0.1@853\n\
+ forward-addr: 1.1.1.1@853 #cloudflare-dns.com\n\
+ forward-addr: 1.0.0.1@853 #cloudflare-dns.com\n\
 " | tee /opt/unbound/etc/unbound/forward-records.conf
