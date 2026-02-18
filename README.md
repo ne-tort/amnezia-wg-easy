@@ -7,7 +7,7 @@
 ## Быстрый старт
 
 ```bash
-git clone https://github.com/netort/amnezia-wg-easy.git
+git clone https://github.com/ne-tort/amnezia-wg-easy.git
 cd amnezia-wg-easy
 ./deploy.sh
 ```
