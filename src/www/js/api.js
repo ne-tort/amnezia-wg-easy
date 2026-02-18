@@ -29,8 +29,31 @@ class API {
     return json;
   }
 
-  async getConfiguration(clientId) {
-    const res = await fetch(`./api/wireguard/client/${clientId}/configuration`, {
+  async getConfiguration(clientId, level, profile) {
+    const params = [];
+    if (level !== undefined && level !== null) params.push(`level=${Number(level)}`);
+    if (profile !== undefined && profile !== null && profile !== '') params.push(`profile=${encodeURIComponent(profile)}`);
+    const qs = params.length ? `?${params.join('&')}` : '';
+    const res = await fetch(`./api/wireguard/client/${clientId}/configuration${qs}`, {
+      credentials: 'include',
+    });
+    if (!res.ok) throw new Error(res.statusText);
+    return res.text();
+  }
+
+  /**
+   * Fetches QR code SVG for client. When level/profile are passed, config is built with that obfuscation.
+   * @param {string} clientId
+   * @param {number} [level] 0–5 (I0–I5)
+   * @param {string} [profile] quic, dns, sip
+   * @returns {Promise<string>} SVG markup
+   */
+  async getClientQRCodeSVG(clientId, level, profile) {
+    const params = [];
+    if (level !== undefined && level !== null) params.push(`level=${Number(level)}`);
+    if (profile !== undefined && profile !== null && profile !== '') params.push(`profile=${encodeURIComponent(profile)}`);
+    const qs = params.length ? `?${params.join('&')}` : '';
+    const res = await fetch(`./api/wireguard/client/${clientId}/qrcode.svg${qs}`, {
       credentials: 'include',
     });
     if (!res.ok) throw new Error(res.statusText);

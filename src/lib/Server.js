@@ -14,6 +14,7 @@ const {
   createRouter,
   defineEventHandler,
   fromNodeMiddleware,
+  getQuery,
   getRouterParam,
   toNodeListener,
   readBody,
@@ -22,6 +23,7 @@ const {
 } = require('h3');
 
 const WireGuard = require('../services/WireGuard');
+const { isKnownProfile } = require('./obfuscationProfiles');
 
 const {
   CHECK_UPDATE,
@@ -146,14 +148,30 @@ module.exports = class Server {
       }))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
-        const svg = await WireGuard.getClientQRCodeSVG({ clientId });
+        const query = getQuery(event);
+        let level;
+        if (query.level !== undefined) {
+          const n = parseInt(query.level, 10);
+          if (Number.isFinite(n) && n >= 0 && n <= 5) level = n;
+        }
+        let profile;
+        if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
+        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile });
         setHeader(event, 'Content-Type', 'image/svg+xml');
         return svg;
       }))
       .get('/api/wireguard/client/:clientId/configuration', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        const query = getQuery(event);
+        let level;
+        if (query.level !== undefined) {
+          const n = parseInt(query.level, 10);
+          if (Number.isFinite(n) && n >= 0 && n <= 5) level = n;
+        }
+        let profile;
+        if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
         const client = await WireGuard.getClient({ clientId });
-        const config = await WireGuard.getClientConfiguration({ clientId });
+        const config = await WireGuard.getClientConfiguration({ clientId, level, profile });
         const configName = client.name
           .replace(/[^a-zA-Z0-9_=+.-]/g, '-')
           .replace(/(-{2,}|-$)/g, '-')

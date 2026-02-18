@@ -25,17 +25,40 @@ function bytes(bytes, decimals, kib, maxunit) {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+const DEFAULT_LOCALE = 'ru';
+const LOCALE_STORAGE_KEY = 'lang';
+
 const i18n = new VueI18n({
-  locale: localStorage.getItem('lang') || 'en',
-  fallbackLocale: 'en',
+  locale: localStorage.getItem(LOCALE_STORAGE_KEY) || DEFAULT_LOCALE,
+  fallbackLocale: DEFAULT_LOCALE,
   messages,
 });
+
+// * Labels for language switcher (code -> short label).
+const LOCALE_LABELS = {
+  ru: 'Рус', en: 'En', ua: 'Укр', de: 'De', fr: 'Fr', es: 'Es', pl: 'Pl', pt: 'Pt', it: 'It', nl: 'Nl',
+  tr: 'Tr', no: 'No', ko: 'Ko', vi: 'Vi', th: 'Th', hi: 'Hi', is: 'Is', ca: 'Ca', chs: '简', cht: '繁',
+};
+function getLocaleLabel(code) {
+  return LOCALE_LABELS[code] || code;
+}
 
 const UI_CHART_TYPES = [
   { type: false, strokeWidth: 0 },
   { type: 'line', strokeWidth: 3 },
   { type: 'area', strokeWidth: 0 },
   { type: 'bar', strokeWidth: 0 },
+];
+
+// * Obfuscation profiles: order for cycle and labels (must match backend profile ids).
+// qrFriendly: true when I1 is short enough for QR to scan reliably; false for long signatures (quic, sip).
+const PROFILE_LIST = [
+  { id: 'quic', label: 'QUIC', qrFriendly: false },
+  { id: 'dns', label: 'DNS', qrFriendly: true },
+  { id: 'sip', label: 'SIP', qrFriendly: false },
+  { id: 'stun', label: 'STUN', qrFriendly: true },
+  { id: 'webrtc', label: 'WebRTC', qrFriendly: true },
+  { id: 'dtls', label: 'DTLS', qrFriendly: true },
 ];
 
 const CHART_COLORS = {
@@ -69,6 +92,9 @@ new Vue({
     configViewClient: null,
     configViewText: '',
 
+    clientLevels: {},
+    clientProfiles: {},
+
     currentRelease: null,
     latestRelease: null,
 
@@ -78,6 +104,7 @@ new Vue({
     uiShowCharts: localStorage.getItem('uiShowCharts') === '1',
     uiTheme: localStorage.theme || 'auto',
     prefersDarkScheme: window.matchMedia('(prefers-color-scheme: dark)'),
+    currentLocale: localStorage.getItem(LOCALE_STORAGE_KEY) || DEFAULT_LOCALE,
 
     chartOptions: {
       chart: {
@@ -161,9 +188,35 @@ new Vue({
     },
   },
   methods: {
+    getClientLevel(client) {
+      return this.clientLevels[client.id] ?? 1;
+    },
+    cycleClientLevel(client) {
+      const current = this.getClientLevel(client);
+      const next = current >= 5 ? 0 : current + 1;
+      this.$set(this.clientLevels, client.id, next);
+    },
+    getClientProfile(client) {
+      return this.clientProfiles[client.id] ?? 'quic';
+    },
+    getClientProfileLabel(client) {
+      const id = this.getClientProfile(client);
+      const p = PROFILE_LIST.find((x) => x.id === id);
+      return p ? p.label : id;
+    },
+    isProfileQRFriendly(profileId) {
+      const p = PROFILE_LIST.find((x) => x.id === profileId);
+      return p ? p.qrFriendly === true : false;
+    },
+    cycleClientProfile(client) {
+      const current = this.getClientProfile(client);
+      const idx = PROFILE_LIST.findIndex((x) => x.id === current);
+      const nextIdx = idx < 0 ? 0 : (idx + 1) % PROFILE_LIST.length;
+      this.$set(this.clientProfiles, client.id, PROFILE_LIST[nextIdx].id);
+    },
     async copyConfig(client) {
       try {
-        const config = await this.api.getConfiguration(client.id);
+        const config = await this.api.getConfiguration(client.id, this.getClientLevel(client), this.getClientProfile(client));
         const ta = document.createElement('textarea');
         ta.value = config;
         ta.setAttribute('readonly', '');
@@ -181,11 +234,19 @@ new Vue({
     },
     async showConfig(client) {
       try {
-        const config = await this.api.getConfiguration(client.id);
+        const config = await this.api.getConfiguration(client.id, this.getClientLevel(client), this.getClientProfile(client));
         this.configViewClient = client;
         this.configViewText = config;
       } catch (err) {
         alert(err.message || 'Failed to load config');
+      }
+    },
+    async showQR(client) {
+      try {
+        const svg = await this.api.getClientQRCodeSVG(client.id, this.getClientLevel(client), this.getClientProfile(client));
+        this.qrcode = 'data:image/svg+xml,' + encodeURIComponent(svg);
+      } catch (err) {
+        alert(err.message || 'Failed to load QR code');
       }
     },
     closeConfigView() {
@@ -360,6 +421,15 @@ new Vue({
       localStorage.theme = this.uiTheme;
       this.setTheme(this.uiTheme);
     },
+    setLocale(locale) {
+      if (!locale || !this.$i18n.availableLocales.includes(locale)) return;
+      this.currentLocale = locale;
+      this.$i18n.locale = locale;
+      localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+    },
+    getLocaleLabel(code) {
+      return getLocaleLabel(code);
+    },
     setTheme(theme) {
       const { classList } = document.documentElement;
       const shouldAddDarkClass = theme === 'dark' || (theme === 'auto' && this.prefersDarkScheme.matches);
@@ -422,12 +492,6 @@ new Vue({
       });
 
     Promise.resolve().then(async () => {
-      const lang = await this.api.getLang();
-      if (lang !== localStorage.getItem('lang') && i18n.availableLocales.includes(lang)) {
-        localStorage.setItem('lang', lang);
-        i18n.locale = lang;
-      }
-
       const checkUpdate = await this.api.getCheckUpdate();
       if (!checkUpdate) return;
 
@@ -479,6 +543,12 @@ new Vue({
         return this.prefersDarkScheme.matches ? 'dark' : 'light';
       }
       return this.uiTheme;
+    },
+    localeOptions() {
+      return this.$i18n.availableLocales.map((code) => ({
+        code,
+        label: getLocaleLabel(code),
+      }));
     },
   },
 });

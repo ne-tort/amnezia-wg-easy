@@ -48,6 +48,11 @@
                   d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
               </svg>
             </button>
+            <!-- Language -->
+            <select v-model="currentLocale" @change="setLocale(currentLocale)"
+              class="h-8 min-w-[3rem] rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-800 dark:text-neutral-200 text-sm font-medium px-2 border-0 cursor-pointer hover:bg-gray-300 dark:hover:bg-neutral-600 transition focus:ring-2 focus:ring-red-800 dark:focus:ring-red-600 focus:outline-none">
+              <option v-for="opt in localeOptions" :key="opt.code" :value="opt.code">{{ opt.label }}</option>
+            </select>
             <!-- Show / hide charts -->
             <label v-if="uiChartType > 0" class="inline-flex items-center justify-center cursor-pointer w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 whitespace-nowrap transition group" :title="$t('toggleCharts')">
               <input type="checkbox" value="" class="sr-only peer" v-model="uiShowCharts" @change="toggleCharts">
@@ -60,11 +65,7 @@
             <span v-if="requiresPassword"
               class="text-sm text-gray-400 dark:text-neutral-400 cursor-pointer hover:underline"
               @click="logout">
-              {{$t("logout")}}
-              <svg class="h-3 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
+              {{ $t("logout") }}
             </span>
           </div>
         </div>
@@ -284,9 +285,23 @@
                       <div class="rounded-full w-4 h-4 m-1 bg-white"></div>
                     </div>
 
+                    <!-- Obfuscation level I0–I5 -->
+                    <button v-if="client.downloadableConfig" type="button"
+                      @click="cycleClientLevel(client)"
+                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition font-mono text-sm min-w-[2.25rem]"
+                      :title="$t('obfuscationLevelTitle', { level: 'I' + getClientLevel(client) })">
+                      I{{ getClientLevel(client) }}
+                    </button>
+                    <!-- Obfuscation profile (QUIC/DNS/SIP/…) — hidden at I0 -->
+                    <button v-if="client.downloadableConfig && getClientLevel(client) !== 0" type="button"
+                      @click="cycleClientProfile(client)"
+                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition font-mono text-sm min-w-[2.5rem]"
+                      :title="$t('profileTitle', { profile: getClientProfileLabel(client) })">
+                      {{ getClientProfileLabel(client) }}
+                    </button>
                     <!-- Download Config -->
                     <a :disabled="!client.downloadableConfig"
-                      :href="'./api/wireguard/client/' + client.id + '/configuration'"
+                      :href="'./api/wireguard/client/' + client.id + '/configuration?level=' + getClientLevel(client) + '&profile=' + getClientProfile(client)"
                       :download="client.downloadableConfig ? 'configuration' : null"
                       class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 p-2 rounded transition"
                       :class="{
@@ -318,6 +333,14 @@
                       <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                           d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                      </svg>
+                    </button>
+                    <button v-if="client.downloadableConfig && isProfileQRFriendly(getClientProfile(client))" @click="showQR(client)"
+                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
+                      :title="$t('showQR')">
+                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" />
                       </svg>
                     </button>
 
@@ -364,10 +387,10 @@
           </div>
         </div>
 
-        <!-- QR Code-->
-        <div v-if="false">
+        <!-- QR Code (compact config without I1; full config via Download/View) -->
+        <div v-if="qrcode">
           <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20">
-            <div class="bg-white rounded-md shadow-lg relative p-8">
+            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg relative p-8">
               <button @click="qrcode = null"
                 class="absolute right-4 top-4 text-gray-600 dark:text-neutral-500 hover:text-gray-800 dark:hover:text-neutral-700">
                 <svg class="w-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
@@ -375,7 +398,7 @@
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
-              <img :src="qrcode" />
+              <img :src="qrcode" alt="QR Code" class="max-w-full" />
             </div>
           </div>
         </div>

@@ -23,8 +23,8 @@ if grep -E "^PASSWORD=" .env 2>/dev/null | grep -q "YOUR_ADMIN_PASSWORD"; then
     echo "[deploy] Generated random PASSWORD (saved in .env)"
 fi
 
-# Stop old container if switching
-docker stop amnezia-wg-easy 2>/dev/null || true
+# Stop and remove old container (from this or previous deploy)
+docker rm -f amnezia-wg-easy 2>/dev/null || true
 
 echo "[deploy] Building and starting..."
 docker compose up -d --build --force-recreate --remove-orphans

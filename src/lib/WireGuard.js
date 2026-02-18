@@ -8,6 +8,7 @@ const QRCode = require('qrcode');
 
 const Util = require('./Util');
 const ServerError = require('./ServerError');
+const { getProfileI1, isKnownProfile } = require('./obfuscationProfiles');
 
 const {
   WG_PATH,
@@ -34,7 +35,12 @@ const {
   H3,
   H4,
   I1,
+  I2,
+  I3,
+  I4,
+  I5,
   WG_QR_COMPACT,
+  OBFS_R_BYTES,
 } = require('../config');
 
 module.exports = class WireGuard {
@@ -54,6 +60,10 @@ module.exports = class WireGuard {
           debug('Configuration loaded.');
           if (config.server.s3 === undefined) config.server.s3 = S3;
           if (config.server.s4 === undefined) config.server.s4 = S4;
+          if (config.server.i2 === undefined) config.server.i2 = I2;
+          if (config.server.i3 === undefined) config.server.i3 = I3;
+          if (config.server.i4 === undefined) config.server.i4 = I4;
+          if (config.server.i5 === undefined) config.server.i5 = I5;
         } catch (err) {
           const privateKey = await Util.exec('wg genkey');
           const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
@@ -78,6 +88,10 @@ module.exports = class WireGuard {
               h2: H2,
               h3: H3,
               h4: H4,
+              i2: I2,
+              i3: I3,
+              i4: I4,
+              i5: I5,
             },
             clients: {},
           };
@@ -230,11 +244,46 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
     return client;
   }
 
-  async getClientConfiguration({ clientId, forQR = false }) {
+  async getClientConfiguration({ clientId, forQR = false, forceOmitI1ForCapacity = false, level, profile }) {
     const config = await this.getConfig();
     const client = await this.getClient({ clientId });
 
-    const omitI1 = forQR && WG_QR_COMPACT;
+    const i1 = (profile != null && isKnownProfile(profile)) ? getProfileI1(profile) : I1;
+
+    let iLines = [];
+    if (level !== undefined && level !== null) {
+      // * Level-based obfuscation (QUIC-realistic): I0 = none, I1 = I1 only,
+      // I2 = <c>, I3 = <t>, I4 = <r N>, I5 = <r N> — dynamic chain per docs/recommendations.
+      const l = Number(level);
+      if (l === 0) {
+        iLines = [];
+      } else if (l === 1) {
+        if (i1) iLines.push(`I1 = ${i1}`);
+      } else if (l >= 2 && l <= 5) {
+        if (i1) iLines.push(`I1 = ${i1}`);
+        if (l >= 2) iLines.push('I2 = <c>');
+        if (l >= 3) iLines.push('I3 = <t>');
+        if (l >= 4) iLines.push(`I4 = <r ${OBFS_R_BYTES}>`);
+        if (l >= 5) iLines.push(`I5 = <r ${OBFS_R_BYTES}>`);
+      } else {
+        // Invalid level: fall back to legacy behavior.
+        const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
+        if (!omitI1 && i1) iLines.push(`I1 = ${i1}`);
+        if (config.server.i2) iLines.push(`I2 = ${config.server.i2}`);
+        if (config.server.i3) iLines.push(`I3 = ${config.server.i3}`);
+        if (config.server.i4) iLines.push(`I4 = ${config.server.i4}`);
+        if (config.server.i5) iLines.push(`I5 = ${config.server.i5}`);
+      }
+    } else {
+      // Legacy: no level — use omitI1 and server i2–i5.
+      const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
+      if (!omitI1 && i1) iLines.push(`I1 = ${i1}`);
+      if (config.server.i2) iLines.push(`I2 = ${config.server.i2}`);
+      if (config.server.i3) iLines.push(`I3 = ${config.server.i3}`);
+      if (config.server.i4) iLines.push(`I4 = ${config.server.i4}`);
+      if (config.server.i5) iLines.push(`I5 = ${config.server.i5}`);
+    }
+    const iBlock = iLines.length ? iLines.join('\n') + '\n\n' : '';
 
     return `[Interface]
 PrivateKey = ${client.privateKey ? `${client.privateKey}` : 'REPLACE_ME'}
@@ -252,7 +301,7 @@ H1 = ${config.server.h1}
 H2 = ${config.server.h2}
 H3 = ${config.server.h3}
 H4 = ${config.server.h4}
-${omitI1 ? '' : `I1 = ${I1}\n\n`}[Peer]
+${iBlock}[Peer]
 PublicKey = ${config.server.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
 }AllowedIPs = ${WG_ALLOWED_IPS}
@@ -260,8 +309,15 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
 Endpoint = ${WG_HOST}:${WG_PORT}`;
   }
 
-  async getClientQRCodeSVG({ clientId }) {
-    const config = await this.getClientConfiguration({ clientId, forQR: true });
+  async getClientQRCodeSVG({ clientId, level, profile }) {
+    // When level is provided, build config by level (may be large for L5). Otherwise compact (no I1).
+    const config = await this.getClientConfiguration({
+      clientId,
+      forQR: level === undefined || level === null,
+      forceOmitI1ForCapacity: level === undefined || level === null,
+      level,
+      profile,
+    });
     return QRCode.toString(config, {
       type: 'svg',
       width: 512,
