@@ -62,7 +62,7 @@
                     d="M18.375 2.25c-1.035 0-1.875.84-1.875 1.875v15.75c0 1.035.84 1.875 1.875 1.875h.75c1.035 0 1.875-.84 1.875-1.875V4.125c0-1.036-.84-1.875-1.875-1.875h-.75ZM9.75 8.625c0-1.036.84-1.875 1.875-1.875h.75c1.036 0 1.875.84 1.875 1.875v11.25c0 1.035-.84 1.875-1.875 1.875h-.75a1.875 1.875 0 0 1-1.875-1.875V8.625ZM3 13.125c0-1.036.84-1.875 1.875-1.875h.75c1.036 0 1.875.84 1.875 1.875v6.75c0 1.035-.84 1.875-1.875 1.875h-.75A1.875 1.875 0 0 1 3 19.875v-6.75Z" />
               </svg>
             </label>
-            <span v-if="requiresPassword"
+            <span v-if="authenticated"
               class="text-sm text-gray-400 dark:text-neutral-400 cursor-pointer hover:underline"
               @click="logout">
               {{ $t("logout") }}
@@ -91,7 +91,11 @@
             <div class="flex-grow">
               <p class="text-2xl font-medium dark:text-neutral-200">{{$t("clients")}}</p>
             </div>
-            <div class="flex-shrink-0">
+            <div class="flex-shrink-0 flex items-center gap-3">
+              <label class="inline-flex items-center text-sm text-gray-600 dark:text-neutral-400 cursor-pointer">
+                <input type="checkbox" v-model="showDeletedClients" @change="loadDeletedClients" class="rounded border-gray-300 dark:border-neutral-500" />
+                <span class="ml-2">{{ $t('showDeletedClients') }}</span>
+              </label>
               <button @click="clientCreate = true; clientCreateName = '';"
                 class="hover:bg-red-800 hover:border-red-800 hover:text-white text-gray-700 dark:text-neutral-200 border-2 border-gray-100 dark:border-neutral-600 py-2 px-4 rounded inline-flex items-center transition">
                 <svg class="w-4 mr-2" inline xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
@@ -220,6 +224,11 @@
                           :title="$t('lastSeen') + dateTime(new Date(client.latestHandshakeAt))">
                           {{!uiTrafficStats ? " · " : ""}}{{new Date(client.latestHandshakeAt) | timeago}}
                         </span>
+                        <!-- Access until -->
+                        <span class="text-gray-400 dark:text-neutral-500 whitespace-nowrap">
+                          · {{ $t('expiresAt') }}: {{ client.expiresAt ? dateTime(client.expiresAt) : $t('expiresNever') }}
+                          <button type="button" @click="openExpiryEdit(client)" class="text-red-800 dark:text-red-400 hover:underline ml-1">{{ $t('edit') }}</button>
+                        </span>
                       </div>
                     </div>
 
@@ -273,6 +282,16 @@
                 <div class="flex items-center justify-end">
                   <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-between">
 
+                    <!-- Firewall profile (leftmost) -->
+                    <select
+                      :value="client.ruleProfileId == null ? '' : client.ruleProfileId"
+                      @change="onFirewallProfileChange(client, $event)"
+                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] max-h-[2.25rem] border-0 cursor-pointer"
+                      :title="$t('firewallProfileTitle')">
+                      <option value="">{{ $t('firewallProfileFullAccess') }}</option>
+                      <option v-for="p in ruleProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
+                    </select>
+
                     <!-- Enable/Disable -->
                     <div @click="disableClient(client)" v-if="client.enabled === true" :title="$t('disableClient')"
                       class="inline-block align-middle rounded-full w-10 h-6 mr-1 bg-red-800 cursor-pointer hover:bg-red-700 transition-all">
@@ -285,19 +304,31 @@
                       <div class="rounded-full w-4 h-4 m-1 bg-white"></div>
                     </div>
 
-                    <!-- Obfuscation level I0–I5 -->
-                    <button v-if="client.downloadableConfig" type="button"
-                      @click="cycleClientLevel(client)"
-                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition font-mono text-sm min-w-[2.25rem]"
+                    <!-- Obfuscation level I0–I5 (dropdown) -->
+                    <select v-if="client.downloadableConfig"
+                      :value="getClientLevel(client)"
+                      @change="onObfuscationLevelChange(client, $event)"
+                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] max-h-[2.25rem] border-0 cursor-pointer font-mono min-w-[3rem]"
                       :title="$t('obfuscationLevelTitle', { level: 'I' + getClientLevel(client) })">
-                      I{{ getClientLevel(client) }}
-                    </button>
+                      <option v-for="lev in [0,1,2,3,4,5]" :key="lev" :value="lev">I{{ lev }}</option>
+                    </select>
                     <!-- Obfuscation profile (QUIC/DNS/SIP/…) — hidden at I0 -->
-                    <button v-if="client.downloadableConfig && getClientLevel(client) !== 0" type="button"
-                      @click="cycleClientProfile(client)"
-                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition font-mono text-sm min-w-[2.5rem]"
+                    <select v-if="client.downloadableConfig && getClientLevel(client) !== 0"
+                      :value="getClientProfile(client)"
+                      @change="onObfuscationProfileChange(client, $event)"
+                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] max-h-[2.25rem] border-0 cursor-pointer min-w-[3.5rem]"
                       :title="$t('profileTitle', { profile: getClientProfileLabel(client) })">
-                      {{ getClientProfileLabel(client) }}
+                      <option v-for="pid in (profileIds.length ? profileIds : ['dns','quic','stun','sip','webrtc','dtls'])" :key="pid" :value="pid">{{ getProfileLabel(pid) }}</option>
+                    </select>
+                    <!-- Regenerate I1 signatures (all protocols) -->
+                    <button v-if="client.downloadableConfig" type="button"
+                      @click="regenerateSignatures()"
+                      :disabled="regeneratingSignatures"
+                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      :title="$t('regenerateSignatures')">
+                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
                     </button>
                     <!-- Download Config -->
                     <a :disabled="!client.downloadableConfig"
@@ -361,6 +392,21 @@
               </div>
 
             </div>
+            <!-- Deleted clients (when showDeletedClients) -->
+            <div v-if="showDeletedClients && deletedClients.length > 0" class="border-t border-gray-200 dark:border-neutral-600 p-4 bg-gray-50 dark:bg-neutral-600/50">
+              <p class="text-sm font-medium text-gray-600 dark:text-neutral-300 mb-2">{{ $t('deletedClientsTitle') }}</p>
+              <div class="space-y-2">
+                <div v-for="dc in deletedClients" :key="dc.id" class="flex items-center justify-between py-2 px-3 rounded bg-white dark:bg-neutral-700 text-sm">
+                  <span class="text-gray-700 dark:text-neutral-200">{{ dc.name }}</span>
+                  <span class="text-gray-500 dark:text-neutral-400 font-mono text-xs">{{ dc.address }}</span>
+                  <span class="text-gray-400 dark:text-neutral-500 text-xs">{{ dc.deletedAt ? dateTime(dc.deletedAt) : '' }}</span>
+                  <button @click="restoreClient(dc)" class="text-red-800 dark:text-red-400 hover:underline">{{ $t('restoreClient') }}</button>
+                </div>
+              </div>
+            </div>
+            <div v-if="showDeletedClients && deletedClients.length === 0" class="border-t border-gray-200 dark:border-neutral-600 p-4 text-center text-gray-400 dark:text-neutral-500 text-sm">
+              {{ $t('noDeletedClients') }}
+            </div>
             <div v-if="clients && clients.length === 0">
               <p class="text-center m-10 text-gray-400 dark:text-neutral-400 text-sm">
                 {{$t("noClients")}}<br /><br />
@@ -383,6 +429,179 @@
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
                 </path>
               </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Global firewall rules (admin/moderator) -->
+        <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden mt-6">
+          <div class="flex flex-row flex-auto items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
+            <div class="flex-grow">
+              <p class="text-xl font-medium dark:text-neutral-200">{{ $t('globalFirewallRulesTitle') }}</p>
+            </div>
+            <div class="flex-shrink-0">
+              <button @click="openAddGlobalRule()"
+                class="hover:bg-red-800 hover:border-red-800 hover:text-white text-gray-700 dark:text-neutral-200 border-2 border-gray-100 dark:border-neutral-600 py-2 px-4 rounded inline-flex items-center transition text-sm">
+                {{ $t('globalRuleAdd') }}
+              </button>
+            </div>
+          </div>
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
+              <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
+                <tr>
+                  <th class="px-4 py-2">{{ $t('globalRuleAction') }}</th>
+                  <th class="px-4 py-2">{{ $t('globalRuleDestination') }}</th>
+                  <th class="px-4 py-2">{{ $t('globalRulePort') }}</th>
+                  <th class="px-4 py-2">{{ $t('globalRuleProtocol') }}</th>
+                  <th class="px-4 py-2">{{ $t('globalRuleSortOrder') }}</th>
+                  <th class="px-4 py-2 w-20"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in globalFirewallRules" :key="r.id" class="border-b border-gray-100 dark:border-neutral-600 hover:bg-gray-50 dark:hover:bg-neutral-600">
+                  <td class="px-4 py-2">{{ r.action }}</td>
+                  <td class="px-4 py-2 font-mono">{{ r.destination_cidr }}</td>
+                  <td class="px-4 py-2">{{ r.port_range || '—' }}</td>
+                  <td class="px-4 py-2">{{ r.protocol || '—' }}</td>
+                  <td class="px-4 py-2">{{ r.sort_order }}</td>
+                  <td class="px-4 py-2">
+                    <button @click="openEditGlobalRule(r)" class="text-red-800 dark:text-red-400 hover:underline mr-2">{{ $t('edit') }}</button>
+                    <button @click="deleteGlobalRule(r)" class="text-red-800 dark:text-red-400 hover:underline">{{ $t('deleteShort') }}</button>
+                  </td>
+                </tr>
+                <tr v-if="globalFirewallRules.length === 0">
+                  <td colspan="6" class="px-4 py-6 text-center text-gray-400 dark:text-neutral-400">{{ $t('noGlobalRules') }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Firewall profiles (expand to manage rules) -->
+        <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden mt-6">
+          <div class="p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
+            <p class="text-xl font-medium dark:text-neutral-200">{{ $t('firewallProfilesTitle') }}</p>
+          </div>
+          <div class="divide-y divide-gray-100 dark:divide-neutral-600">
+            <div v-for="profile in ruleProfiles" :key="profile.id" class="p-4">
+              <div class="flex items-center justify-between">
+                <div>
+                  <span class="font-medium dark:text-neutral-200">{{ profile.name }}</span>
+                  <span v-if="profile.description" class="text-sm text-gray-500 dark:text-neutral-400 ml-2">— {{ profile.description }}</span>
+                </div>
+                <button @click="expandProfileRules(profile)"
+                  class="text-red-800 dark:text-red-400 hover:underline text-sm">
+                  {{ profileRulesExpanded === profile.id ? $t('globalRuleCancel') : $t('firewallProfileManageRules') }}
+                </button>
+              </div>
+              <div v-if="profileRulesExpanded === profile.id" class="mt-4 overflow-x-auto">
+                <div class="flex justify-end mb-2">
+                  <button @click="openAddProfileRule(profile.id)" class="text-sm bg-red-800 hover:bg-red-700 text-white py-1 px-3 rounded">{{ $t('globalRuleAdd') }}</button>
+                </div>
+                <table class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
+                  <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
+                    <tr>
+                      <th class="px-3 py-1">{{ $t('globalRuleAction') }}</th>
+                      <th class="px-3 py-1">{{ $t('globalRuleDestination') }}</th>
+                      <th class="px-3 py-1">{{ $t('globalRulePort') }}</th>
+                      <th class="px-3 py-1">{{ $t('globalRuleProtocol') }}</th>
+                      <th class="px-3 py-1">{{ $t('globalRuleSortOrder') }}</th>
+                      <th class="px-3 py-1 w-24"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in profileRulesList" :key="r.id" class="border-b border-gray-100 dark:border-neutral-600">
+                      <td class="px-3 py-1">{{ r.action }}</td>
+                      <td class="px-3 py-1 font-mono">{{ r.destination_cidr }}</td>
+                      <td class="px-3 py-1">{{ r.port_range || '—' }}</td>
+                      <td class="px-3 py-1">{{ r.protocol || '—' }}</td>
+                      <td class="px-3 py-1">{{ r.sort_order }}</td>
+                      <td class="px-3 py-1">
+                        <button @click="openEditProfileRule(r)" class="text-red-800 dark:text-red-400 hover:underline mr-1 text-xs">{{ $t('edit') }}</button>
+                        <button @click="deleteProfileRule(r)" class="text-red-800 dark:text-red-400 hover:underline text-xs">{{ $t('deleteShort') }}</button>
+                      </td>
+                    </tr>
+                    <tr v-if="profileRulesExpanded === profile.id && profileRulesList.length === 0">
+                      <td colspan="6" class="px-3 py-4 text-center text-gray-400 dark:text-neutral-400 text-sm">{{ $t('noProfileRules') }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Profile rule add/edit modal -->
+        <div v-if="profileRuleEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
+          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeProfileRuleEdit"></div>
+          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6">
+            <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ profileRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleAction') }}</label>
+                <select v-model="profileRuleEdit.action" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option value="allow">allow</option>
+                  <option value="deny">deny</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleDestination') }} *</label>
+                <input v-model.trim="profileRuleEdit.destination_cidr" type="text" placeholder="0.0.0.0/0" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRulePort') }}</label>
+                <input v-model.trim="profileRuleEdit.port_range" type="text" placeholder="80 or 80:443" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleProtocol') }}</label>
+                <input v-model.trim="profileRuleEdit.protocol" type="text" placeholder="tcp, udp" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleSortOrder') }}</label>
+                <input v-model.number="profileRuleEdit.sort_order" type="number" min="0" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+            </div>
+            <div class="flex gap-2 mt-6">
+              <button @click="saveProfileRule" :disabled="!profileRuleEdit.destination_cidr" class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
+              <button @click="closeProfileRuleEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Global rule add/edit modal -->
+        <div v-if="globalRuleEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
+          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeGlobalRuleEdit"></div>
+          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6">
+            <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ globalRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
+            <div class="space-y-3">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleAction') }}</label>
+                <select v-model="globalRuleEdit.action" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option value="allow">allow</option>
+                  <option value="deny">deny</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleDestination') }} *</label>
+                <input v-model.trim="globalRuleEdit.destination_cidr" type="text" placeholder="0.0.0.0/0" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRulePort') }}</label>
+                <input v-model.trim="globalRuleEdit.port_range" type="text" placeholder="80 or 80:443" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleProtocol') }}</label>
+                <input v-model.trim="globalRuleEdit.protocol" type="text" placeholder="tcp, udp" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleSortOrder') }}</label>
+                <input v-model.number="globalRuleEdit.sort_order" type="number" min="0" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+            </div>
+            <div class="flex gap-2 mt-6">
+              <button @click="saveGlobalRule" :disabled="!globalRuleEdit.destination_cidr" class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
+              <button @click="closeGlobalRuleEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
             </div>
           </div>
         </div>
@@ -430,6 +649,22 @@
                 class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
                 {{ $t('close') }}
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Expiry edit modal -->
+        <div v-if="clientExpiryEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
+          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeExpiryEdit"></div>
+          <div class="relative w-full max-w-sm bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6">
+            <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ $t('expiryEditTitle') }} — {{ clientExpiryEdit.name }}</h3>
+            <div class="flex items-center gap-2 mb-4">
+              <input v-model="expiryEditValue" type="date" class="rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 flex-1" />
+              <button @click="clearExpiryEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-3 rounded text-sm">{{ $t('expiresNever') }}</button>
+            </div>
+            <div class="flex gap-2">
+              <button @click="saveExpiryEdit" class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
+              <button @click="closeExpiryEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
             </div>
           </div>
         </div>
@@ -594,6 +829,8 @@
             </svg>
           </div>
 
+          <input type="text" name="username" placeholder="Username" v-model="username"
+            class="px-3 py-2 text-sm dark:bg-neutral-700 text-gray-500 dark:text-gray-500 mb-5 border-2 border-gray-100 dark:border-neutral-800 rounded-lg w-full focus:border-red-800 dark:focus:border-red-800 dark:placeholder:text-neutral-400 outline-none" />
           <input type="password" name="password" :placeholder="$t('password')" v-model="password"
             class="px-3 py-2 text-sm dark:bg-neutral-700 text-gray-500 dark:text-gray-500 mb-5 border-2 border-gray-100 dark:border-neutral-800 rounded-lg w-full focus:border-red-800 dark:focus:border-red-800 dark:placeholder:text-neutral-400 outline-none" />
 
@@ -607,10 +844,10 @@
               </path>
             </svg>
           </button>
-          <input v-if="!authenticating && password" type="submit"
+          <input v-if="!authenticating && username && password" type="submit"
             class="bg-red-800 dark:bg-red-800 w-full rounded shadow py-2 text-sm text-white dark:text-white hover:bg-red-700 dark:hover:bg-red-700 transition cursor-pointer"
             :value="$t('signIn')">
-          <input v-if="!authenticating && !password" type="submit"
+          <input v-if="!authenticating && (!username || !password)" type="submit"
             class="bg-gray-200 dark:bg-neutral-800 w-full rounded shadow py-2 text-sm text-white dark:text-white cursor-not-allowed"
             :value="$t('signIn')">
         </form>

@@ -3,7 +3,7 @@
 # Requires: WG_DEFAULT_DNS=10.8.0.1 in .env and stack running (docker compose up -d).
 
 set -e
-CONTAINER_WG="${AMNEZIA_WG_CONTAINER:-amnezia-wg-easy}"
+CONTAINER_WG="${AMNEZIA_WG_CONTAINER:-amnezia-awg}"
 CONTAINER_DNS="${AMNEZIA_DNS_CONTAINER:-amnezia-dns}"
 TEST_DOMAIN="${1:-google.com}"
 FAILED=0

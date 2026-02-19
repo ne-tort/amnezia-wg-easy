@@ -1,11 +1,11 @@
 'use strict';
 
-const crypto = require('node:crypto');
 const { createServer } = require('node:http');
 const { stat, readFile } = require('node:fs/promises');
 const { resolve, sep } = require('node:path');
 
 const expressSession = require('express-session');
+const SqliteStore = require('better-sqlite3-session-store')(expressSession);
 const debug = require('debug')('Server');
 
 const {
@@ -22,30 +22,52 @@ const {
   serveStatic,
 } = require('h3');
 
-const WireGuard = require('../services/WireGuard');
-const { isKnownProfile } = require('./obfuscationProfiles');
+const db = require('./db');
+const auth = require('./auth');
+const WireGuard = require('./WireGuard');
+const { isKnownProfile, getProfileIds, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
+const { runSignatureGeneration } = require('./signatures');
+const { applyFirewall } = require('./firewall');
 
 const {
-  CHECK_UPDATE,
   PORT,
   WEBUI_HOST,
   RELEASE,
-  PASSWORD,
-  LANG,
-  UI_TRAFFIC_STATS,
-  UI_CHART_TYPE,
+  SESSION_SECRET,
+  WG_ALLOWED_IPS,
+  WG_PERSISTENT_KEEPALIVE,
+  WG_HOST,
+  WG_PORT,
 } = require('../config');
+
+const APP_SETTINGS_DEFAULTS = {
+  check_update: 'false',
+  language: 'ru',
+  ui_traffic_stats: 'false',
+  ui_chart_type: '0',
+  display_name: 'Amnezia WG-Easy',
+};
 
 module.exports = class Server {
 
   constructor() {
+    db.getDb();
+  }
+
+  /**
+   * Starts HTTP server (sessions, routes, listen).
+   * Call only after admin exists; first-admin setup is done in server.js main().
+   */
+  async start() {
     const app = createApp();
     this.app = app;
 
+    const sessionStore = new SqliteStore({ client: db.getDb() });
     app.use(fromNodeMiddleware(expressSession({
-      secret: crypto.randomBytes(256).toString('hex'),
-      resave: true,
-      saveUninitialized: true,
+      store: sessionStore,
+      secret: SESSION_SECRET,
+      resave: false,
+      saveUninitialized: false,
     })));
 
     const router = createRouter();
@@ -59,77 +81,86 @@ module.exports = class Server {
 
       .get('/api/check-update', defineEventHandler((event) => {
         setHeader(event, 'Content-Type', 'application/json');
-        return CHECK_UPDATE;
+        return db.appSettings.get('check_update') ?? APP_SETTINGS_DEFAULTS.check_update;
       }))
 
       .get('/api/lang', defineEventHandler((event) => {
         setHeader(event, 'Content-Type', 'application/json');
-        return `"${LANG}"`;
+        const lang = db.appSettings.get('language') ?? APP_SETTINGS_DEFAULTS.language;
+        return `"${lang}"`;
       }))
 
       .get('/api/ui-traffic-stats', defineEventHandler((event) => {
         setHeader(event, 'Content-Type', 'application/json');
-        return UI_TRAFFIC_STATS;
+        return db.appSettings.get('ui_traffic_stats') ?? APP_SETTINGS_DEFAULTS.ui_traffic_stats;
       }))
 
       .get('/api/ui-chart-type', defineEventHandler((event) => {
         setHeader(event, 'Content-Type', 'application/json');
-        return `"${UI_CHART_TYPE}"`;
+        return db.appSettings.get('ui_chart_type') ?? APP_SETTINGS_DEFAULTS.ui_chart_type;
       }))
 
-      // Authentication
-      .get('/api/session', defineEventHandler((event) => {
-        const requiresPassword = !!process.env.PASSWORD;
-        const authenticated = requiresPassword
-          ? !!(event.node.req.session && event.node.req.session.authenticated)
-          : true;
+      .get('/api/display-name', defineEventHandler((event) => {
+        setHeader(event, 'Content-Type', 'application/json');
+        const name = db.appSettings.get('display_name') ?? APP_SETTINGS_DEFAULTS.display_name;
+        return `"${name}"`;
+      }))
 
-        return {
-          requiresPassword,
-          authenticated,
-        };
+      .get('/api/session', defineEventHandler((event) => {
+        const session = event.node.req.session;
+        let authenticated = false;
+        let role = null;
+        if (session?.userId) {
+          const user = db.panelUsers.findById(session.userId);
+          if (user && user.is_active) {
+            authenticated = true;
+            role = user.role ?? null;
+          }
+        }
+        return { authenticated, role };
       }))
       .post('/api/session', defineEventHandler(async (event) => {
-        const { password } = await readBody(event);
-
-        if (typeof password !== 'string') {
-          throw createError({
-            status: 401,
-            message: 'Missing: Password',
-          });
+        const body = await readBody(event);
+        const username = typeof body.username === 'string' ? body.username.trim() : '';
+        const password = typeof body.password === 'string' ? body.password : '';
+        if (!username || !password) {
+          throw createError({ status: 401, message: 'Missing: username or password' });
         }
-
-        if (password !== PASSWORD) {
-          throw createError({
-            status: 401,
-            message: 'Incorrect Password',
-          });
+        const user = db.panelUsers.findByUsername(username);
+        if (!user) {
+          throw createError({ status: 401, message: 'Incorrect username or password' });
         }
-
+        const ok = await auth.verifyPassword(user.password_hash, password);
+        if (!ok) {
+          throw createError({ status: 401, message: 'Incorrect username or password' });
+        }
+        event.node.req.session.userId = user.id;
+        event.node.req.session.role = user.role;
         event.node.req.session.authenticated = true;
         event.node.req.session.save();
-
-        debug(`New Session: ${event.node.req.session.id}`);
-
-        return { succcess: true };
+        db.panelUsers.updateLastLogin(user.id, Math.floor(Date.now() / 1000));
+        debug('Session: user %s', user.username);
+        return { success: true, role: user.role };
       }));
 
-    // WireGuard
     app.use(
       fromNodeMiddleware((req, res, next) => {
-        if (!PASSWORD || !req.url.startsWith('/api/')) {
-          return next();
+        if (!req.url.startsWith('/api/')) return next();
+        const session = req.session;
+        if (session?.userId) {
+          const user = db.panelUsers.findById(session.userId);
+          if (user && user.is_active) return next();
         }
-
-        if (req.session && req.session.authenticated) {
-          return next();
-        }
-
-        return res.status(401).json({
-          error: 'Not Logged In',
-        });
+        return res.status(401).json({ error: 'Not Logged In' });
       }),
     );
+
+    function requireRoles(event, allowedRoles) {
+      const role = event.node.req.session?.role;
+      if (!role || !allowedRoles.includes(role)) {
+        throw createError({ status: 403, message: 'Forbidden' });
+      }
+    }
 
     const router2 = createRouter();
     app.use(router2);
@@ -143,7 +174,17 @@ module.exports = class Server {
         debug(`Deleted Session: ${sessionId}`);
         return { success: true };
       }))
-      .get('/api/wireguard/client', defineEventHandler(() => {
+      .get('/api/wireguard/client', defineEventHandler((event) => {
+        const query = getQuery(event);
+        if (query.deleted === '1' || query.deleted === 'true') {
+          const rows = db.clients.getDeleted();
+          return rows.map((r) => ({
+            id: r.id,
+            name: r.name,
+            address: r.address,
+            deletedAt: r.deleted_at ? new Date(r.deleted_at * 1000) : null,
+          }));
+        }
         return WireGuard.getClients();
       }))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
@@ -172,6 +213,24 @@ module.exports = class Server {
         if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
         const client = await WireGuard.getClient({ clientId });
         const config = await WireGuard.getClientConfiguration({ clientId, level, profile });
+        const serverRow = db.serverConfig.get();
+        if (serverRow) {
+          const now = Math.floor(Date.now() / 1000);
+          db.clientConfigVersions.insert({
+            client_id: clientId,
+            created_at: now,
+            private_key: client.privateKey,
+            address: client.address,
+            peer_public_key: serverRow.public_key,
+            preshared_key: client.preSharedKey || null,
+            allowed_ips: WG_ALLOWED_IPS || '0.0.0/0',
+            persistent_keepalive: WG_PERSISTENT_KEEPALIVE || '25',
+            endpoint: WG_HOST && WG_PORT ? `${WG_HOST}:${WG_PORT}` : '',
+            config_raw: config,
+            obfuscation_level: level != null ? level : null,
+            obfuscation_profile: profile || null,
+          });
+        }
         const configName = client.name
           .replace(/[^a-zA-Z0-9_=+.-]/g, '-')
           .replace(/(-{2,}|-$)/g, '-')
@@ -181,17 +240,53 @@ module.exports = class Server {
         setHeader(event, 'Content-Type', 'text/plain');
         return config;
       }))
+      .get('/api/wireguard/client/:clientId/config-versions', defineEventHandler((event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        const list = db.clientConfigVersions.getByClientId(clientId);
+        return list.map((v) => ({ id: v.id, version: v.version, created_at: v.created_at }));
+      }))
+      .get('/api/wireguard/client/:clientId/config-versions/:versionId', defineEventHandler((event) => {
+        const versionId = getRouterParam(event, 'versionId');
+        const v = db.clientConfigVersions.getById(parseInt(versionId, 10));
+        if (!v) throw createError({ status: 404, message: 'Version not found' });
+        return {
+          id: v.id,
+          client_id: v.client_id,
+          version: v.version,
+          created_at: v.created_at,
+          config_raw: v.config_raw,
+        };
+      }))
+      .get('/api/wireguard/client/:clientId/config-versions/:versionId/download', defineEventHandler((event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        const versionId = getRouterParam(event, 'versionId');
+        const v = db.clientConfigVersions.getById(parseInt(versionId, 10));
+        if (!v || v.client_id !== clientId) throw createError({ status: 404, message: 'Version not found' });
+        const name = (db.clients.getById(clientId)?.name || clientId).replace(/[^a-zA-Z0-9_=+.-]/g, '-').substring(0, 32);
+        setHeader(event, 'Content-Disposition', `attachment; filename="${name}-v${v.version}.conf"`);
+        setHeader(event, 'Content-Type', 'text/plain');
+        return v.config_raw || '';
+      }))
       .post('/api/wireguard/client', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
         const { name } = await readBody(event);
         await WireGuard.createClient({ name });
         return { success: true };
       }))
       .delete('/api/wireguard/client/:clientId', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');
         await WireGuard.deleteClient({ clientId });
         return { success: true };
       }))
+      .post('/api/wireguard/client/:clientId/restore', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        await WireGuard.restoreClient({ clientId });
+        return { success: true };
+      }))
       .post('/api/wireguard/client/:clientId/enable', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
@@ -200,6 +295,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .post('/api/wireguard/client/:clientId/disable', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
@@ -208,6 +304,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/name', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
@@ -217,6 +314,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/address', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
@@ -224,6 +322,187 @@ module.exports = class Server {
         const { address } = await readBody(event);
         await WireGuard.updateClientAddress({ clientId, address });
         return { success: true };
+      }))
+      .put('/api/wireguard/client/:clientId/obfuscation', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
+          throw createError({ status: 403 });
+        }
+        const body = await readBody(event);
+        const profile = typeof body.profile === 'string' ? body.profile : undefined;
+        const level = typeof body.level === 'number' ? body.level : (typeof body.level === 'string' ? parseInt(body.level, 10) : undefined);
+        await WireGuard.updateClientObfuscation({ clientId, profile, level });
+        return { success: true };
+      }))
+      .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        const body = await readBody(event);
+        const ruleProfileId = body && body.rule_profile_id !== undefined
+          ? (typeof body.rule_profile_id === 'number' ? body.rule_profile_id : parseInt(body.rule_profile_id, 10))
+          : undefined;
+        if (ruleProfileId !== undefined && (Number.isNaN(ruleProfileId) || ruleProfileId < 0)) {
+          throw createError({ status: 400, message: 'rule_profile_id must be a non-negative integer or null' });
+        }
+        await WireGuard.updateClientRuleProfile({ clientId, ruleProfileId: ruleProfileId ?? null });
+        return { success: true };
+      }))
+      .put('/api/wireguard/client/:clientId/expires', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        const body = await readBody(event);
+        let expiresAt = null;
+        if (body && body.expires_at !== undefined && body.expires_at !== null) {
+          const v = body.expires_at;
+          expiresAt = typeof v === 'number' ? v : (typeof v === 'string' ? Math.floor(new Date(v).getTime() / 1000) : null);
+          if (Number.isNaN(expiresAt) || expiresAt < 0) expiresAt = null;
+        }
+        await WireGuard.updateClientExpires({ clientId, expiresAt });
+        return { success: true };
+      }))
+      .get('/api/signatures/profiles', defineEventHandler(() => {
+        return { profileIds: getProfileIds(), defaultProfile: DEFAULT_PROFILE_ID };
+      }))
+      .post('/api/signatures/regenerate', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        runSignatureGeneration();
+        return { success: true, started: true, message: 'Regeneration started in background.' };
+      }))
+      .get('/api/rule-profiles', defineEventHandler(() => {
+        return db.ruleProfiles.getAll();
+      }))
+      .get('/api/rule-profiles/:id', defineEventHandler((event) => {
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        const profile = db.ruleProfiles.getById(id);
+        if (!profile) throw createError({ status: 404, message: 'Profile not found' });
+        const rules = db.ipRules.getByProfileId(id);
+        return { ...profile, rules };
+      }))
+      .post('/api/ip-rules', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const body = await readBody(event);
+        if (!body || body.rule_profile_id == null || body.action == null || !body.destination_cidr) {
+          throw createError({ status: 400, message: 'rule_profile_id, action and destination_cidr required' });
+        }
+        if (body.action !== 'allow' && body.action !== 'deny') {
+          throw createError({ status: 400, message: 'action must be allow or deny' });
+        }
+        const ruleProfileId = parseInt(body.rule_profile_id, 10);
+        if (Number.isNaN(ruleProfileId) || !db.ruleProfiles.getById(ruleProfileId)) {
+          throw createError({ status: 400, message: 'Invalid rule_profile_id' });
+        }
+        const id = db.ipRules.create({
+          rule_profile_id: ruleProfileId,
+          action: body.action,
+          destination_cidr: body.destination_cidr,
+          port_range: body.port_range ?? null,
+          protocol: body.protocol ?? null,
+          sort_order: body.sort_order ?? 0,
+        });
+        applyFirewall();
+        return { id, success: true };
+      }))
+      .put('/api/ip-rules/:id', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        const rule = db.ipRules.getById(id);
+        if (!rule) throw createError({ status: 404, message: 'Rule not found' });
+        const body = await readBody(event);
+        if (!body || body.action == null || !body.destination_cidr) {
+          throw createError({ status: 400, message: 'action and destination_cidr required' });
+        }
+        if (body.action !== 'allow' && body.action !== 'deny') {
+          throw createError({ status: 400, message: 'action must be allow or deny' });
+        }
+        db.ipRules.update(id, {
+          action: body.action,
+          destination_cidr: body.destination_cidr,
+          port_range: body.port_range ?? null,
+          protocol: body.protocol ?? null,
+          sort_order: body.sort_order ?? 0,
+        });
+        applyFirewall();
+        return { success: true };
+      }))
+      .delete('/api/ip-rules/:id', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        const rule = db.ipRules.getById(id);
+        if (!rule) throw createError({ status: 404, message: 'Rule not found' });
+        db.ipRules.delete(id);
+        applyFirewall();
+        return { success: true };
+      }))
+      .get('/api/global-firewall-rules', defineEventHandler(() => {
+        return db.globalFirewallRules.getAll();
+      }))
+      .post('/api/global-firewall-rules', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const body = await readBody(event);
+        if (!body || body.action == null || !body.destination_cidr) {
+          throw createError({ status: 400, message: 'action and destination_cidr required' });
+        }
+        if (body.action !== 'allow' && body.action !== 'deny') {
+          throw createError({ status: 400, message: 'action must be allow or deny' });
+        }
+        const id = db.globalFirewallRules.create({
+          action: body.action,
+          destination_cidr: body.destination_cidr,
+          port_range: body.port_range ?? null,
+          protocol: body.protocol ?? null,
+          sort_order: body.sort_order ?? 0,
+        });
+        applyFirewall();
+        return { id, success: true };
+      }))
+      .put('/api/global-firewall-rules/:id', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        const body = await readBody(event);
+        if (!body || body.action == null || !body.destination_cidr) {
+          throw createError({ status: 400, message: 'action and destination_cidr required' });
+        }
+        if (body.action !== 'allow' && body.action !== 'deny') {
+          throw createError({ status: 400, message: 'action must be allow or deny' });
+        }
+        db.globalFirewallRules.update(id, {
+          action: body.action,
+          destination_cidr: body.destination_cidr,
+          port_range: body.port_range ?? null,
+          protocol: body.protocol ?? null,
+          sort_order: body.sort_order ?? 0,
+        });
+        applyFirewall();
+        return { success: true };
+      }))
+      .delete('/api/global-firewall-rules/:id', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        db.globalFirewallRules.delete(id);
+        applyFirewall();
+        return { success: true };
+      }))
+      .get('/api/app-settings', defineEventHandler(() => {
+        return db.appSettings.getAll();
+      }))
+      .put('/api/app-settings', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin']);
+        const body = await readBody(event);
+        if (body && typeof body.key === 'string') {
+          db.appSettings.set(body.key, body.value);
+          return { success: true };
+        }
+        if (body && typeof body.settings === 'object') {
+          for (const [k, v] of Object.entries(body.settings)) {
+            db.appSettings.set(k, v);
+          }
+          return { success: true };
+        }
+        throw createError({ status: 400, message: 'Bad request' });
+      }))
+      .get('/api/protocol-templates', defineEventHandler(() => {
+        return db.protocolTemplates.getAll();
       }));
 
     const safePathJoin = (base, target) => {
@@ -281,7 +560,19 @@ module.exports = class Server {
       }),
     );
 
-    createServer(toNodeListener(app)).listen(PORT, WEBUI_HOST);
+    const h3Listener = toNodeListener(app);
+    const listener = (req, res) => {
+      const out = h3Listener(req, res);
+      if (out && typeof out.catch === 'function') {
+        out.catch((err) => {
+          if (res.headersSent) return;
+          const code = err.statusCode ?? err.status ?? 500;
+          res.writeHead(code, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message || 'Internal Server Error' }));
+        });
+      }
+    };
+    createServer(listener).listen(PORT, WEBUI_HOST);
     debug(`Listening on http://${WEBUI_HOST}:${PORT}`);
   }
 

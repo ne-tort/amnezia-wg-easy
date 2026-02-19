@@ -43,4 +43,4 @@ docker run -d \
   "$CONTAINER_NAME"
 
 echo "Done. Amnezia DNS is running at $DNS_IP (internal)."
-echo "To use with amnezia-wg-easy: connect the WG container to this network and forward DNS to $DNS_IP (see docs/AMNEZIA-DNS-OVERVIEW.md)."
+echo "To use with amnezia-wg-easy: connect the WG container to this network and forward DNS to $DNS_IP (see project README)."

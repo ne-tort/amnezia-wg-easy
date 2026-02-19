@@ -25,6 +25,7 @@ function bytes(bytes, decimals, kib, maxunit) {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+// * Default UI language. No auto-detection; user selects via language switcher only.
 const DEFAULT_LOCALE = 'ru';
 const LOCALE_STORAGE_KEY = 'lang';
 
@@ -50,16 +51,16 @@ const UI_CHART_TYPES = [
   { type: 'bar', strokeWidth: 0 },
 ];
 
-// * Obfuscation profiles: order for cycle and labels (must match backend profile ids).
-// qrFriendly: true when I1 is short enough for QR to scan reliably; false for long signatures (quic, sip).
-const PROFILE_LIST = [
-  { id: 'quic', label: 'QUIC', qrFriendly: false },
-  { id: 'dns', label: 'DNS', qrFriendly: true },
-  { id: 'sip', label: 'SIP', qrFriendly: false },
-  { id: 'stun', label: 'STUN', qrFriendly: true },
-  { id: 'webrtc', label: 'WebRTC', qrFriendly: true },
-  { id: 'dtls', label: 'DTLS', qrFriendly: true },
-];
+// * Profile id -> label and qrFriendly (order comes from API /signatures/profiles).
+const PROFILE_META = {
+  quic: { label: 'QUIC', qrFriendly: false },
+  dns: { label: 'DNS', qrFriendly: true },
+  sip: { label: 'SIP', qrFriendly: true },
+  stun: { label: 'STUN', qrFriendly: true },
+  webrtc: { label: 'WebRTC', qrFriendly: true },
+  dtls: { label: 'DTLS', qrFriendly: true },
+};
+const FALLBACK_PROFILE_IDS = ['dns', 'quic', 'stun', 'sip', 'webrtc', 'dtls'];
 
 const CHART_COLORS = {
   rx: { light: 'rgba(128,128,128,0.3)', dark: 'rgba(255,255,255,0.3)' },
@@ -76,8 +77,8 @@ new Vue({
   data: {
     authenticated: null,
     authenticating: false,
+    username: null,
     password: null,
-    requiresPassword: null,
 
     clients: null,
     clientsPersist: {},
@@ -94,6 +95,17 @@ new Vue({
 
     clientLevels: {},
     clientProfiles: {},
+    profileIds: [],
+    defaultProfile: 'dns',
+    regeneratingSignatures: false,
+    ruleProfiles: [],
+    globalFirewallRules: [],
+    globalRuleEdit: null,
+    profileRulesExpanded: null,
+    profileRulesList: [],
+    profileRuleEdit: null,
+    clientExpiryEdit: null,
+    expiryEditValue: '',
 
     currentRelease: null,
     latestRelease: null,
@@ -191,28 +203,60 @@ new Vue({
     getClientLevel(client) {
       return this.clientLevels[client.id] ?? 1;
     },
-    cycleClientLevel(client) {
-      const current = this.getClientLevel(client);
-      const next = current >= 5 ? 0 : current + 1;
-      this.$set(this.clientLevels, client.id, next);
+    onObfuscationLevelChange(client, ev) {
+      const raw = ev.target.value;
+      const level = raw === '' || raw === 'null' ? 0 : parseInt(raw, 10);
+      const prev = this.getClientLevel(client);
+      if (Number.isNaN(level) || level < 0 || level > 5) return;
+      this.$set(this.clientLevels, client.id, level);
+      this.api.updateClientObfuscation({ clientId: client.id, level })
+        .catch((err) => {
+          this.$set(this.clientLevels, client.id, prev);
+          ev.target.value = prev;
+          alert(err.message || err.toString());
+        });
     },
     getClientProfile(client) {
-      return this.clientProfiles[client.id] ?? 'quic';
+      return this.clientProfiles[client.id] ?? this.defaultProfile;
     },
     getClientProfileLabel(client) {
       const id = this.getClientProfile(client);
-      const p = PROFILE_LIST.find((x) => x.id === id);
-      return p ? p.label : id;
+      return this.getProfileLabel(id);
+    },
+    getProfileLabel(profileId) {
+      const meta = PROFILE_META[profileId];
+      return meta ? meta.label : profileId;
     },
     isProfileQRFriendly(profileId) {
-      const p = PROFILE_LIST.find((x) => x.id === profileId);
-      return p ? p.qrFriendly === true : false;
+      const meta = PROFILE_META[profileId];
+      return meta ? meta.qrFriendly === true : false;
     },
-    cycleClientProfile(client) {
-      const current = this.getClientProfile(client);
-      const idx = PROFILE_LIST.findIndex((x) => x.id === current);
-      const nextIdx = idx < 0 ? 0 : (idx + 1) % PROFILE_LIST.length;
-      this.$set(this.clientProfiles, client.id, PROFILE_LIST[nextIdx].id);
+    onObfuscationProfileChange(client, ev) {
+      const profile = ev.target.value;
+      const prev = this.getClientProfile(client);
+      this.$set(this.clientProfiles, client.id, profile);
+      this.api.updateClientObfuscation({ clientId: client.id, profile })
+        .catch((err) => {
+          this.$set(this.clientProfiles, client.id, prev);
+          ev.target.value = prev;
+          alert(err.message || err.toString());
+        });
+    },
+    async regenerateSignatures() {
+      if (this.regeneratingSignatures) return;
+      this.regeneratingSignatures = true;
+      try {
+        const result = await this.api.regenerateSignatures();
+        if (result && (result.started || result.success)) {
+          alert(this.$t('signaturesStartedInBackground') || 'Regeneration started in background. Current configs use existing signatures; new ones will apply after completion.');
+        } else {
+          alert((result && result.message) || this.$t('signaturesRegenerateFailed') || 'Regeneration failed.');
+        }
+      } catch (err) {
+        alert(err.message || this.$t('signaturesRegenerateFailed') || 'Regeneration failed.');
+      } finally {
+        this.regeneratingSignatures = false;
+      }
     },
     async copyConfig(client) {
       try {
@@ -287,6 +331,9 @@ new Vue({
 
       const clients = await this.api.getClients();
       this.clients = clients.map((client) => {
+        this.$set(this.clientLevels, client.id, client.defaultLevel != null ? client.defaultLevel : 1);
+        this.$set(this.clientProfiles, client.id, client.defaultProfile || this.defaultProfile || 'dns');
+
         if (client.name.includes('@') && client.name.includes('.')) {
           client.avatar = `https://gravatar.com/avatar/${sha256(client.name.toLowerCase().trim())}.jpg`;
         }
@@ -303,7 +350,6 @@ new Vue({
         // client.transferRx = this.clientsPersist[client.id].transferRxPrevious + Math.random() * 1000;
         // client.transferTx = this.clientsPersist[client.id].transferTxPrevious + Math.random() * 1000;
         // client.latestHandshakeAt = new Date();
-        // this.requiresPassword = true;
 
         this.clientsPersist[client.id].transferRxCurrent = client.transferRx - this.clientsPersist[client.id].transferRxPrevious;
         this.clientsPersist[client.id].transferRxPrevious = client.transferRx;
@@ -347,26 +393,178 @@ new Vue({
     login(e) {
       e.preventDefault();
 
-      if (!this.password) return;
+      if (!this.username || !this.password) return;
       if (this.authenticating) return;
 
       this.authenticating = true;
-      this.api.createSession({
-        password: this.password,
-      })
+      this.api.createSession({ username: this.username, password: this.password })
         .then(async () => {
           const session = await this.api.getSession();
           this.authenticated = session.authenticated;
-          this.requiresPassword = session.requiresPassword;
           return this.refresh();
         })
         .catch((err) => {
-          alert(err.message || err.toString());
+          const msg = err.status === 409 || err.code === 'USERNAME_EXISTS'
+            ? (this.$t ? this.$t('usernameExists') : 'Username already exists')
+            : (err.message || err.toString());
+          alert(msg);
         })
         .finally(() => {
           this.authenticating = false;
           this.password = null;
         });
+    },
+    onFirewallProfileChange(client, ev) {
+      const raw = ev.target.value;
+      const ruleProfileId = raw === '' || raw === 'null' ? null : parseInt(raw, 10);
+      const prev = client.ruleProfileId;
+      client.ruleProfileId = Number.isNaN(ruleProfileId) ? null : ruleProfileId;
+      this.api.updateClientRuleProfile({ clientId: client.id, rule_profile_id: ruleProfileId })
+        .catch((err) => {
+          client.ruleProfileId = prev;
+          ev.target.value = prev == null ? '' : prev;
+          alert(err.message || err.toString());
+        });
+    },
+    loadGlobalFirewallRules() {
+      this.api.getGlobalFirewallRules()
+        .then((r) => { this.globalFirewallRules = Array.isArray(r) ? r : []; })
+        .catch(() => { this.globalFirewallRules = []; });
+    },
+    openAddGlobalRule() {
+      this.globalRuleEdit = { action: 'allow', destination_cidr: '', port_range: '', protocol: '', sort_order: 0 };
+    },
+    openEditGlobalRule(rule) {
+      this.globalRuleEdit = {
+        id: rule.id,
+        action: rule.action || 'allow',
+        destination_cidr: rule.destination_cidr || '',
+        port_range: rule.port_range || '',
+        protocol: rule.protocol || '',
+        sort_order: rule.sort_order ?? 0,
+      };
+    },
+    saveGlobalRule() {
+      const r = this.globalRuleEdit;
+      if (!r || !r.destination_cidr) return;
+      const body = {
+        action: r.action,
+        destination_cidr: r.destination_cidr.trim(),
+        port_range: r.port_range ? r.port_range.trim() || null : null,
+        protocol: r.protocol ? r.protocol.trim() || null : null,
+        sort_order: parseInt(r.sort_order, 10) || 0,
+      };
+      const p = r.id
+        ? this.api.updateGlobalFirewallRule(r.id, body)
+        : this.api.createGlobalFirewallRule(body);
+      p.then(() => {
+        this.globalRuleEdit = null;
+        this.loadGlobalFirewallRules();
+      }).catch((err) => alert(err.message || err.toString()));
+    },
+    deleteGlobalRule(rule) {
+      if (!rule.id) return;
+      if (!confirm(this.$t('globalRuleDeleteConfirm'))) return;
+      this.api.deleteGlobalFirewallRule(rule.id)
+        .then(() => this.loadGlobalFirewallRules())
+        .catch((err) => alert(err.message || err.toString()));
+    },
+    closeGlobalRuleEdit() {
+      this.globalRuleEdit = null;
+    },
+    expandProfileRules(profile) {
+      if (this.profileRulesExpanded === profile.id) {
+        this.profileRulesExpanded = null;
+        this.profileRulesList = [];
+        return;
+      }
+      this.profileRulesExpanded = profile.id;
+      this.api.getRuleProfile(profile.id)
+        .then((data) => { this.profileRulesList = Array.isArray(data.rules) ? data.rules : []; })
+        .catch(() => { this.profileRulesList = []; });
+    },
+    loadProfileRulesList() {
+      if (this.profileRulesExpanded == null) return;
+      this.api.getRuleProfile(this.profileRulesExpanded)
+        .then((data) => { this.profileRulesList = Array.isArray(data.rules) ? data.rules : []; })
+        .catch(() => { this.profileRulesList = []; });
+    },
+    openAddProfileRule(profileId) {
+      this.profileRuleEdit = { rule_profile_id: profileId, action: 'allow', destination_cidr: '', port_range: '', protocol: '', sort_order: 0 };
+    },
+    openEditProfileRule(rule) {
+      this.profileRuleEdit = {
+        id: rule.id,
+        rule_profile_id: rule.rule_profile_id,
+        action: rule.action || 'allow',
+        destination_cidr: rule.destination_cidr || '',
+        port_range: rule.port_range || '',
+        protocol: rule.protocol || '',
+        sort_order: rule.sort_order ?? 0,
+      };
+    },
+    saveProfileRule() {
+      const r = this.profileRuleEdit;
+      if (!r || !r.destination_cidr) return;
+      const body = {
+        action: r.action,
+        destination_cidr: r.destination_cidr.trim(),
+        port_range: r.port_range ? r.port_range.trim() || null : null,
+        protocol: r.protocol ? r.protocol.trim() || null : null,
+        sort_order: parseInt(r.sort_order, 10) || 0,
+      };
+      if (r.id) {
+        this.api.updateIpRule(r.id, body).then(() => { this.profileRuleEdit = null; this.loadProfileRulesList(); }).catch((err) => alert(err.message || err.toString()));
+      } else {
+        body.rule_profile_id = r.rule_profile_id;
+        this.api.createIpRule(body).then(() => { this.profileRuleEdit = null; this.loadProfileRulesList(); }).catch((err) => alert(err.message || err.toString()));
+      }
+    },
+    deleteProfileRule(rule) {
+      if (!rule.id) return;
+      if (!confirm(this.$t('globalRuleDeleteConfirm'))) return;
+      this.api.deleteIpRule(rule.id).then(() => this.loadProfileRulesList()).catch((err) => alert(err.message || err.toString()));
+    },
+    closeProfileRuleEdit() {
+      this.profileRuleEdit = null;
+    },
+    openExpiryEdit(client) {
+      this.clientExpiryEdit = client;
+      this.expiryEditValue = client.expiresAt ? client.expiresAt.toISOString().slice(0, 10) : '';
+    },
+    saveExpiryEdit() {
+      const client = this.clientExpiryEdit;
+      if (!client) return;
+      const expiresAt = this.expiryEditValue ? new Date(this.expiryEditValue + 'T00:00:00Z').getTime() / 1000 : null;
+      this.api.updateClientExpires({ clientId: client.id, expires_at: expiresAt })
+        .then(() => {
+          client.expiresAt = this.expiryEditValue ? new Date(this.expiryEditValue + 'T00:00:00Z') : null;
+          this.clientExpiryEdit = null;
+          this.expiryEditValue = '';
+        })
+        .catch((err) => alert(err.message || err.toString()));
+    },
+    clearExpiryEdit() {
+      this.expiryEditValue = '';
+    },
+    closeExpiryEdit() {
+      this.clientExpiryEdit = null;
+      this.expiryEditValue = '';
+    },
+    loadDeletedClients() {
+      if (!this.showDeletedClients) return;
+      this.api.getDeletedClients()
+        .then((r) => { this.deletedClients = Array.isArray(r) ? r : []; })
+        .catch(() => { this.deletedClients = []; });
+    },
+    toggleShowDeleted() {
+      this.showDeletedClients = !this.showDeletedClients;
+      this.loadDeletedClients();
+    },
+    restoreClient(client) {
+      this.api.restoreClient(client.id)
+        .then(() => { this.refresh(); this.loadDeletedClients(); })
+        .catch((err) => alert(err.message || err.toString()));
     },
     logout(e) {
       e.preventDefault();
@@ -458,7 +656,19 @@ new Vue({
     this.api.getSession()
       .then((session) => {
         this.authenticated = session.authenticated;
-        this.requiresPassword = session.requiresPassword;
+        this.api.getSignaturesProfiles()
+          .then((r) => {
+            this.profileIds = r && r.profileIds ? r.profileIds : FALLBACK_PROFILE_IDS;
+            this.defaultProfile = (r && r.defaultProfile) || 'dns';
+          })
+          .catch(() => {
+            this.profileIds = FALLBACK_PROFILE_IDS;
+            this.defaultProfile = 'dns';
+          });
+        this.api.getRuleProfiles()
+          .then((r) => { this.ruleProfiles = Array.isArray(r) ? r : []; })
+          .catch(() => { this.ruleProfiles = []; });
+        this.loadGlobalFirewallRules();
         this.refresh({
           updateCharts: this.updateCharts,
         }).catch((err) => {

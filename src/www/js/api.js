@@ -23,7 +23,11 @@ class API {
     const json = await res.json();
 
     if (!res.ok) {
-      throw new Error(json.error || res.statusText);
+      const msg = json.error || json.message || res.statusText;
+      const err = new Error(msg);
+      err.status = res.status;
+      err.code = json.code;
+      throw err;
     }
 
     return json;
@@ -102,11 +106,11 @@ class API {
     });
   }
 
-  async createSession({ password }) {
+  async createSession({ username, password }) {
     return this.call({
       method: 'post',
       path: '/session',
-      body: { password },
+      body: { username, password },
     });
   }
 
@@ -129,6 +133,16 @@ class API {
         ? new Date(client.latestHandshakeAt)
         : null,
     })));
+  }
+
+  async getDeletedClients() {
+    return this.call({ method: 'get', path: '/wireguard/client?deleted=1' }).then((list) =>
+      (list || []).map((c) => ({ ...c, deletedAt: c.deletedAt ? new Date(c.deletedAt) : null }))
+    );
+  }
+
+  async restoreClient(clientId) {
+    return this.call({ method: 'post', path: `/wireguard/client/${clientId}/restore` });
   }
 
   async createClient({ name }) {
@@ -174,6 +188,74 @@ class API {
       path: `/wireguard/client/${clientId}/address/`,
       body: { address },
     });
+  }
+
+  async updateClientObfuscation({ clientId, profile, level }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/obfuscation`,
+      body: { profile, level },
+    });
+  }
+
+  async getRuleProfiles() {
+    return this.call({ method: 'get', path: '/rule-profiles' });
+  }
+
+  async getRuleProfile(id) {
+    return this.call({ method: 'get', path: `/rule-profiles/${id}` });
+  }
+
+  async createIpRule(body) {
+    return this.call({ method: 'post', path: '/ip-rules', body });
+  }
+
+  async updateIpRule(id, body) {
+    return this.call({ method: 'put', path: `/ip-rules/${id}`, body });
+  }
+
+  async deleteIpRule(id) {
+    return this.call({ method: 'delete', path: `/ip-rules/${id}` });
+  }
+
+  async updateClientRuleProfile({ clientId, rule_profile_id }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/firewall-profile`,
+      body: { rule_profile_id },
+    });
+  }
+
+  async updateClientExpires({ clientId, expires_at }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/expires`,
+      body: { expires_at },
+    });
+  }
+
+  async getGlobalFirewallRules() {
+    return this.call({ method: 'get', path: '/global-firewall-rules' });
+  }
+
+  async createGlobalFirewallRule(body) {
+    return this.call({ method: 'post', path: '/global-firewall-rules', body });
+  }
+
+  async updateGlobalFirewallRule(id, body) {
+    return this.call({ method: 'put', path: `/global-firewall-rules/${id}`, body });
+  }
+
+  async deleteGlobalFirewallRule(id) {
+    return this.call({ method: 'delete', path: `/global-firewall-rules/${id}` });
+  }
+
+  async getSignaturesProfiles() {
+    return this.call({ method: 'get', path: '/signatures/profiles' });
+  }
+
+  async regenerateSignatures() {
+    return this.call({ method: 'post', path: '/signatures/regenerate' });
   }
 
 }

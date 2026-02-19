@@ -1,0 +1,20 @@
+[
+  {
+    "protocol": "dns",
+    "target": "ya.ru",
+    "direction": "client",
+    "hex": "<b 0xaaeb010000010000000000000279610272750000010001>"
+  },
+  {
+    "protocol": "dns",
+    "target": "yandex.ru",
+    "direction": "client",
+    "hex": "<b 0xb78c010000010000000000000679616e6465780272750000010001>"
+  },
+  {
+    "protocol": "dns",
+    "target": "kinopoisk.ru",
+    "direction": "client",
+    "hex": "<b 0xb6c501000001000000000000096b696e6f706f69736b0272750000010001>"
+  }
+]

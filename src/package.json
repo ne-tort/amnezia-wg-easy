@@ -6,13 +6,16 @@
   "main": "server.js",
   "scripts": {
     "serve": "DEBUG=Server,WireGuard npx nodemon server.js",
-    "serve-with-password": "PASSWORD=wg npm run serve",
+    "serve-with-password": "ADMIN_USERNAME=admin ADMIN_PASSWORD=wg npm run serve",
     "lint": "eslint .",
     "buildcss": "npx tailwindcss -i ./www/src/css/app.css -o ./www/css/app.css"
   },
   "author": "Viktor Yudov",
   "license": "GPL",
   "dependencies": {
+    "argon2": "^0.41.1",
+    "better-sqlite3": "^11.6.0",
+    "better-sqlite3-session-store": "^0.1.0",
     "debug": "^4.3.6",
     "express-session": "^1.18.0",
     "h3": "^1.12.0",

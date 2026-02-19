@@ -1,0 +1,28 @@
+[tool.poetry]
+name = "python-signatures"
+version = "0.1.0"
+description = "Collectors for DNS/QUIC/STUN signatures used by amnezia-wg-easy"
+authors = ["AmneziaWG Easy Maintainer <root@example.com>"]
+packages = [
+  { include = "python_signatures" }
+]
+
+[tool.poetry.dependencies]
+python = ">=3.10"
+dnspython = "^2.7.0"
+scapy = { version = "^2.7.0", python = ">=3.10,<4" }
+# aioquic = "^1.0.0"  # for real QUIC capture (future)
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-cov = "^5.0.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+

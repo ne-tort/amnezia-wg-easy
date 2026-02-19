@@ -1,0 +1,3 @@
+{
+  "targets": ["example.com:443", "echo.server:5684"]
+}

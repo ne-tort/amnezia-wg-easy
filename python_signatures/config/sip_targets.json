@@ -1,0 +1,4 @@
+{
+  "servers": ["sip.example.com:5060"],
+  "use_response": false
+}

@@ -1,0 +1,13 @@
+{
+  "resolver": "8.8.8.8",
+  "port": 53,
+  "record_type": "A",
+  "domains": [
+    "ya.ru",
+    "yandex.ru",
+    "kinopoisk.ru",
+    "gosuslugi.ru",
+    "sberbank.ru"
+  ]
+}
+
