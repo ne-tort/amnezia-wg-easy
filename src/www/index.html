@@ -2,7 +2,7 @@
 <html>
 
 <head>
-  <title>AmneziaWG</title>
+  <title></title>
   <meta charset="utf-8"/>
   <link href="./css/app.css" rel="stylesheet">
   <link rel="manifest" href="./manifest.json">
@@ -23,7 +23,6 @@
       <div v-if="authenticated === true">
         <div class="flex flex-col-reverse xxs:flex-row flex-auto items-center items-end gap-3">
           <h1 class="text-4xl dark:text-neutral-200 font-medium flex-grow self-start mb-4">
-            <img src="./img/logo.svg" width="60" class="inline align-middle dark:bg mr-2" /><span class="align-middle">AmneziaWG</span>
           </h1>
           <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center">
             <!-- Dark / light theme -->
@@ -48,9 +47,17 @@
                   d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
               </svg>
             </button>
+            <!-- Show / hide firewall blocks -->
+            <button type="button" @click="toggleFirewallBlocks()"
+              class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
+              :title="firewallBlocksVisible ? $t('hideFirewallBlocks') : $t('showFirewallBlocks')">
+              <svg class="w-5 h-5 text-gray-600 dark:text-neutral-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+            </button>
             <!-- Language -->
             <select v-model="currentLocale" @change="setLocale(currentLocale)"
-              class="h-8 min-w-[3rem] rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-800 dark:text-neutral-200 text-sm font-medium px-2 border-0 cursor-pointer hover:bg-gray-300 dark:hover:bg-neutral-600 transition focus:ring-2 focus:ring-red-800 dark:focus:ring-red-600 focus:outline-none">
+              class="select-no-arrow h-8 w-12 flex-shrink-0 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-800 dark:text-neutral-200 text-sm font-medium px-1 border-0 cursor-pointer hover:bg-gray-300 dark:hover:bg-neutral-600 transition focus:ring-2 focus:ring-red-800 dark:focus:ring-red-600 focus:outline-none text-center">
               <option v-for="opt in localeOptions" :key="opt.code" :value="opt.code">{{ opt.label }}</option>
             </select>
             <!-- Show / hide charts -->
@@ -62,11 +69,14 @@
                     d="M18.375 2.25c-1.035 0-1.875.84-1.875 1.875v15.75c0 1.035.84 1.875 1.875 1.875h.75c1.035 0 1.875-.84 1.875-1.875V4.125c0-1.036-.84-1.875-1.875-1.875h-.75ZM9.75 8.625c0-1.036.84-1.875 1.875-1.875h.75c1.036 0 1.875.84 1.875 1.875v11.25c0 1.035-.84 1.875-1.875 1.875h-.75a1.875 1.875 0 0 1-1.875-1.875V8.625ZM3 13.125c0-1.036.84-1.875 1.875-1.875h.75c1.036 0 1.875.84 1.875 1.875v6.75c0 1.035-.84 1.875-1.875 1.875h-.75A1.875 1.875 0 0 1 3 19.875v-6.75Z" />
               </svg>
             </label>
-            <span v-if="authenticated"
-              class="text-sm text-gray-400 dark:text-neutral-400 cursor-pointer hover:underline"
+            <button v-if="authenticated" type="button"
+              class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
+              :title="$t('logout')"
               @click="logout">
-              {{ $t("logout") }}
-            </span>
+              <svg class="w-5 h-5 text-gray-600 dark:text-neutral-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+              </svg>
+            </button>
           </div>
         </div>
         <div class="text-sm text-gray-400 dark:text-neutral-400 mb-5"></div>
@@ -86,16 +96,13 @@
           </div>
         </div>
 
+        <div class="space-y-8">
         <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
           <div class="flex flex-row flex-auto items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
             <div class="flex-grow">
               <p class="text-2xl font-medium dark:text-neutral-200">{{$t("clients")}}</p>
             </div>
             <div class="flex-shrink-0 flex items-center gap-3">
-              <label class="inline-flex items-center text-sm text-gray-600 dark:text-neutral-400 cursor-pointer">
-                <input type="checkbox" v-model="showDeletedClients" @change="loadDeletedClients" class="rounded border-gray-300 dark:border-neutral-500" />
-                <span class="ml-2">{{ $t('showDeletedClients') }}</span>
-              </label>
               <button @click="clientCreate = true; clientCreateName = '';"
                 class="hover:bg-red-800 hover:border-red-800 hover:text-white text-gray-700 dark:text-neutral-200 border-2 border-gray-100 dark:border-neutral-600 py-2 px-4 rounded inline-flex items-center transition">
                 <svg class="w-4 mr-2" inline xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
@@ -224,11 +231,6 @@
                           :title="$t('lastSeen') + dateTime(new Date(client.latestHandshakeAt))">
                           {{!uiTrafficStats ? " · " : ""}}{{new Date(client.latestHandshakeAt) | timeago}}
                         </span>
-                        <!-- Access until -->
-                        <span class="text-gray-400 dark:text-neutral-500 whitespace-nowrap">
-                          · {{ $t('expiresAt') }}: {{ client.expiresAt ? dateTime(client.expiresAt) : $t('expiresNever') }}
-                          <button type="button" @click="openExpiryEdit(client)" class="text-red-800 dark:text-red-400 hover:underline ml-1">{{ $t('edit') }}</button>
-                        </span>
                       </div>
                     </div>
 
@@ -282,17 +284,7 @@
                 <div class="flex items-center justify-end">
                   <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-between">
 
-                    <!-- Firewall profile (leftmost) -->
-                    <select
-                      :value="client.ruleProfileId == null ? '' : client.ruleProfileId"
-                      @change="onFirewallProfileChange(client, $event)"
-                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] max-h-[2.25rem] border-0 cursor-pointer"
-                      :title="$t('firewallProfileTitle')">
-                      <option value="">{{ $t('firewallProfileFullAccess') }}</option>
-                      <option v-for="p in ruleProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
-                    </select>
-
-                    <!-- Enable/Disable -->
+                    <!-- Enable/Disable (leftmost) -->
                     <div @click="disableClient(client)" v-if="client.enabled === true" :title="$t('disableClient')"
                       class="inline-block align-middle rounded-full w-10 h-6 mr-1 bg-red-800 cursor-pointer hover:bg-red-700 transition-all">
                       <div class="rounded-full w-4 h-4 m-1 ml-5 bg-white"></div>
@@ -304,22 +296,41 @@
                       <div class="rounded-full w-4 h-4 m-1 bg-white"></div>
                     </div>
 
-                    <!-- Obfuscation level I0–I5 (dropdown) -->
-                    <select v-if="client.downloadableConfig"
-                      :value="getClientLevel(client)"
-                      @change="onObfuscationLevelChange(client, $event)"
-                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] max-h-[2.25rem] border-0 cursor-pointer font-mono min-w-[3rem]"
+                    <!-- Clock: open expiry modal; green if not expired, red if expired; hidden if no date -->
+                    <button v-if="client.expiresAt" type="button" @click="openExpiryEdit(client)"
+                      class="align-middle inline-block p-2 rounded transition"
+                      :class="(client.expiresAt && new Date(client.expiresAt) < new Date()) ? 'text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-neutral-600' : 'text-green-600 dark:text-green-400 hover:bg-gray-100 dark:hover:bg-neutral-600'"
+                      :title="client.expiresAt ? ($t('expiresAt') + ' ' + dateTime(client.expiresAt)) : $t('expiresNever')">
+                      <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </button>
+
+                    <!-- Firewall profile -->
+                    <select
+                      :value="client.ruleProfileId == null ? '' : client.ruleProfileId"
+                      @change="onFirewallProfileChange(client, $event)"
+                      class="select-no-arrow align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2rem] border-0 cursor-pointer text-center min-w-[5rem]"
+                      :title="$t('firewallProfileTitle')">
+                      <option value="">{{ $t('firewallProfileFullAccess') }}</option>
+                      <option v-for="p in ruleProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
+                    </select>
+
+                    <!-- Obfuscation level I0–I5 (cycle button) -->
+                    <button v-if="client.downloadableConfig" type="button"
+                      @click="cycleClientLevel(client)"
+                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] font-mono min-w-[3rem]"
                       :title="$t('obfuscationLevelTitle', { level: 'I' + getClientLevel(client) })">
-                      <option v-for="lev in [0,1,2,3,4,5]" :key="lev" :value="lev">I{{ lev }}</option>
-                    </select>
-                    <!-- Obfuscation profile (QUIC/DNS/SIP/…) — hidden at I0 -->
-                    <select v-if="client.downloadableConfig && getClientLevel(client) !== 0"
-                      :value="getClientProfile(client)"
-                      @change="onObfuscationProfileChange(client, $event)"
-                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] max-h-[2.25rem] border-0 cursor-pointer min-w-[3.5rem]"
+                      I{{ getClientLevel(client) }}
+                    </button>
+                    <!-- Obfuscation profile (cycle button; at I0 can show inactive or hide — showing label) -->
+                    <button v-if="client.downloadableConfig" type="button"
+                      @click="getClientLevel(client) !== 0 && cycleClientProfile(client)"
+                      class="align-middle p-2 rounded transition text-sm min-h-[2.25rem] min-w-[3.5rem]"
+                      :class="getClientLevel(client) === 0 ? 'bg-gray-100 dark:bg-neutral-600 text-gray-400 dark:text-neutral-500 cursor-default' : 'bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white'"
                       :title="$t('profileTitle', { profile: getClientProfileLabel(client) })">
-                      <option v-for="pid in (profileIds.length ? profileIds : ['dns','quic','stun','sip','webrtc','dtls'])" :key="pid" :value="pid">{{ getProfileLabel(pid) }}</option>
-                    </select>
+                      {{ getClientProfileLabel(client) }}
+                    </button>
                     <!-- Regenerate I1 signatures (all protocols) -->
                     <button v-if="client.downloadableConfig" type="button"
                       @click="regenerateSignatures()"
@@ -392,21 +403,6 @@
               </div>
 
             </div>
-            <!-- Deleted clients (when showDeletedClients) -->
-            <div v-if="showDeletedClients && deletedClients.length > 0" class="border-t border-gray-200 dark:border-neutral-600 p-4 bg-gray-50 dark:bg-neutral-600/50">
-              <p class="text-sm font-medium text-gray-600 dark:text-neutral-300 mb-2">{{ $t('deletedClientsTitle') }}</p>
-              <div class="space-y-2">
-                <div v-for="dc in deletedClients" :key="dc.id" class="flex items-center justify-between py-2 px-3 rounded bg-white dark:bg-neutral-700 text-sm">
-                  <span class="text-gray-700 dark:text-neutral-200">{{ dc.name }}</span>
-                  <span class="text-gray-500 dark:text-neutral-400 font-mono text-xs">{{ dc.address }}</span>
-                  <span class="text-gray-400 dark:text-neutral-500 text-xs">{{ dc.deletedAt ? dateTime(dc.deletedAt) : '' }}</span>
-                  <button @click="restoreClient(dc)" class="text-red-800 dark:text-red-400 hover:underline">{{ $t('restoreClient') }}</button>
-                </div>
-              </div>
-            </div>
-            <div v-if="showDeletedClients && deletedClients.length === 0" class="border-t border-gray-200 dark:border-neutral-600 p-4 text-center text-gray-400 dark:text-neutral-500 text-sm">
-              {{ $t('noDeletedClients') }}
-            </div>
             <div v-if="clients && clients.length === 0">
               <p class="text-center m-10 text-gray-400 dark:text-neutral-400 text-sm">
                 {{$t("noClients")}}<br /><br />
@@ -434,15 +430,18 @@
         </div>
 
         <!-- Global firewall rules (admin/moderator) -->
-        <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden mt-6">
+        <div v-if="firewallBlocksVisible" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
           <div class="flex flex-row flex-auto items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
             <div class="flex-grow">
               <p class="text-xl font-medium dark:text-neutral-200">{{ $t('globalFirewallRulesTitle') }}</p>
             </div>
             <div class="flex-shrink-0">
-              <button @click="openAddGlobalRule()"
-                class="hover:bg-red-800 hover:border-red-800 hover:text-white text-gray-700 dark:text-neutral-200 border-2 border-gray-100 dark:border-neutral-600 py-2 px-4 rounded inline-flex items-center transition text-sm">
-                {{ $t('globalRuleAdd') }}
+              <button type="button" @click="openAddGlobalRule()"
+                class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
+                :title="$t('globalRuleAdd')">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
               </button>
             </div>
           </div>
@@ -466,8 +465,16 @@
                   <td class="px-4 py-2">{{ r.protocol || '—' }}</td>
                   <td class="px-4 py-2">{{ r.sort_order }}</td>
                   <td class="px-4 py-2">
-                    <button @click="openEditGlobalRule(r)" class="text-red-800 dark:text-red-400 hover:underline mr-2">{{ $t('edit') }}</button>
-                    <button @click="deleteGlobalRule(r)" class="text-red-800 dark:text-red-400 hover:underline">{{ $t('deleteShort') }}</button>
+                    <button type="button" @click="openEditGlobalRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1" :title="$t('edit')">
+                      <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                    <button type="button" @click="deleteGlobalRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition" :title="$t('deleteShort')">
+                      <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
                   </td>
                 </tr>
                 <tr v-if="globalFirewallRules.length === 0">
@@ -479,7 +486,7 @@
         </div>
 
         <!-- Firewall profiles (expand to manage rules) -->
-        <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden mt-6">
+        <div v-if="firewallBlocksVisible" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
           <div class="p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
             <p class="text-xl font-medium dark:text-neutral-200">{{ $t('firewallProfilesTitle') }}</p>
           </div>
@@ -490,14 +497,26 @@
                   <span class="font-medium dark:text-neutral-200">{{ profile.name }}</span>
                   <span v-if="profile.description" class="text-sm text-gray-500 dark:text-neutral-400 ml-2">— {{ profile.description }}</span>
                 </div>
-                <button @click="expandProfileRules(profile)"
-                  class="text-red-800 dark:text-red-400 hover:underline text-sm">
-                  {{ profileRulesExpanded === profile.id ? $t('globalRuleCancel') : $t('firewallProfileManageRules') }}
+                <button type="button" @click="expandProfileRules(profile)"
+                  class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
+                  :title="profileRulesExpanded === profile.id ? $t('globalRuleCancel') : $t('firewallProfileManageRules')">
+                  <svg v-if="profileRulesExpanded !== profile.id" class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                  </svg>
+                  <svg v-else class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
                 </button>
               </div>
               <div v-if="profileRulesExpanded === profile.id" class="mt-4 overflow-x-auto">
                 <div class="flex justify-end mb-2">
-                  <button @click="openAddProfileRule(profile.id)" class="text-sm bg-red-800 hover:bg-red-700 text-white py-1 px-3 rounded">{{ $t('globalRuleAdd') }}</button>
+                  <button type="button" @click="openAddProfileRule(profile.id)"
+                    class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
+                    :title="$t('globalRuleAdd')">
+                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                  </button>
                 </div>
                 <table class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
                   <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
@@ -518,8 +537,16 @@
                       <td class="px-3 py-1">{{ r.protocol || '—' }}</td>
                       <td class="px-3 py-1">{{ r.sort_order }}</td>
                       <td class="px-3 py-1">
-                        <button @click="openEditProfileRule(r)" class="text-red-800 dark:text-red-400 hover:underline mr-1 text-xs">{{ $t('edit') }}</button>
-                        <button @click="deleteProfileRule(r)" class="text-red-800 dark:text-red-400 hover:underline text-xs">{{ $t('deleteShort') }}</button>
+                        <button type="button" @click="openEditProfileRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1" :title="$t('edit')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button type="button" @click="deleteProfileRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition" :title="$t('deleteShort')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
                       </td>
                     </tr>
                     <tr v-if="profileRulesExpanded === profile.id && profileRulesList.length === 0">
@@ -531,11 +558,12 @@
             </div>
           </div>
         </div>
+        </div>
 
         <!-- Profile rule add/edit modal -->
         <div v-if="profileRuleEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
           <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeProfileRuleEdit"></div>
-          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6">
+          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6 px-8">
             <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ profileRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
             <div class="space-y-3">
               <div>
@@ -572,7 +600,7 @@
         <!-- Global rule add/edit modal -->
         <div v-if="globalRuleEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
           <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeGlobalRuleEdit"></div>
-          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6">
+          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6 px-8">
             <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ globalRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
             <div class="space-y-3">
               <div>
@@ -656,7 +684,7 @@
         <!-- Expiry edit modal -->
         <div v-if="clientExpiryEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
           <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeExpiryEdit"></div>
-          <div class="relative w-full max-w-sm bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6">
+          <div class="relative w-full max-w-sm bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6 px-8">
             <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ $t('expiryEditTitle') }} — {{ clientExpiryEdit.name }}</h3>
             <div class="flex items-center gap-2 mb-4">
               <input v-model="expiryEditValue" type="date" class="rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 flex-1" />
@@ -815,8 +843,6 @@
 
       <div v-if="authenticated === false">
         <h1 class="text-4xl font-medium my-16 text-gray-700 dark:text-neutral-200 text-center">
-          <img src="./img/logo.svg" width="60" class="inline align-middle dark:bg" />
-          <span class="align-middle">AmneziaWG</span>
         </h1>
 
         <form @submit="login"

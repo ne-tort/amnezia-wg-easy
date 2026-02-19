@@ -114,6 +114,7 @@ new Vue({
 
     uiChartType: 0,
     uiShowCharts: localStorage.getItem('uiShowCharts') === '1',
+    firewallBlocksVisible: localStorage.getItem('firewallBlocksVisible') === '1',
     uiTheme: localStorage.theme || 'auto',
     prefersDarkScheme: window.matchMedia('(prefers-color-scheme: dark)'),
     currentLocale: localStorage.getItem(LOCALE_STORAGE_KEY) || DEFAULT_LOCALE,
@@ -203,6 +204,16 @@ new Vue({
     getClientLevel(client) {
       return this.clientLevels[client.id] ?? 1;
     },
+    cycleClientLevel(client) {
+      const prev = this.getClientLevel(client);
+      const next = prev === 0 ? 1 : (prev === 5 ? 0 : prev + 1);
+      this.$set(this.clientLevels, client.id, next);
+      this.api.updateClientObfuscation({ clientId: client.id, level: next })
+        .catch((err) => {
+          this.$set(this.clientLevels, client.id, prev);
+          alert(err.message || err.toString());
+        });
+    },
     onObfuscationLevelChange(client, ev) {
       const raw = ev.target.value;
       const level = raw === '' || raw === 'null' ? 0 : parseInt(raw, 10);
@@ -231,6 +242,20 @@ new Vue({
       const meta = PROFILE_META[profileId];
       return meta ? meta.qrFriendly === true : false;
     },
+    cycleClientProfile(client) {
+      const list = this.profileIds.length ? this.profileIds : ['dns', 'quic', 'stun', 'sip', 'webrtc', 'dtls'];
+      const current = this.getClientProfile(client);
+      let idx = list.indexOf(current);
+      if (idx < 0) idx = 0;
+      const next = list[(idx + 1) % list.length];
+      const prev = current;
+      this.$set(this.clientProfiles, client.id, next);
+      this.api.updateClientObfuscation({ clientId: client.id, profile: next })
+        .catch((err) => {
+          this.$set(this.clientProfiles, client.id, prev);
+          alert(err.message || err.toString());
+        });
+    },
     onObfuscationProfileChange(client, ev) {
       const profile = ev.target.value;
       const prev = this.getClientProfile(client);
@@ -247,10 +272,9 @@ new Vue({
       this.regeneratingSignatures = true;
       try {
         const result = await this.api.regenerateSignatures();
-        if (result && (result.started || result.success)) {
-          alert(this.$t('signaturesStartedInBackground') || 'Regeneration started in background. Current configs use existing signatures; new ones will apply after completion.');
-        } else {
-          alert((result && result.message) || this.$t('signaturesRegenerateFailed') || 'Regeneration failed.');
+        if (!result || (!result.started && !result.success)) {
+          const msg = (result && result.message) || this.$t('signaturesRegenerateFailed') || 'Regeneration failed.';
+          alert(msg);
         }
       } catch (err) {
         alert(err.message || this.$t('signaturesRegenerateFailed') || 'Regeneration failed.');
@@ -271,7 +295,6 @@ new Vue({
         const ok = document.execCommand('copy');
         document.body.removeChild(ta);
         if (!ok) throw new Error('Copy failed');
-        alert(this.$t('copiedToClipboard'));
       } catch (err) {
         alert(err.message || 'Copy failed');
       }
@@ -310,7 +333,6 @@ new Vue({
         const ok = document.execCommand('copy');
         document.body.removeChild(ta);
         if (!ok) throw new Error('Copy failed');
-        alert(this.$t('copiedToClipboard'));
       } catch (err) {
         alert(err.message || 'Copy failed');
       }
@@ -551,21 +573,6 @@ new Vue({
       this.clientExpiryEdit = null;
       this.expiryEditValue = '';
     },
-    loadDeletedClients() {
-      if (!this.showDeletedClients) return;
-      this.api.getDeletedClients()
-        .then((r) => { this.deletedClients = Array.isArray(r) ? r : []; })
-        .catch(() => { this.deletedClients = []; });
-    },
-    toggleShowDeleted() {
-      this.showDeletedClients = !this.showDeletedClients;
-      this.loadDeletedClients();
-    },
-    restoreClient(client) {
-      this.api.restoreClient(client.id)
-        .then(() => { this.refresh(); this.loadDeletedClients(); })
-        .catch((err) => alert(err.message || err.toString()));
-    },
     logout(e) {
       e.preventDefault();
 
@@ -608,7 +615,10 @@ new Vue({
     },
     updateClientAddress(client, address) {
       this.api.updateClientAddress({ clientId: client.id, address })
-        .catch((err) => alert(err.message || err.toString()))
+        .catch((err) => {
+          const msg = err.status === 409 ? (this.$t('addressAlreadyInUse') || err.message) : (err.message || err.toString());
+          alert(msg);
+        })
         .finally(() => this.refresh().catch(console.error));
     },
     toggleTheme() {
@@ -640,6 +650,10 @@ new Vue({
     },
     toggleCharts() {
       localStorage.setItem('uiShowCharts', this.uiShowCharts ? 1 : 0);
+    },
+    toggleFirewallBlocks() {
+      this.firewallBlocksVisible = !this.firewallBlocksVisible;
+      localStorage.setItem('firewallBlocksVisible', this.firewallBlocksVisible ? '1' : '0');
     },
   },
   filters: {

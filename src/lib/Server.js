@@ -174,19 +174,7 @@ module.exports = class Server {
         debug(`Deleted Session: ${sessionId}`);
         return { success: true };
       }))
-      .get('/api/wireguard/client', defineEventHandler((event) => {
-        const query = getQuery(event);
-        if (query.deleted === '1' || query.deleted === 'true') {
-          const rows = db.clients.getDeleted();
-          return rows.map((r) => ({
-            id: r.id,
-            name: r.name,
-            address: r.address,
-            deletedAt: r.deleted_at ? new Date(r.deleted_at * 1000) : null,
-          }));
-        }
-        return WireGuard.getClients();
-      }))
+      .get('/api/wireguard/client', defineEventHandler(() => WireGuard.getClients()))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
         const query = getQuery(event);
@@ -225,7 +213,7 @@ module.exports = class Server {
             preshared_key: client.preSharedKey || null,
             allowed_ips: WG_ALLOWED_IPS || '0.0.0/0',
             persistent_keepalive: WG_PERSISTENT_KEEPALIVE || '25',
-            endpoint: WG_HOST && WG_PORT ? `${WG_HOST}:${WG_PORT}` : '',
+            endpoint: db.appSettings.get('endpoint') || (WG_HOST && WG_PORT ? `${WG_HOST}:${WG_PORT}` : ''),
             config_raw: config,
             obfuscation_level: level != null ? level : null,
             obfuscation_profile: profile || null,
@@ -277,12 +265,6 @@ module.exports = class Server {
         requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');
         await WireGuard.deleteClient({ clientId });
-        return { success: true };
-      }))
-      .post('/api/wireguard/client/:clientId/restore', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
-        const clientId = getRouterParam(event, 'clientId');
-        await WireGuard.restoreClient({ clientId });
         return { success: true };
       }))
       .post('/api/wireguard/client/:clientId/enable', defineEventHandler(async (event) => {

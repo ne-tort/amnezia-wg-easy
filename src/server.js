@@ -11,6 +11,12 @@ const { applyFirewall } = require('./lib/firewall');
 async function main() {
   db.getDb();
 
+  // * Sync endpoint from env to app_settings so client configs use current WG_HOST:WG_PORT after restart.
+  const { WG_HOST, WG_PORT } = require('./config');
+  if (WG_HOST) {
+    db.appSettings.set('endpoint', `${WG_HOST}:${WG_PORT || '51820'}`);
+  }
+
   await ensureFirstAdmin();
   if (db.panelUsers.count() === 0) {
     // eslint-disable-next-line no-console

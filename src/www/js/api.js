@@ -8,6 +8,7 @@ class API {
   async call({ method, path, body }) {
     const res = await fetch(`./api${path}`, {
       method,
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
       },
@@ -129,20 +130,13 @@ class API {
       ...client,
       createdAt: new Date(client.createdAt),
       updatedAt: new Date(client.updatedAt),
-      latestHandshakeAt: client.latestHandshakeAt !== null
+      latestHandshakeAt: client.latestHandshakeAt !== null && client.latestHandshakeAt !== undefined
         ? new Date(client.latestHandshakeAt)
         : null,
+      expiresAt: client.expiresAt !== null && client.expiresAt !== undefined
+        ? new Date(client.expiresAt)
+        : null,
     })));
-  }
-
-  async getDeletedClients() {
-    return this.call({ method: 'get', path: '/wireguard/client?deleted=1' }).then((list) =>
-      (list || []).map((c) => ({ ...c, deletedAt: c.deletedAt ? new Date(c.deletedAt) : null }))
-    );
-  }
-
-  async restoreClient(clientId) {
-    return this.call({ method: 'post', path: `/wireguard/client/${clientId}/restore` });
   }
 
   async createClient({ name }) {

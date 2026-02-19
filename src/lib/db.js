@@ -142,16 +142,20 @@ function clientsGetDeleted() {
   return getDb().prepare('SELECT * FROM clients WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC').all();
 }
 
-function clientsRestore(id) {
+function clientsDisableExpired() {
   const now = Math.floor(Date.now() / 1000);
-  getDb().prepare('UPDATE clients SET deleted_at = NULL, updated_at = ? WHERE id = ?').run(now, id);
+  const r = getDb().prepare(
+    'UPDATE clients SET enabled = 0, updated_at = ? WHERE deleted_at IS NULL AND enabled = 1 AND expires_at IS NOT NULL AND expires_at <= ?'
+  ).run(now, now);
+  return r.changes > 0;
 }
 
 function clientsDelete(id) {
   const row = clientsGetByIdIncludingDeleted(id);
   if (!row) return;
   if (row.deleted_at != null) return;
-  clientsSetDeletedAt(id, Math.floor(Date.now() / 1000));
+  const now = Math.floor(Date.now() / 1000);
+  getDb().prepare('UPDATE clients SET rule_profile_id = NULL, deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, id);
 }
 
 function clientsReplaceAll(rows) {
@@ -320,7 +324,7 @@ module.exports = {
     getEnabledForWireGuard: clientsGetEnabledForWireGuard,
     getById: clientsGetById,
     getDeleted: clientsGetDeleted,
-    restore: clientsRestore,
+    disableExpired: clientsDisableExpired,
     create: clientsCreate,
     update: clientsUpdate,
     delete: clientsDelete,

@@ -269,6 +269,12 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
   }
 
   async getClients() {
+    if (db.clients.disableExpired()) {
+      this.__config = null;
+      await this.saveConfig();
+      const { applyFirewall } = require('./firewall');
+      applyFirewall();
+    }
     const config = await this.getConfig();
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
@@ -278,6 +284,8 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       publicKey: client.publicKey,
       createdAt: new Date(client.createdAt),
       updatedAt: new Date(client.updatedAt),
+      expiresAt: client.expiresAt ?? null,
+      ruleProfileId: client.ruleProfileId ?? null,
       allowedIPs: WG_ALLOWED_IPS,
       defaultProfile: client.defaultProfile || undefined,
       defaultLevel: client.defaultLevel ?? undefined,
@@ -396,7 +404,15 @@ PublicKey = ${config.server.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
 }AllowedIPs = ${WG_ALLOWED_IPS}
 PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
-Endpoint = ${WG_HOST}:${WG_PORT}`;
+Endpoint = ${this.__getEndpoint()}`;
+  }
+
+  __getEndpoint() {
+    const stored = db.appSettings.get('endpoint');
+    if (stored && stored.trim()) return stored.trim();
+    const fromEnv = WG_HOST && WG_PORT ? `${WG_HOST}:${WG_PORT}` : '';
+    if (fromEnv) db.appSettings.set('endpoint', fromEnv);
+    return fromEnv;
   }
 
   async getClientQRCodeSVG({ clientId, level, profile }) {
@@ -485,22 +501,15 @@ Endpoint = ${WG_HOST}:${WG_PORT}`;
     applyFirewall();
   }
 
-  async restoreClient({ clientId }) {
-    const client = db.clients.getByIdIncludingDeleted(clientId);
-    if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
-    if (client.deleted_at == null) throw new ServerError(`Client is not deleted: ${clientId}`, 400);
-    db.clients.restore(clientId);
-    this.__config = null;
-    await this.saveConfig();
-    const { applyFirewall } = require('./firewall');
-    applyFirewall();
-  }
-
   async enableClient({ clientId }) {
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    const now = Math.floor(Date.now() / 1000);
+    if (client.expires_at != null && client.expires_at < now) {
+      client.expires_at = null;
+    }
     client.enabled = 1;
-    client.updated_at = Math.floor(Date.now() / 1000);
+    client.updated_at = now;
     db.clients.update(client);
     this.__config = null;
     await this.saveConfig();
@@ -536,11 +545,18 @@ Endpoint = ${WG_HOST}:${WG_PORT}`;
     }
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    const allClients = db.clients.getAll();
+    const alreadyUsed = allClients.some((c) => c.id !== clientId && c.address === address);
+    if (alreadyUsed) {
+      throw new ServerError('Address already in use', 409);
+    }
     client.address = address;
     client.updated_at = Math.floor(Date.now() / 1000);
     db.clients.update(client);
     this.__config = null;
     await this.saveConfig();
+    const { applyFirewall } = require('./firewall');
+    applyFirewall();
   }
 
   async updateClientObfuscation({ clientId, profile, level }) {

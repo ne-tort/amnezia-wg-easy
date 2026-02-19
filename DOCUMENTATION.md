@@ -109,7 +109,7 @@ flowchart TB
 | Группа | Примеры | Примечание |
 |--------|---------|------------|
 | Сессия | `GET /api/session`, `POST /api/session`, `DELETE /api/session` | Ответ сессии содержит `role` при входе через БД. |
-| Клиенты | `GET /api/wireguard/client`, `POST /api/wireguard/client`, `DELETE /api/wireguard/client/:clientId` | В списке клиентов поле `allowedIPs` заполняется из `WG_ALLOWED_IPS`. |
+| Клиенты | `GET /api/wireguard/client`, `POST /api/wireguard/client`, `DELETE /api/wireguard/client/:clientId` | Список: каждый элемент содержит `id`, `name`, `enabled`, `address`, `publicKey`, `createdAt`, `updatedAt`, `expiresAt`, `ruleProfileId`, `allowedIPs`, `defaultProfile`, `defaultLevel`, `downloadableConfig`, `persistentKeepalive`, `latestHandshakeAt`, `transferRx`, `transferTx`. Удалённые: `GET /api/wireguard/client?deleted=1` → `[{ id, name, address, deletedAt }]`. |
 | Конфиг клиента | `GET .../configuration`, `GET .../qrcode.svg`, `GET .../config-versions`, `GET .../config-versions/:versionId/download` | При скачивании configuration в `client_config_versions` пишется снимок (allowed_ips, persistent_keepalive, endpoint из config.js). |
 | Мутации клиента | `POST .../enable`, `POST .../disable`, `PUT .../name`, `PUT .../address`, `PUT .../firewall-profile` | При отсутствии клиента — 404 (ServerError). Смена профиля фаерволла сразу обновляет БД и применяет правила. |
 | Подписи | `GET /api/signatures/profiles`, `POST /api/signatures/regenerate` | Регенерация — только admin/moderator. |

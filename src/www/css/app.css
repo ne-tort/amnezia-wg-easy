@@ -1894,3 +1894,9 @@ video {
 .peer:checked ~ .peer-checked\:dark\:fill-neutral-400:where(.dark, .dark *) {
   fill: #a3a3a3;
 }
+
+/* * Hides native dropdown arrow on select (language, firewall profile). */
+.select-no-arrow {
+  -webkit-appearance: none;
+  appearance: none;
+}
