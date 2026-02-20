@@ -120,7 +120,7 @@
             <div v-if="clients && clients.length > 0" v-for="client in clients" :key="client.id"
               class="relative overflow-hidden border-b last:border-b-0 border-gray-100 dark:border-neutral-600 border-solid">
 
-              <!-- Chart -->
+              <!-- Chart (when uiChartType) -->
               <div v-if="uiChartType" class="absolute z-0 bottom-0 left-0 right-0 h-6" >
                 <apexchart width="100%" height="100%" :options="chartOptionsTX" :series="client.transferTxSeries">
                 </apexchart>
@@ -131,8 +131,9 @@
                 </apexchart>
               </div>
 
-              <div class="relative py-3 md:py-5 px-3 z-10 flex flex-col sm:flex-row justify-between gap-3">
-                <div class="flex gap-3 md:gap-4 w-full items-center ">
+              <div class="relative py-3 md:py-5 px-3 z-10 flex flex-col sm:flex-row justify-between gap-3 cursor-pointer"
+                @click="toggleClientStats(client)">
+                <div class="flex gap-3 md:gap-4 w-full items-center">
 
                   <!-- Avatar -->
                   <div class="h-10 w-10 mt-2 self-start rounded-full bg-gray-50 relative">
@@ -162,6 +163,7 @@
 
                         <!-- Show -->
                         <input v-show="clientEditNameId === client.id" v-model="clientEditName"
+                          @click.stop
                           v-on:keyup.enter="updateClientName(client, clientEditName); clientEditName = null; clientEditNameId = null;"
                           v-on:keyup.escape="clientEditName = null; clientEditNameId = null;"
                           :ref="'client-' + client.id + '-name'"
@@ -171,7 +173,7 @@
 
                         <!-- Edit -->
                         <span v-show="clientEditNameId !== client.id"
-                          @click="clientEditName = client.name; clientEditNameId = client.id; setTimeout(() => $refs['client-' + client.id + '-name'][0].select(), 1);"
+                          @click.stop="clientEditName = client.name; clientEditNameId = client.id; setTimeout(() => $refs['client-' + client.id + '-name'][0].select(), 1);"
                           class="cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
                           <svg xmlns="http://www.w3.org/2000/svg"
                             class="h-4 w-4 inline align-middle opacity-25 hover:opacity-100" fill="none"
@@ -186,6 +188,7 @@
                         <span class="group">
                           <!-- Show -->
                           <input v-show="clientEditAddressId === client.id" v-model="clientEditAddress"
+                            @click.stop
                             v-on:keyup.enter="updateClientAddress(client, clientEditAddress); clientEditAddress = null; clientEditAddressId = null;"
                             v-on:keyup.escape="clientEditAddress = null; clientEditAddressId = null;"
                             :ref="'client-' + client.id + '-address'"
@@ -195,7 +198,7 @@
 
                           <!-- Edit -->
                           <span v-show="clientEditAddressId !== client.id"
-                            @click="clientEditAddress = client.address; clientEditAddressId = client.id; setTimeout(() => $refs['client-' + client.id + '-address'][0].select(), 1);"
+                            @click.stop="clientEditAddress = client.address; clientEditAddressId = client.id; setTimeout(() => $refs['client-' + client.id + '-address'][0].select(), 1);"
                             class="cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
                             <svg xmlns="http://www.w3.org/2000/svg"
                               class="h-4 w-4 inline align-middle opacity-25 hover:opacity-100" fill="none"
@@ -204,32 +207,6 @@
                                 d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                             </svg>
                           </span>
-                        </span>
-                        <!-- Inline Transfer TX -->
-                        <span v-if="!uiTrafficStats && client.transferTx" class="whitespace-nowrap" :title="$t('totalDownload') + bytes(client.transferTx)">
-                          ·
-                          <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd"
-                              d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 012 0v11.586l4.293-4.293a1 1 0 011.414 0z"
-                              clip-rule="evenodd" />
-                          </svg>
-                          {{client.transferTxCurrent | bytes}}/s
-                        </span>
-                        
-                        <!-- Inline Transfer RX -->
-                        <span v-if="!uiTrafficStats && client.transferRx" class="whitespace-nowrap" :title="$t('totalUpload') + bytes(client.transferRx)">
-                          ·
-                          <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd"
-                              d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z"
-                              clip-rule="evenodd" />
-                          </svg>
-                          {{client.transferRxCurrent | bytes}}/s
-                        </span>
-                        <!-- Last seen -->
-                        <span class="text-gray-400 dark:text-neutral-500 whitespace-nowrap" v-if="client.latestHandshakeAt"
-                          :title="$t('lastSeen') + dateTime(new Date(client.latestHandshakeAt))">
-                          {{!uiTrafficStats ? " · " : ""}}{{new Date(client.latestHandshakeAt) | timeago}}
                         </span>
                       </div>
                     </div>
@@ -281,7 +258,7 @@
                   <!-- </div> --> <!-- <div class="flex flex-grow items-center"> -->
                 </div>
 
-                <div class="flex items-center justify-end">
+                <div class="flex items-center justify-end" @click.stop>
                   <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-between">
 
                     <!-- Enable/Disable (leftmost) -->
@@ -398,6 +375,26 @@
                       </svg>
                     </button>
                   </div>
+                </div>
+
+                <!-- Expandable stats: last seen, download, upload (one line, left-aligned) -->
+                <div v-if="expandedClientStatsId === client.id"
+                  class="text-left text-xs text-gray-500 dark:text-neutral-400 mt-1 px-3 pb-2 flex flex-wrap items-center gap-x-4 gap-y-0">
+                  <span v-if="client.latestHandshakeAt" :title="$t('lastSeen') + ' ' + dateTime(new Date(client.latestHandshakeAt))">
+                    {{ $t('lastSeen') }}: {{ new Date(client.latestHandshakeAt) | timeago }}
+                  </span>
+                  <span v-if="client.transferTx" :title="$t('totalDownload') + ' ' + bytes(client.transferTx)">
+                    <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 012 0v11.586l4.293-4.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                    </svg>
+                    {{ client.transferTxCurrent | bytes }}/s
+                  </span>
+                  <span v-if="client.transferRx" :title="$t('totalUpload') + ' ' + bytes(client.transferRx)">
+                    <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                    </svg>
+                    {{ client.transferRxCurrent | bytes }}/s
+                  </span>
                 </div>
 
               </div>

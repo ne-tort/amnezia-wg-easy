@@ -106,6 +106,7 @@ new Vue({
     profileRuleEdit: null,
     clientExpiryEdit: null,
     expiryEditValue: '',
+    expandedClientStatsId: null,
 
     currentRelease: null,
     latestRelease: null,
@@ -650,6 +651,9 @@ new Vue({
     },
     toggleCharts() {
       localStorage.setItem('uiShowCharts', this.uiShowCharts ? 1 : 0);
+    },
+    toggleClientStats(client) {
+      this.expandedClientStatsId = this.expandedClientStatsId === client.id ? null : client.id;
     },
     toggleFirewallBlocks() {
       this.firewallBlocksVisible = !this.firewallBlocksVisible;
