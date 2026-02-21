@@ -7,21 +7,22 @@ const BACKENDS = { nftables: true, firewalld: true };
 
 /**
  * Builds a backend-agnostic rules descriptor from DB.
- * Order: global rules first, then profile rules; first match wins; default ACCEPT.
- * @returns {{ clients: Array<{ address: string, rule_profile_id: number|null }>, globalRules: Array<Object>, profileRules: Object }}
+ * Order: client rules first, then profile rules, then global rules; first match wins; default ACCEPT.
+ * @returns {{ clients: Array<{ address: string, rule_profile_id: number|null, clientRules: Array }>, globalRules: Array<Object>, profileRules: Object }}
  */
 function buildDescriptor() {
   const clients = db.clients.getEnabledForWireGuard();
   const globalRules = db.globalFirewallRules.getAll();
   const profileRules = {};
-  const profileIds = [...new Set(clients.map((c) => c.rule_profile_id).filter(Boolean))];
+  const profileIds = [...new Set(clients.map((c) => c.rule_profile_id ?? 1).filter(Boolean))];
   for (const pid of profileIds) {
     profileRules[pid] = db.ipRules.getByProfileId(pid);
   }
   return {
     clients: clients.map((c) => ({
       address: (c.address && c.address.trim()) || null,
-      rule_profile_id: c.rule_profile_id ?? null,
+      rule_profile_id: c.rule_profile_id ?? 1,
+      clientRules: db.clientFirewallRules.getByClientId(c.id) || [],
     })),
     globalRules,
     profileRules,
@@ -36,7 +37,8 @@ function applyFirewall() {
   const descriptor = buildDescriptor();
   const hasProfile = descriptor.clients.some((c) => c.rule_profile_id != null);
   const hasGlobal = descriptor.globalRules.length > 0;
-  if (!hasProfile && !hasGlobal) {
+  const hasClientRules = descriptor.clients.some((c) => c.clientRules && c.clientRules.length > 0);
+  if (!hasProfile && !hasGlobal && !hasClientRules) {
     try {
       const backend = getBackend();
       if (backend.clear) backend.clear();

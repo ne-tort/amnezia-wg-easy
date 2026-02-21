@@ -6,14 +6,66 @@
   <meta charset="utf-8"/>
   <link href="./css/app.css" rel="stylesheet">
   <link rel="manifest" href="./manifest.json">
-  <link rel="icon" href="img/favicon.ico" sizes="any">
-  <link rel="apple-touch-icon" href="./img/apple-touch-icon.png">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
 </head>
 <style>
   [v-cloak] {
     display: none;
+  }
+  /* Modal: guaranteed styles independent of Tailwind purging */
+  .modal-root {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    overflow-y: auto;
+  }
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: rgba(0, 0, 0, 0.65);
+  }
+  .modal-panel {
+    position: relative;
+    z-index: 10000;
+    width: 100%;
+    max-width: min(28rem, 90vw);
+    margin: auto;
+    padding: 1.5rem;
+    flex-shrink: 0;
+    background: #fff;
+    border-radius: 0.5rem;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.15), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  }
+  .dark .modal-panel {
+    background: #404040;
+  }
+  .modal-panel-sm {
+    max-width: min(24rem, 90vw);
+  }
+  .modal-title {
+    font-size: 1.125rem;
+    font-weight: 500;
+    margin-bottom: 1.25rem;
+    color: #1f2937;
+  }
+  .dark .modal-title {
+    color: #e5e5e5;
+  }
+  .modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .modal-footer {
+    display: flex;
+    gap: 0.75rem;
+    margin-top: 1.5rem;
   }
 </style>
 
@@ -57,7 +109,7 @@
             </button>
             <!-- Language -->
             <select v-model="currentLocale" @change="setLocale(currentLocale)"
-              class="select-no-arrow h-8 w-12 flex-shrink-0 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-800 dark:text-neutral-200 text-sm font-medium px-1 border-0 cursor-pointer hover:bg-gray-300 dark:hover:bg-neutral-600 transition focus:ring-2 focus:ring-red-800 dark:focus:ring-red-600 focus:outline-none text-center">
+              class="select-no-arrow h-8 min-w-[3rem] w-16 flex-shrink-0 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-800 dark:text-neutral-200 text-sm font-medium px-1 border-0 cursor-pointer hover:bg-gray-300 dark:hover:bg-neutral-600 transition focus:ring-2 focus:ring-red-800 dark:focus:ring-red-600 focus:outline-none text-center">
               <option v-for="opt in localeOptions" :key="opt.code" :value="opt.code">{{ opt.label }}</option>
             </select>
             <!-- Show / hide charts -->
@@ -96,21 +148,18 @@
           </div>
         </div>
 
-        <div class="space-y-8">
-        <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
+        <div class="flex flex-col">
+        <div class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden shrink-0 mb-5">
           <div class="flex flex-row flex-auto items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
             <div class="flex-grow">
               <p class="text-2xl font-medium dark:text-neutral-200">{{$t("clients")}}</p>
             </div>
             <div class="flex-shrink-0 flex items-center gap-3">
               <button @click="clientCreate = true; clientCreateName = '';"
-                class="hover:bg-red-800 hover:border-red-800 hover:text-white text-gray-700 dark:text-neutral-200 border-2 border-gray-100 dark:border-neutral-600 py-2 px-4 rounded inline-flex items-center transition">
-                <svg class="w-4 mr-2" inline xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                  stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                class="flex items-center justify-center p-2 rounded border-2 border-gray-100 dark:border-neutral-600 text-gray-700 dark:text-neutral-200 hover:bg-red-800 hover:border-red-800 hover:text-white transition" :title="$t('new')">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
-                <span class="text-sm">{{$t("new")}}</span>
               </button>
             </div>
           </div>
@@ -131,9 +180,10 @@
                 </apexchart>
               </div>
 
-              <div class="relative py-3 md:py-5 px-3 z-10 flex flex-col sm:flex-row justify-between gap-3 cursor-pointer"
+              <div class="relative py-3 md:py-5 px-3 z-10 flex flex-col gap-3 cursor-pointer"
                 @click="toggleClientStats(client)">
-                <div class="flex gap-3 md:gap-4 w-full items-center">
+                <div class="flex flex-row flex-wrap justify-between gap-3 items-center">
+                <div class="flex gap-3 md:gap-4 w-full sm:w-auto sm:min-w-0 items-center">
 
                   <!-- Avatar -->
                   <div class="h-10 w-10 mt-2 self-start rounded-full bg-gray-50 relative">
@@ -211,54 +261,11 @@
                       </div>
                     </div>
 
-                    <!-- Info -->
-                    <div v-if="uiTrafficStats"
-                      class="flex gap-2 items-center shrink-0 text-gray-400 dark:text-neutral-400 text-xs mt-px justify-end">
-
-                      <!-- Transfer TX -->
-                      <div class="min-w-20 md:min-w-24" v-if="client.transferTx">
-                        <span class="flex gap-1" :title="$t('totalDownload') + bytes(client.transferTx)">
-                          <svg class="align-middle h-3 inline mt-0.5" xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd"
-                              d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 012 0v11.586l4.293-4.293a1 1 0 011.414 0z"
-                              clip-rule="evenodd" />
-                          </svg>
-                          <div>
-                            <span class="text-gray-700 dark:text-neutral-200">{{client.transferTxCurrent |
-                              bytes}}/s</span>
-                            <!-- Total TX -->
-                            <br><span class="font-regular" style="font-size:0.85em">{{bytes(client.transferTx)}}</span>
-                          </div>
-                        </span>
-
-                      </div>
-
-                      <!-- Transfer RX -->
-                      <div class="min-w-20 md:min-w-24" v-if="client.transferRx">
-                        <span class="flex gap-1" :title="$t('totalUpload') + bytes(client.transferRx)">
-
-                          <svg class="align-middle h-3 inline mt-0.5" xmlns="http://www.w3.org/2000/svg"
-                            viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd"
-                              d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z"
-                              clip-rule="evenodd" />
-                          </svg>
-                          <div>
-                            <span class="text-gray-700 dark:text-neutral-200">{{client.transferRxCurrent |
-                              bytes}}/s</span>
-                            <!-- Total RX -->
-                            <br><span class="font-regular" style="font-size:0.85em">{{bytes(client.transferRx)}}</span>
-                          </div>
-                        </span>
-                      </div>
-
-                    </div>
                   </div>
                   <!-- </div> --> <!-- <div class="flex flex-grow items-center"> -->
                 </div>
 
-                <div class="flex items-center justify-end" @click.stop>
+                <div class="flex items-center justify-end shrink-0" @click.stop>
                   <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-between">
 
                     <!-- Enable/Disable (leftmost) -->
@@ -283,14 +290,13 @@
                       </svg>
                     </button>
 
-                    <!-- Firewall profile -->
+                    <!-- Firewall profile: always required; null = Full Access (id=1); no "No profile" option -->
                     <select
-                      :value="client.ruleProfileId == null ? '' : client.ruleProfileId"
+                      :value="client.ruleProfileId == null ? 1 : client.ruleProfileId"
                       @change="onFirewallProfileChange(client, $event)"
                       class="select-no-arrow align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2rem] border-0 cursor-pointer text-center min-w-[5rem]"
                       :title="$t('firewallProfileTitle')">
-                      <option value="">{{ $t('firewallProfileFullAccess') }}</option>
-                      <option v-for="p in ruleProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
+                      <option v-for="p in ruleProfiles" :key="p.id" :value="p.id">{{ p.id === 1 ? $t('firewallProfileFullAccess') : p.name }}</option>
                     </select>
 
                     <!-- Obfuscation level I0–I5 (cycle button) -->
@@ -376,12 +382,13 @@
                     </button>
                   </div>
                 </div>
+                </div>
 
-                <!-- Expandable stats: last seen, download, upload (one line, left-aligned) -->
+                <!-- Expandable stats: last seen, download, upload — own row below buttons -->
                 <div v-if="expandedClientStatsId === client.id"
-                  class="text-left text-xs text-gray-500 dark:text-neutral-400 mt-1 px-3 pb-2 flex flex-wrap items-center gap-x-4 gap-y-0">
+                  class="w-full text-left text-xs text-gray-500 dark:text-neutral-400 pt-2 mt-1 border-t border-gray-100 dark:border-neutral-600 px-3 pb-2 flex flex-nowrap items-center gap-3">
                   <span v-if="client.latestHandshakeAt" :title="$t('lastSeen') + ' ' + dateTime(new Date(client.latestHandshakeAt))">
-                    {{ $t('lastSeen') }}: {{ new Date(client.latestHandshakeAt) | timeago }}
+                    {{ new Date(client.latestHandshakeAt) | timeago }}
                   </span>
                   <span v-if="client.transferTx" :title="$t('totalDownload') + ' ' + bytes(client.transferTx)">
                     <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
@@ -426,114 +433,113 @@
           </div>
         </div>
 
-        <!-- Global firewall rules (admin/moderator) -->
-        <div v-if="firewallBlocksVisible" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
+        <!-- Firewall profiles (first row = global rules, second = Full Access, rest = profiles; expand to manage rules) -->
+        <div v-if="firewallBlocksVisible" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden shrink-0 mt-5 mb-8">
           <div class="flex flex-row flex-auto items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
-            <div class="flex-grow">
-              <p class="text-xl font-medium dark:text-neutral-200">{{ $t('globalFirewallRulesTitle') }}</p>
-            </div>
-            <div class="flex-shrink-0">
-              <button type="button" @click="openAddGlobalRule()"
-                class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
-                :title="$t('globalRuleAdd')">
-                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-              </button>
-            </div>
+            <p class="text-xl font-medium dark:text-neutral-200 flex-grow">{{ $t('firewallProfilesTitle') }}</p>
+            <button type="button" @click="openProfileCreate()" class="flex items-center justify-center p-2 rounded border-2 border-gray-100 dark:border-neutral-600 text-gray-700 dark:text-neutral-200 hover:bg-red-800 hover:border-red-800 hover:text-white transition" :title="$t('createNewProfile')">
+              <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+            </button>
           </div>
-          <div class="overflow-x-auto">
-            <table class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
-              <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
-                <tr>
-                  <th class="px-4 py-2">{{ $t('globalRuleAction') }}</th>
-                  <th class="px-4 py-2">{{ $t('globalRuleDestination') }}</th>
-                  <th class="px-4 py-2">{{ $t('globalRulePort') }}</th>
-                  <th class="px-4 py-2">{{ $t('globalRuleProtocol') }}</th>
-                  <th class="px-4 py-2">{{ $t('globalRuleSortOrder') }}</th>
-                  <th class="px-4 py-2 w-20"></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="r in globalFirewallRules" :key="r.id" class="border-b border-gray-100 dark:border-neutral-600 hover:bg-gray-50 dark:hover:bg-neutral-600">
-                  <td class="px-4 py-2">{{ r.action }}</td>
-                  <td class="px-4 py-2 font-mono">{{ r.destination_cidr }}</td>
-                  <td class="px-4 py-2">{{ r.port_range || '—' }}</td>
-                  <td class="px-4 py-2">{{ r.protocol || '—' }}</td>
-                  <td class="px-4 py-2">{{ r.sort_order }}</td>
-                  <td class="px-4 py-2">
-                    <button type="button" @click="openEditGlobalRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1" :title="$t('edit')">
+          <div class="divide-y divide-gray-100 dark:divide-neutral-600 pt-2 pb-2">
+            <div v-for="profile in firewallProfileList" :key="profile.id">
+              <div
+                class="flex items-center justify-between h-12 cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-600 rounded transition pl-5 pr-1"
+                :title="(profile.description ? profile.description + ' — ' : '') + (expandedProfileIds.includes(profile.id) ? $t('globalRuleCancel') : $t('firewallProfileManageRules'))"
+                @click="expandProfileRules(profile)">
+                <div class="flex-grow min-w-0 truncate">
+                  <span class="font-medium dark:text-neutral-200">{{ profile.name }}</span>
+                </div>
+                <div class="flex-shrink-0 flex items-center justify-center gap-0">
+                  <template v-if="expandedProfileIds.includes(profile.id) && profile.id !== 'global'">
+                    <button type="button" @click.stop="openProfileEdit(profile)" class="p-2 rounded bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white transition" :title="$t('edit')">
                       <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                       </svg>
                     </button>
-                    <button type="button" @click="deleteGlobalRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition" :title="$t('deleteShort')">
+                    <button v-if="profile.id !== 1" type="button" @click.stop="deleteRuleProfile(profile)" class="p-2 rounded bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white transition" :title="$t('deleteShort')">
                       <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
                     </button>
-                  </td>
-                </tr>
-                <tr v-if="globalFirewallRules.length === 0">
-                  <td colspan="6" class="px-4 py-6 text-center text-gray-400 dark:text-neutral-400">{{ $t('noGlobalRules') }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <!-- Firewall profiles (expand to manage rules) -->
-        <div v-if="firewallBlocksVisible" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden">
-          <div class="p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
-            <p class="text-xl font-medium dark:text-neutral-200">{{ $t('firewallProfilesTitle') }}</p>
-          </div>
-          <div class="divide-y divide-gray-100 dark:divide-neutral-600">
-            <div v-for="profile in ruleProfiles" :key="profile.id" class="p-4">
-              <div class="flex items-center justify-between">
-                <div>
-                  <span class="font-medium dark:text-neutral-200">{{ profile.name }}</span>
-                  <span v-if="profile.description" class="text-sm text-gray-500 dark:text-neutral-400 ml-2">— {{ profile.description }}</span>
+                  </template>
+                  <span v-else-if="profile.id === 'global' || profile.id === 1" class="inline-block w-9 h-9" aria-hidden="true"></span>
                 </div>
-                <button type="button" @click="expandProfileRules(profile)"
-                  class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
-                  :title="profileRulesExpanded === profile.id ? $t('globalRuleCancel') : $t('firewallProfileManageRules')">
-                  <svg v-if="profileRulesExpanded !== profile.id" class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
-                  </svg>
-                  <svg v-else class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
               </div>
-              <div v-if="profileRulesExpanded === profile.id" class="mt-4 overflow-x-auto">
-                <div class="flex justify-end mb-2">
-                  <button type="button" @click="openAddProfileRule(profile.id)"
-                    class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
-                    :title="$t('globalRuleAdd')">
-                    <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                    </svg>
-                  </button>
-                </div>
-                <table class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
+              <div v-if="expandedProfileIds.includes(profile.id)" class="mt-4 overflow-x-auto pb-4">
+                <table v-if="profile.id === 'global'" class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
                   <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
                     <tr>
                       <th class="px-3 py-1">{{ $t('globalRuleAction') }}</th>
                       <th class="px-3 py-1">{{ $t('globalRuleDestination') }}</th>
                       <th class="px-3 py-1">{{ $t('globalRulePort') }}</th>
                       <th class="px-3 py-1">{{ $t('globalRuleProtocol') }}</th>
-                      <th class="px-3 py-1">{{ $t('globalRuleSortOrder') }}</th>
-                      <th class="px-3 py-1 w-24"></th>
+                      <th class="px-3 py-1 w-32"></th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="r in profileRulesList" :key="r.id" class="border-b border-gray-100 dark:border-neutral-600">
+                    <tr v-for="(r, gIdx) in sortedGlobalFirewallRules" :key="r.id" class="border-b border-gray-100 dark:border-neutral-600">
                       <td class="px-3 py-1">{{ r.action }}</td>
                       <td class="px-3 py-1 font-mono">{{ r.destination_cidr }}</td>
                       <td class="px-3 py-1">{{ r.port_range || '—' }}</td>
                       <td class="px-3 py-1">{{ r.protocol || '—' }}</td>
-                      <td class="px-3 py-1">{{ r.sort_order }}</td>
-                      <td class="px-3 py-1">
+                      <td class="px-3 py-1 whitespace-nowrap">
+                        <button type="button" @click="moveGlobalRuleUp(r)" :disabled="gIdx === 0" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-100 disabled:hover:dark:bg-neutral-600" :title="$t('moveUp')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                          </svg>
+                        </button>
+                        <button type="button" @click="moveGlobalRuleDown(r)" :disabled="gIdx === sortedGlobalFirewallRules.length - 1" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-100 disabled:hover:dark:bg-neutral-600" :title="$t('moveDown')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                        <button type="button" @click="openEditGlobalRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1" :title="$t('edit')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button type="button" @click="deleteGlobalRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition" :title="$t('deleteShort')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </td>
+                    </tr>
+                    <tr class="border-b border-gray-100 dark:border-neutral-600 hover:bg-gray-50 dark:hover:bg-neutral-600 cursor-pointer" @click="openAddGlobalRule()">
+                      <td colspan="5" class="px-3 py-3 text-center text-gray-500 dark:text-neutral-400 hover:text-red-800 dark:hover:text-red-400 transition text-sm">{{ $t('addNewRule') }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table v-else class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
+                  <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
+                    <tr>
+                      <th class="px-3 py-1">{{ $t('globalRuleAction') }}</th>
+                      <th class="px-3 py-1">{{ $t('globalRuleDestination') }}</th>
+                      <th class="px-3 py-1">{{ $t('globalRulePort') }}</th>
+                      <th class="px-3 py-1">{{ $t('globalRuleProtocol') }}</th>
+                      <th class="px-3 py-1 w-32"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(r, pIdx) in sortedProfileRules(profile.id)" :key="r.id" class="border-b border-gray-100 dark:border-neutral-600">
+                      <td class="px-3 py-1">{{ r.action }}</td>
+                      <td class="px-3 py-1 font-mono">{{ r.destination_cidr }}</td>
+                      <td class="px-3 py-1">{{ r.port_range || '—' }}</td>
+                      <td class="px-3 py-1">{{ r.protocol || '—' }}</td>
+                      <td class="px-3 py-1 whitespace-nowrap">
+                        <button type="button" @click="moveProfileRuleUp(profile.id, r)" :disabled="pIdx === 0" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-100 disabled:hover:dark:bg-neutral-600" :title="$t('moveUp')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+                          </svg>
+                        </button>
+                        <button type="button" @click="moveProfileRuleDown(profile.id, r)" :disabled="pIdx === sortedProfileRules(profile.id).length - 1" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-100 disabled:hover:dark:bg-neutral-600" :title="$t('moveDown')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
                         <button type="button" @click="openEditProfileRule(r)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1" :title="$t('edit')">
                           <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -546,8 +552,8 @@
                         </button>
                       </td>
                     </tr>
-                    <tr v-if="profileRulesExpanded === profile.id && profileRulesList.length === 0">
-                      <td colspan="6" class="px-3 py-4 text-center text-gray-400 dark:text-neutral-400 text-sm">{{ $t('noProfileRules') }}</td>
+                    <tr class="border-b border-gray-100 dark:border-neutral-600 hover:bg-gray-50 dark:hover:bg-neutral-600 cursor-pointer" @click="openAddProfileRule(profile.id)">
+                      <td colspan="5" class="px-3 py-3 text-center text-gray-500 dark:text-neutral-400 hover:text-red-800 dark:hover:text-red-400 transition text-sm">{{ $t('addNewRule') }}</td>
                     </tr>
                   </tbody>
                 </table>
@@ -557,12 +563,56 @@
         </div>
         </div>
 
+        <!-- Create profile modal -->
+        <div v-if="profileCreate" class="modal-root">
+          <div class="modal-backdrop" @click="closeProfileCreate"></div>
+          <div class="modal-panel" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-profile-create-title">
+            <h3 id="modal-profile-create-title" class="modal-title">{{ $t('createNewProfile') }}</h3>
+            <div class="modal-body">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('name') }}</label>
+                <input v-model.trim="profileCreate.name" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('description') }}</label>
+                <input v-model.trim="profileCreate.description" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button @click="saveProfileCreate" :disabled="!profileCreate.name" class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
+              <button @click="closeProfileCreate" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Edit profile modal -->
+        <div v-if="profileEdit" class="modal-root">
+          <div class="modal-backdrop" @click="closeProfileEdit"></div>
+          <div class="modal-panel" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-profile-edit-title">
+            <h3 id="modal-profile-edit-title" class="modal-title">{{ $t('editProfile') }}</h3>
+            <div class="modal-body">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('name') }}</label>
+                <input v-model.trim="profileEdit.name" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('description') }}</label>
+                <input v-model.trim="profileEdit.description" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button @click="saveProfileEdit" :disabled="!profileEdit.name" class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
+              <button @click="closeProfileEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Profile rule add/edit modal -->
-        <div v-if="profileRuleEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
-          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeProfileRuleEdit"></div>
-          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6 px-8">
-            <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ profileRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
-            <div class="space-y-3">
+        <div v-if="profileRuleEdit" class="modal-root">
+          <div class="modal-backdrop" @click="closeProfileRuleEdit"></div>
+          <div class="modal-panel" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-profile-rule-title">
+            <h3 id="modal-profile-rule-title" class="modal-title">{{ profileRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
+            <div class="modal-body">
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleAction') }}</label>
                 <select v-model="profileRuleEdit.action" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
@@ -576,18 +626,14 @@
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRulePort') }}</label>
-                <input v-model.trim="profileRuleEdit.port_range" type="text" placeholder="80 or 80:443" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <input v-model.trim="profileRuleEdit.port_range" type="text" placeholder="80 or 80-443, empty = any" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleProtocol') }}</label>
-                <input v-model.trim="profileRuleEdit.protocol" type="text" placeholder="tcp, udp" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
-              </div>
-              <div>
-                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleSortOrder') }}</label>
-                <input v-model.number="profileRuleEdit.sort_order" type="number" min="0" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <input v-model.trim="profileRuleEdit.protocol" type="text" placeholder="tcp, udp, empty = any" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
               </div>
             </div>
-            <div class="flex gap-2 mt-6">
+            <div class="modal-footer">
               <button @click="saveProfileRule" :disabled="!profileRuleEdit.destination_cidr" class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
               <button @click="closeProfileRuleEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
             </div>
@@ -595,11 +641,11 @@
         </div>
 
         <!-- Global rule add/edit modal -->
-        <div v-if="globalRuleEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
-          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeGlobalRuleEdit"></div>
-          <div class="relative w-full max-w-md bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6 px-8">
-            <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ globalRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
-            <div class="space-y-3">
+        <div v-if="globalRuleEdit" class="modal-root">
+          <div class="modal-backdrop" @click="closeGlobalRuleEdit"></div>
+          <div class="modal-panel" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-global-rule-title">
+            <h3 id="modal-global-rule-title" class="modal-title">{{ globalRuleEdit.id ? $t('globalRuleEdit') : $t('globalRuleAdd') }}</h3>
+            <div class="modal-body">
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleAction') }}</label>
                 <select v-model="globalRuleEdit.action" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
@@ -613,36 +659,43 @@
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRulePort') }}</label>
-                <input v-model.trim="globalRuleEdit.port_range" type="text" placeholder="80 or 80:443" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <input v-model.trim="globalRuleEdit.port_range" type="text" placeholder="80 or 80-443, empty = any" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleProtocol') }}</label>
-                <input v-model.trim="globalRuleEdit.protocol" type="text" placeholder="tcp, udp" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
-              </div>
-              <div>
-                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('globalRuleSortOrder') }}</label>
-                <input v-model.number="globalRuleEdit.sort_order" type="number" min="0" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <input v-model.trim="globalRuleEdit.protocol" type="text" placeholder="tcp, udp, empty = any" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
               </div>
             </div>
-            <div class="flex gap-2 mt-6">
+            <div class="modal-footer">
               <button @click="saveGlobalRule" :disabled="!globalRuleEdit.destination_cidr" class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
               <button @click="closeGlobalRuleEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
             </div>
           </div>
         </div>
 
-        <!-- QR Code (compact config without I1; full config via Download/View) -->
-        <div v-if="qrcode">
+        <!-- QR Code (compact config without I1; full config via Download/View). Header: tabs + close; content: QR only. -->
+        <div v-if="qrcodeModalVisible">
           <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20">
-            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg relative p-8">
-              <button @click="qrcode = null"
-                class="absolute right-4 top-4 text-gray-600 dark:text-neutral-500 hover:text-gray-800 dark:hover:text-neutral-700">
-                <svg class="w-8" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
-                  stroke="currentColor">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-              <img :src="qrcode" alt="QR Code" class="max-w-full" />
+            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg flex flex-col max-w-full">
+              <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-neutral-600 shrink-0">
+                <div class="flex gap-1">
+                  <button type="button" @click="qrcodeTab = 'text'"
+                    :class="qrcodeTab === 'text' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabText') }}</button>
+                  <button type="button" @click="qrcodeTab = 'base64'"
+                    :class="qrcodeTab === 'base64' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabBase64') }}</button>
+                </div>
+                <button type="button" @click="closeQR()"
+                  class="text-gray-600 dark:text-neutral-500 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
+                  <svg class="w-6 h-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+              <div class="p-4 overflow-auto">
+                <img :src="qrcodeModalImageSrc" alt="QR Code" class="max-w-full" />
+              </div>
             </div>
           </div>
         </div>
@@ -679,15 +732,17 @@
         </div>
 
         <!-- Expiry edit modal -->
-        <div v-if="clientExpiryEdit" class="fixed inset-0 z-30 flex items-center justify-center p-4 overflow-y-auto">
-          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeExpiryEdit"></div>
-          <div class="relative w-full max-w-sm bg-white dark:bg-neutral-700 rounded-lg shadow-xl p-6 px-8">
-            <h3 class="text-lg font-medium dark:text-neutral-200 mb-4">{{ $t('expiryEditTitle') }} — {{ clientExpiryEdit.name }}</h3>
-            <div class="flex items-center gap-2 mb-4">
-              <input v-model="expiryEditValue" type="date" class="rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 flex-1" />
-              <button @click="clearExpiryEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-3 rounded text-sm">{{ $t('expiresNever') }}</button>
+        <div v-if="clientExpiryEdit" class="modal-root">
+          <div class="modal-backdrop" @click="closeExpiryEdit"></div>
+          <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-expiry-title">
+            <h3 id="modal-expiry-title" class="modal-title">{{ $t('expiryEditTitle') }} — {{ clientExpiryEdit.name }}</h3>
+            <div class="modal-body">
+              <div class="flex items-center gap-2">
+                <input v-model="expiryEditValue" type="date" class="rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 flex-1" />
+                <button @click="clearExpiryEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-3 rounded text-sm">{{ $t('expiresNever') }}</button>
+              </div>
             </div>
-            <div class="flex gap-2">
+            <div class="modal-footer">
               <button @click="saveExpiryEdit" class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('globalRuleSave') }}</button>
               <button @click="closeExpiryEdit" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('globalRuleCancel') }}</button>
             </div>

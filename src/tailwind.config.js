@@ -5,6 +5,7 @@
 module.exports = {
   darkMode: 'selector',
   content: ['./www/**/*.{html,js}'],
+  safelist: ['max-w-md', 'max-w-sm', 'z-50'],
   theme: {
     screens: {
       xxs: '450px',

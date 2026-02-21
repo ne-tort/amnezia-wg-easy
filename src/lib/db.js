@@ -224,9 +224,48 @@ function ruleProfilesGetById(id) {
   return getDb().prepare('SELECT * FROM rule_profiles WHERE id = ?').get(id);
 }
 
+function clientsCountByRuleProfileId(ruleProfileId) {
+  const row = getDb().prepare(
+    'SELECT COUNT(*) AS n FROM clients WHERE deleted_at IS NULL AND rule_profile_id = ?'
+  ).get(ruleProfileId);
+  return row ? row.n : 0;
+}
+
+function ruleProfilesCreate(row) {
+  const r = getDb().prepare(
+    `INSERT INTO rule_profiles (name, description, sort_order) VALUES (?, ?, ?)`
+  ).run(
+    row.name,
+    row.description ?? null,
+    row.sort_order != null ? row.sort_order : 10
+  );
+  return r.lastInsertRowid;
+}
+
+function ruleProfilesUpdate(id, row) {
+  getDb().prepare(
+    `UPDATE rule_profiles SET name = ?, description = ?, sort_order = ? WHERE id = ?`
+  ).run(
+    row.name,
+    row.description ?? null,
+    row.sort_order != null ? row.sort_order : 0,
+    id
+  );
+}
+
+function ruleProfilesDelete(id) {
+  getDb().prepare('UPDATE clients SET rule_profile_id = NULL WHERE rule_profile_id = ?').run(id);
+  getDb().prepare('DELETE FROM rule_profiles WHERE id = ?').run(id);
+}
+
 // * IP rules
 function ipRulesGetByProfileId(ruleProfileId) {
   return getDb().prepare('SELECT * FROM ip_rules WHERE rule_profile_id = ? ORDER BY sort_order, id').all(ruleProfileId);
+}
+
+function ipRulesGetMaxSortOrderForProfile(ruleProfileId) {
+  const row = getDb().prepare('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM ip_rules WHERE rule_profile_id = ?').get(ruleProfileId);
+  return row?.max_sort ?? -1;
 }
 
 function ipRulesGetById(id) {
@@ -259,6 +298,11 @@ function globalFirewallRulesGetAll() {
   return getDb().prepare('SELECT * FROM global_firewall_rules ORDER BY sort_order ASC, id ASC').all();
 }
 
+function globalFirewallRulesGetMaxSortOrder() {
+  const row = getDb().prepare('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM global_firewall_rules').get();
+  return row?.max_sort ?? -1;
+}
+
 function globalFirewallRulesCreate(row) {
   const r = getDb().prepare(
     `INSERT INTO global_firewall_rules (action, destination_cidr, port_range, protocol, sort_order)
@@ -278,6 +322,41 @@ function globalFirewallRulesUpdate(id, row) {
 
 function globalFirewallRulesDelete(id) {
   getDb().prepare('DELETE FROM global_firewall_rules WHERE id = ?').run(id);
+}
+
+// * Client firewall rules (per-client; highest priority)
+function clientFirewallRulesGetByClientId(clientId) {
+  return getDb().prepare('SELECT * FROM client_firewall_rules WHERE client_id = ? ORDER BY sort_order ASC, id ASC').all(clientId);
+}
+
+function clientFirewallRulesGetMaxSortOrderForClient(clientId) {
+  const row = getDb().prepare('SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM client_firewall_rules WHERE client_id = ?').get(clientId);
+  return row?.max_sort ?? -1;
+}
+
+function clientFirewallRulesGetById(id) {
+  return getDb().prepare('SELECT * FROM client_firewall_rules WHERE id = ?').get(id);
+}
+
+function clientFirewallRulesCreate(row) {
+  const r = getDb().prepare(
+    `INSERT INTO client_firewall_rules (client_id, action, destination_cidr, port_range, protocol, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    row.client_id, row.action, row.destination_cidr, row.port_range ?? null, row.protocol ?? null, row.sort_order ?? 0
+  );
+  return r.lastInsertRowid;
+}
+
+function clientFirewallRulesUpdate(id, row) {
+  getDb().prepare(
+    `UPDATE client_firewall_rules SET action = ?, destination_cidr = ?, port_range = ?, protocol = ?, sort_order = ?
+     WHERE id = ?`
+  ).run(row.action, row.destination_cidr, row.port_range ?? null, row.protocol ?? null, row.sort_order ?? 0, id);
+}
+
+function clientFirewallRulesDelete(id) {
+  getDb().prepare('DELETE FROM client_firewall_rules WHERE id = ?').run(id);
 }
 
 // * App settings
@@ -339,9 +418,14 @@ module.exports = {
   ruleProfiles: {
     getAll: ruleProfilesGetAll,
     getById: ruleProfilesGetById,
+    create: ruleProfilesCreate,
+    update: ruleProfilesUpdate,
+    delete: ruleProfilesDelete,
   },
+  clientsCountByRuleProfileId: clientsCountByRuleProfileId,
   ipRules: {
     getByProfileId: ipRulesGetByProfileId,
+    getMaxSortOrderForProfile: ipRulesGetMaxSortOrderForProfile,
     getById: ipRulesGetById,
     create: ipRulesCreate,
     update: ipRulesUpdate,
@@ -349,9 +433,18 @@ module.exports = {
   },
   globalFirewallRules: {
     getAll: globalFirewallRulesGetAll,
+    getMaxSortOrder: globalFirewallRulesGetMaxSortOrder,
     create: globalFirewallRulesCreate,
     update: globalFirewallRulesUpdate,
     delete: globalFirewallRulesDelete,
+  },
+  clientFirewallRules: {
+    getByClientId: clientFirewallRulesGetByClientId,
+    getMaxSortOrderForClient: clientFirewallRulesGetMaxSortOrderForClient,
+    getById: clientFirewallRulesGetById,
+    create: clientFirewallRulesCreate,
+    update: clientFirewallRulesUpdate,
+    delete: clientFirewallRulesDelete,
   },
   appSettings: {
     get: appSettingsGet,

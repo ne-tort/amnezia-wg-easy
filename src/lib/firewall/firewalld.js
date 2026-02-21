@@ -1,6 +1,7 @@
 'use strict';
 
 const { execSync } = require('node:child_process');
+const { sanitizeRule } = require('./validate');
 
 const ZONE = 'amnezia_wg';
 
@@ -37,17 +38,21 @@ function apply(descriptor) {
     fw(`--permanent --zone=${ZONE} --set-target=ACCEPT`);
   } catch (_) {}
 
+  const bySortOrder = (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.id - b.id);
   for (const client of clients) {
     const src = client.address && client.address.trim();
     if (!src) continue;
     const safeSrc = escape(src).trim();
     if (!safeSrc) continue;
-    const profileRulesList = client.rule_profile_id ? (profileRules[client.rule_profile_id] || []) : [];
-    const rules = [...globalRules, ...profileRulesList].sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    const clientRulesList = (client.clientRules || []).slice().sort(bySortOrder);
+    const profileRulesList = (client.rule_profile_id ? (profileRules[client.rule_profile_id] || []) : []).slice().sort(bySortOrder);
+    const globalRulesSorted = globalRules.slice().sort(bySortOrder);
+    const rules = [...clientRulesList, ...profileRulesList, ...globalRulesSorted];
     for (const r of rules) {
-      const dest = r.destination_cidr ? escape(r.destination_cidr).trim() : '';
-      const proto = (r.protocol && escape(r.protocol).toLowerCase()) || '';
-      const dport = r.port_range ? escape(r.port_range).trim() : '';
+      const safe = sanitizeRule(r);
+      const dest = safe.destination_cidr ? escape(safe.destination_cidr).trim() : '';
+      const proto = (safe.protocol && escape(safe.protocol).toLowerCase()) || '';
+      const dport = safe.port_range ? escape(safe.port_range).trim() : '';
       const target = r.action === 'deny' ? 'drop' : 'accept';
       let rule = `rule family="ipv4" source address="${safeSrc}"`;
       if (dest) rule += ` destination address="${dest}"`;

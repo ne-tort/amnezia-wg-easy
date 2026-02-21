@@ -28,7 +28,7 @@ module.exports.WG_DEFAULT_ADDRESS = process.env.WG_DEFAULT_ADDRESS || '10.8.0.x'
 module.exports.WG_DEFAULT_DNS = typeof process.env.WG_DEFAULT_DNS === 'string'
   ? process.env.WG_DEFAULT_DNS
   : '8.8.8.8';
-// * AllowedIPs: "0.0.0.0/0" only = IPv4 tunnel (often fixes mobile); "0.0.0.0/0, ::/0" = IPv4+IPv6. Override via WG_ALLOWED_IPS.
+// * DEPRECATED: AllowedIPs in client config now come from firewall allow rules (global + profile + client). Left for env compatibility.
 module.exports.WG_ALLOWED_IPS = process.env.WG_ALLOWED_IPS || '0.0.0.0/0';
 
 module.exports.WG_PRE_UP = process.env.WG_PRE_UP || '';

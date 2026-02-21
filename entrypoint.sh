@@ -1,10 +1,15 @@
 #!/bin/sh
-# Start dnsmasq when WG_DEFAULT_DNS equals the VPN gateway (e.g. 10.8.0.1 or first host from WG_DEFAULT_ADDRESS).
+# Amnezia DNS (dnsmasq): start only when not disabled and WG_DEFAULT_DNS equals VPN gateway.
+# Gateway is derived from WG_DEFAULT_ADDRESS (e.g. 10.8.0.x -> 10.8.0.1). Set AMNEZIA_DNS_ENABLE=0 to disable.
 set -e
-# Default gateway = first host in subnet (WG_DEFAULT_ADDRESS with x -> 1).
-WG_GW="${WG_DEFAULT_ADDRESS:-10.8.0.x}"
-WG_GW="${WG_GW%x}1"
-if [ -n "$WG_DEFAULT_DNS" ] && [ "$WG_DEFAULT_DNS" = "$WG_GW" ]; then
-  dnsmasq -C /etc/dnsmasq-amnezia.conf -k &
-fi
+case "${AMNEZIA_DNS_ENABLE}" in
+  0|[Ff][Aa][Ll][Ss][Ee]|[Nn][Oo]|[Oo][Ff][Ff]|[Dd][Ii][Ss][Aa][Bb][Ll][Ee][Dd]) ;;
+  *)
+    WG_GW="${WG_DEFAULT_ADDRESS:-10.8.0.x}"
+    WG_GW="${WG_GW%x}1"
+    if [ -n "$WG_DEFAULT_DNS" ] && [ "$WG_DEFAULT_DNS" = "$WG_GW" ]; then
+      dnsmasq -C /etc/dnsmasq-amnezia.conf -k &
+    fi
+    ;;
+esac
 exec /usr/bin/dumb-init node server.js

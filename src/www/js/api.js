@@ -51,12 +51,14 @@ class API {
    * @param {string} clientId
    * @param {number} [level] 0–5 (I0–I5)
    * @param {string} [profile] quic, dns, sip
+   * @param {string} [encoding] 'text' or 'base64' (QR content encoding)
    * @returns {Promise<string>} SVG markup
    */
-  async getClientQRCodeSVG(clientId, level, profile) {
+  async getClientQRCodeSVG(clientId, level, profile, encoding) {
     const params = [];
     if (level !== undefined && level !== null) params.push(`level=${Number(level)}`);
     if (profile !== undefined && profile !== null && profile !== '') params.push(`profile=${encodeURIComponent(profile)}`);
+    if (encoding === 'base64' || encoding === 'text') params.push(`encoding=${encodeURIComponent(encoding)}`);
     const qs = params.length ? `?${params.join('&')}` : '';
     const res = await fetch(`./api/wireguard/client/${clientId}/qrcode.svg${qs}`, {
       credentials: 'include',
@@ -198,6 +200,18 @@ class API {
 
   async getRuleProfile(id) {
     return this.call({ method: 'get', path: `/rule-profiles/${id}` });
+  }
+
+  async createRuleProfile(body) {
+    return this.call({ method: 'post', path: '/rule-profiles', body });
+  }
+
+  async updateRuleProfile(id, body) {
+    return this.call({ method: 'put', path: `/rule-profiles/${id}`, body });
+  }
+
+  async deleteRuleProfile(id) {
+    return this.call({ method: 'delete', path: `/rule-profiles/${id}` });
   }
 
   async createIpRule(body) {

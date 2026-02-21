@@ -30,9 +30,8 @@ services:
       - amnezia-dns
     ports:
       # VPN (UDP): host and container use same port so ListenPort in awg0.conf matches. Change via WG_PORT in .env.
+      # Web UI is only via nginx (HTTPS) when nginx service is used; no direct TCP port exposure.
       - "${WG_PORT:-51820}:${WG_PORT:-51820}/udp"
-      # Web UI (TCP). Bind host: WEBUI_BIND_HOST (e.g. 127.0.0.1 or 0.0.0.0). PORT in .env.
-      - "${WEBUI_BIND_HOST:-0.0.0.0}:${PORT:-51821}:${PORT:-51821}/tcp"
     volumes:
       - amnezia-wg-data:/opt/amnezia/awg
       # * Mount host kernel modules so container can use amneziawg.ko if installed (same as Amnezia client).
@@ -57,6 +56,47 @@ services:
       - default
       - amnezia-dns-net
 
+  nginx:
+    build:
+      context: nginx
+      dockerfile: Dockerfile
+    image: amnezia-wg-easy-nginx:local
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-panel.ai-qwerty.ru}
+      PANEL_PORT: ${PORT:-51821}
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot:ro
+    depends_on:
+      - amnezia-wg-easy
+    networks:
+      - default
+
+  certbot:
+    build:
+      context: certbot
+      dockerfile: Dockerfile
+    image: amnezia-wg-easy-certbot:local
+    container_name: certbot
+    env_file:
+      - .env
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-}
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - nginx
+    networks:
+      - default
+
 networks:
   amnezia-dns-net:
     driver: bridge
@@ -68,3 +108,5 @@ networks:
 
 volumes:
   amnezia-wg-data:
+  certbot_conf:
+  certbot_www:

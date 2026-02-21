@@ -21,7 +21,6 @@ const {
   WG_DEFAULT_DNS,
   WG_DEFAULT_ADDRESS,
   WG_PERSISTENT_KEEPALIVE,
-  WG_ALLOWED_IPS,
   WG_PRE_UP,
   WG_POST_UP,
   WG_PRE_DOWN,
@@ -49,6 +48,32 @@ const {
 const AWG_JSON = 'awg0.json';
 const AWG_CONF = 'awg0.conf';
 const AWG_IFACE = 'awg0';
+
+/**
+ * Builds AllowedIPs string for client config from allow rules (global + profile + client).
+ * Uses Set to deduplicate; trims whitespace from destination_cidr.
+ * @param {{ id: string, ruleProfileId?: number|null, rule_profile_id?: number|null }} client - client id and profile
+ * @returns {string} comma-separated destination_cidr or empty string
+ */
+function getAllowedIPsForClient(client) {
+  const cidrs = new Set();
+  const add = (v) => { const s = (v || '').trim(); if (s) cidrs.add(s); };
+  for (const r of db.globalFirewallRules.getAll()) {
+    if (r.action === 'allow') add(r.destination_cidr);
+  }
+  const raw = client.ruleProfileId ?? client.rule_profile_id ?? null;
+  const profileId = raw != null ? raw : 1;
+  if (profileId != null) {
+    for (const r of db.ipRules.getByProfileId(profileId)) {
+      if (r.action === 'allow') add(r.destination_cidr);
+    }
+  }
+  const clientRules = db.clientFirewallRules.getByClientId(client.id);
+  for (const r of clientRules) {
+    if (r.action === 'allow') add(r.destination_cidr);
+  }
+  return [...cidrs].join(', ') || '';
+}
 
 const WireGuard = class {
   __buildConfigFromDb() {
@@ -286,7 +311,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       updatedAt: new Date(client.updatedAt),
       expiresAt: client.expiresAt ?? null,
       ruleProfileId: client.ruleProfileId ?? null,
-      allowedIPs: WG_ALLOWED_IPS,
+      allowedIPs: getAllowedIPsForClient(client),
       defaultProfile: client.defaultProfile || undefined,
       defaultLevel: client.defaultLevel ?? undefined,
       downloadableConfig: 'privateKey' in client,
@@ -402,7 +427,7 @@ H4 = ${config.server.h4}
 ${iBlock}[Peer]
 PublicKey = ${config.server.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
-}AllowedIPs = ${WG_ALLOWED_IPS}
+}AllowedIPs = ${getAllowedIPsForClient(client)}
 PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
 Endpoint = ${this.__getEndpoint()}`;
   }
@@ -415,16 +440,17 @@ Endpoint = ${this.__getEndpoint()}`;
     return fromEnv;
   }
 
-  async getClientQRCodeSVG({ clientId, level, profile }) {
+  async getClientQRCodeSVG({ clientId, level, profile, encoding }) {
     // When level is provided, build config by level (may be large for L5). Otherwise compact (no I1).
-    const config = await this.getClientConfiguration({
+    let config = await this.getClientConfiguration({
       clientId,
       forQR: level === undefined || level === null,
       forceOmitI1ForCapacity: level === undefined || level === null,
       level,
       profile,
     });
-    return QRCode.toString(config, {
+    const payload = encoding === 'base64' ? Buffer.from(config, 'utf8').toString('base64') : config;
+    return QRCode.toString(payload, {
       type: 'svg',
       width: 512,
       errorCorrectionLevel: 'L',
@@ -467,7 +493,7 @@ Endpoint = ${this.__getEndpoint()}`;
       created_at: now,
       updated_at: now,
       expires_at: null,
-      rule_profile_id: null,
+      rule_profile_id: 1,
       default_profile: null,
       default_level: null,
     });
@@ -602,4 +628,6 @@ Endpoint = ${this.__getEndpoint()}`;
   }
 };
 
-module.exports = new WireGuard();
+const wg = new WireGuard();
+wg.getAllowedIPsForClient = getAllowedIPsForClient;
+module.exports = wg;

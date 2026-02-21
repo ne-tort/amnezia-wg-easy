@@ -28,13 +28,20 @@ const WireGuard = require('./WireGuard');
 const { isKnownProfile, getProfileIds, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
 const { runSignatureGeneration } = require('./signatures');
 const { applyFirewall } = require('./firewall');
+const {
+  normalizeCidr,
+  validateCidr,
+  normalizePort,
+  validatePort,
+  normalizeProtocol,
+  validateProtocol,
+} = require('./firewall/validate');
 
 const {
   PORT,
   WEBUI_HOST,
   RELEASE,
   SESSION_SECRET,
-  WG_ALLOWED_IPS,
   WG_PERSISTENT_KEEPALIVE,
   WG_HOST,
   WG_PORT,
@@ -185,7 +192,8 @@ module.exports = class Server {
         }
         let profile;
         if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
-        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile });
+        const encoding = query.encoding === 'base64' ? 'base64' : 'text';
+        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile, encoding });
         setHeader(event, 'Content-Type', 'image/svg+xml');
         return svg;
       }))
@@ -204,6 +212,7 @@ module.exports = class Server {
         const serverRow = db.serverConfig.get();
         if (serverRow) {
           const now = Math.floor(Date.now() / 1000);
+          const clientForAllowed = { id: clientId, ruleProfileId: client.ruleProfileId };
           db.clientConfigVersions.insert({
             client_id: clientId,
             created_at: now,
@@ -211,7 +220,7 @@ module.exports = class Server {
             address: client.address,
             peer_public_key: serverRow.public_key,
             preshared_key: client.preSharedKey || null,
-            allowed_ips: WG_ALLOWED_IPS || '0.0.0/0',
+            allowed_ips: WireGuard.getAllowedIPsForClient(clientForAllowed),
             persistent_keepalive: WG_PERSISTENT_KEEPALIVE || '25',
             endpoint: db.appSettings.get('endpoint') || (WG_HOST && WG_PORT ? `${WG_HOST}:${WG_PORT}` : ''),
             config_raw: config,
@@ -321,11 +330,17 @@ module.exports = class Server {
         requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');
         const body = await readBody(event);
-        const ruleProfileId = body && body.rule_profile_id !== undefined
-          ? (typeof body.rule_profile_id === 'number' ? body.rule_profile_id : parseInt(body.rule_profile_id, 10))
-          : undefined;
-        if (ruleProfileId !== undefined && (Number.isNaN(ruleProfileId) || ruleProfileId < 0)) {
-          throw createError({ status: 400, message: 'rule_profile_id must be a non-negative integer or null' });
+        let ruleProfileId;
+        if (body == null || body.rule_profile_id === undefined) {
+          ruleProfileId = undefined;
+        } else if (body.rule_profile_id === null || body.rule_profile_id === '') {
+          ruleProfileId = null;
+        } else {
+          const raw = body.rule_profile_id;
+          ruleProfileId = typeof raw === 'number' ? raw : parseInt(raw, 10);
+          if (Number.isNaN(ruleProfileId) || ruleProfileId < 0) {
+            throw createError({ status: 400, message: 'rule_profile_id must be a non-negative integer or null' });
+          }
         }
         await WireGuard.updateClientRuleProfile({ clientId, ruleProfileId: ruleProfileId ?? null });
         return { success: true };
@@ -341,6 +356,92 @@ module.exports = class Server {
           if (Number.isNaN(expiresAt) || expiresAt < 0) expiresAt = null;
         }
         await WireGuard.updateClientExpires({ clientId, expiresAt });
+        return { success: true };
+      }))
+      .get('/api/wireguard/client/:clientId/firewall-rules', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        const client = db.clients.getById(clientId);
+        if (!client) throw createError({ status: 404, message: 'Client not found' });
+        return db.clientFirewallRules.getByClientId(clientId);
+      }))
+      .post('/api/wireguard/client/:clientId/firewall-rules', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        const client = db.clients.getById(clientId);
+        if (!client) throw createError({ status: 404, message: 'Client not found' });
+        const body = await readBody(event);
+        if (!body || body.action == null || !body.destination_cidr) {
+          throw createError({ status: 400, message: 'action and destination_cidr required' });
+        }
+        if (body.action !== 'allow' && body.action !== 'deny') {
+          throw createError({ status: 400, message: 'action must be allow or deny' });
+        }
+        const destination_cidr = normalizeCidr(body.destination_cidr);
+        const vc = validateCidr(destination_cidr);
+        if (!vc.ok) throw createError({ status: 400, message: vc.message });
+        const port_range = normalizePort(body.port_range);
+        const vp = validatePort(port_range);
+        if (!vp.ok) throw createError({ status: 400, message: vp.message });
+        const protocol = normalizeProtocol(body.protocol);
+        const vpr = validateProtocol(protocol);
+        if (!vpr.ok) throw createError({ status: 400, message: vpr.message });
+        const nextSortOrder = db.clientFirewallRules.getMaxSortOrderForClient(clientId) + 1;
+        const id = db.clientFirewallRules.create({
+          client_id: clientId,
+          action: body.action,
+          destination_cidr,
+          port_range,
+          protocol,
+          sort_order: nextSortOrder,
+        });
+        applyFirewall();
+        return { id, success: true };
+      }))
+      .put('/api/wireguard/client/:clientId/firewall-rules/:id', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        const client = db.clients.getById(clientId);
+        if (!client) throw createError({ status: 404, message: 'Client not found' });
+        const rule = db.clientFirewallRules.getById(id);
+        if (!rule || rule.client_id !== clientId) throw createError({ status: 404, message: 'Rule not found' });
+        const body = await readBody(event);
+        if (!body || body.action == null || !body.destination_cidr) {
+          throw createError({ status: 400, message: 'action and destination_cidr required' });
+        }
+        if (body.action !== 'allow' && body.action !== 'deny') {
+          throw createError({ status: 400, message: 'action must be allow or deny' });
+        }
+        const destination_cidr = normalizeCidr(body.destination_cidr);
+        const vc = validateCidr(destination_cidr);
+        if (!vc.ok) throw createError({ status: 400, message: vc.message });
+        const port_range = normalizePort(body.port_range);
+        const vp = validatePort(port_range);
+        if (!vp.ok) throw createError({ status: 400, message: vp.message });
+        const protocol = normalizeProtocol(body.protocol);
+        const vpr = validateProtocol(protocol);
+        if (!vpr.ok) throw createError({ status: 400, message: vpr.message });
+        db.clientFirewallRules.update(id, {
+          action: body.action,
+          destination_cidr,
+          port_range,
+          protocol,
+          sort_order: body.sort_order !== undefined ? parseInt(body.sort_order, 10) : rule.sort_order,
+        });
+        applyFirewall();
+        return { success: true };
+      }))
+      .delete('/api/wireguard/client/:clientId/firewall-rules/:id', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        const client = db.clients.getById(clientId);
+        if (!client) throw createError({ status: 404, message: 'Client not found' });
+        const rule = db.clientFirewallRules.getById(id);
+        if (!rule || rule.client_id !== clientId) throw createError({ status: 404, message: 'Rule not found' });
+        db.clientFirewallRules.delete(id);
+        applyFirewall();
         return { success: true };
       }))
       .get('/api/signatures/profiles', defineEventHandler(() => {
@@ -361,6 +462,49 @@ module.exports = class Server {
         const rules = db.ipRules.getByProfileId(id);
         return { ...profile, rules };
       }))
+      .post('/api/rule-profiles', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const body = await readBody(event);
+        if (!body || !body.name || typeof body.name !== 'string' || !body.name.trim()) {
+          throw createError({ status: 400, message: 'name is required' });
+        }
+        const id = db.ruleProfiles.create({
+          name: body.name.trim(),
+          description: body.description != null ? String(body.description).trim() || null : null,
+          sort_order: body.sort_order != null ? parseInt(body.sort_order, 10) : 10,
+        });
+        applyFirewall();
+        return { id, success: true };
+      }))
+      .put('/api/rule-profiles/:id', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        const profile = db.ruleProfiles.getById(id);
+        if (!profile) throw createError({ status: 404, message: 'Profile not found' });
+        const body = await readBody(event);
+        if (!body) throw createError({ status: 400, message: 'body required' });
+        const name = body.name != null ? String(body.name).trim() : profile.name;
+        if (!name) throw createError({ status: 400, message: 'name cannot be empty' });
+        db.ruleProfiles.update(id, {
+          name,
+          description: body.description !== undefined ? (String(body.description).trim() || null) : profile.description,
+          sort_order: body.sort_order !== undefined ? parseInt(body.sort_order, 10) : profile.sort_order,
+        });
+        applyFirewall();
+        return { success: true };
+      }))
+      .delete('/api/rule-profiles/:id', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        if (id === 1) throw createError({ status: 403, message: 'Full Access profile cannot be deleted' });
+        const profile = db.ruleProfiles.getById(id);
+        if (!profile) throw createError({ status: 404, message: 'Profile not found' });
+        const inUse = db.clientsCountByRuleProfileId(id);
+        if (inUse > 0) throw createError({ status: 409, message: 'Profile is in use and cannot be deleted' });
+        db.ruleProfiles.delete(id);
+        applyFirewall();
+        return { success: true };
+      }))
       .post('/api/ip-rules', defineEventHandler(async (event) => {
         requireRoles(event, ['admin', 'moderator']);
         const body = await readBody(event);
@@ -374,13 +518,23 @@ module.exports = class Server {
         if (Number.isNaN(ruleProfileId) || !db.ruleProfiles.getById(ruleProfileId)) {
           throw createError({ status: 400, message: 'Invalid rule_profile_id' });
         }
+        const destination_cidr = normalizeCidr(body.destination_cidr);
+        const vc = validateCidr(destination_cidr);
+        if (!vc.ok) throw createError({ status: 400, message: vc.message });
+        const port_range = normalizePort(body.port_range);
+        const vp = validatePort(port_range);
+        if (!vp.ok) throw createError({ status: 400, message: vp.message });
+        const protocol = normalizeProtocol(body.protocol);
+        const vpr = validateProtocol(protocol);
+        if (!vpr.ok) throw createError({ status: 400, message: vpr.message });
+        const nextSortOrder = db.ipRules.getMaxSortOrderForProfile(ruleProfileId) + 1;
         const id = db.ipRules.create({
           rule_profile_id: ruleProfileId,
           action: body.action,
-          destination_cidr: body.destination_cidr,
-          port_range: body.port_range ?? null,
-          protocol: body.protocol ?? null,
-          sort_order: body.sort_order ?? 0,
+          destination_cidr,
+          port_range,
+          protocol,
+          sort_order: nextSortOrder,
         });
         applyFirewall();
         return { id, success: true };
@@ -397,11 +551,20 @@ module.exports = class Server {
         if (body.action !== 'allow' && body.action !== 'deny') {
           throw createError({ status: 400, message: 'action must be allow or deny' });
         }
+        const destination_cidr = normalizeCidr(body.destination_cidr);
+        const vc = validateCidr(destination_cidr);
+        if (!vc.ok) throw createError({ status: 400, message: vc.message });
+        const port_range = normalizePort(body.port_range);
+        const vp = validatePort(port_range);
+        if (!vp.ok) throw createError({ status: 400, message: vp.message });
+        const protocol = normalizeProtocol(body.protocol);
+        const vpr = validateProtocol(protocol);
+        if (!vpr.ok) throw createError({ status: 400, message: vpr.message });
         db.ipRules.update(id, {
           action: body.action,
-          destination_cidr: body.destination_cidr,
-          port_range: body.port_range ?? null,
-          protocol: body.protocol ?? null,
+          destination_cidr,
+          port_range,
+          protocol,
           sort_order: body.sort_order ?? 0,
         });
         applyFirewall();
@@ -428,12 +591,22 @@ module.exports = class Server {
         if (body.action !== 'allow' && body.action !== 'deny') {
           throw createError({ status: 400, message: 'action must be allow or deny' });
         }
+        const destination_cidr = normalizeCidr(body.destination_cidr);
+        const vc = validateCidr(destination_cidr);
+        if (!vc.ok) throw createError({ status: 400, message: vc.message });
+        const port_range = normalizePort(body.port_range);
+        const vp = validatePort(port_range);
+        if (!vp.ok) throw createError({ status: 400, message: vp.message });
+        const protocol = normalizeProtocol(body.protocol);
+        const vpr = validateProtocol(protocol);
+        if (!vpr.ok) throw createError({ status: 400, message: vpr.message });
+        const nextSortOrder = db.globalFirewallRules.getMaxSortOrder() + 1;
         const id = db.globalFirewallRules.create({
           action: body.action,
-          destination_cidr: body.destination_cidr,
-          port_range: body.port_range ?? null,
-          protocol: body.protocol ?? null,
-          sort_order: body.sort_order ?? 0,
+          destination_cidr,
+          port_range,
+          protocol,
+          sort_order: nextSortOrder,
         });
         applyFirewall();
         return { id, success: true };
@@ -448,11 +621,20 @@ module.exports = class Server {
         if (body.action !== 'allow' && body.action !== 'deny') {
           throw createError({ status: 400, message: 'action must be allow or deny' });
         }
+        const destination_cidr = normalizeCidr(body.destination_cidr);
+        const vc = validateCidr(destination_cidr);
+        if (!vc.ok) throw createError({ status: 400, message: vc.message });
+        const port_range = normalizePort(body.port_range);
+        const vp = validatePort(port_range);
+        if (!vp.ok) throw createError({ status: 400, message: vp.message });
+        const protocol = normalizeProtocol(body.protocol);
+        const vpr = validateProtocol(protocol);
+        if (!vpr.ok) throw createError({ status: 400, message: vpr.message });
         db.globalFirewallRules.update(id, {
           action: body.action,
-          destination_cidr: body.destination_cidr,
-          port_range: body.port_range ?? null,
-          protocol: body.protocol ?? null,
+          destination_cidr,
+          port_range,
+          protocol,
           sort_order: body.sort_order ?? 0,
         });
         applyFirewall();
