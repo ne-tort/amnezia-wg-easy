@@ -49,17 +49,25 @@ function apply(descriptor) {
       const proto = (safe.protocol && escapeNft(safe.protocol).toLowerCase()) || '';
       const dport = safe.port_range ? escapeNft(safe.port_range).trim() : '';
       const target = r.action === 'deny' ? 'drop' : 'accept';
-      const parts = [];
-      if (dest) parts.push(`ip daddr ${dest}`);
-      if (proto === 'tcp' || proto === 'udp') {
-        if (dport) parts.push(`${proto} dport ${dport}`);
-      } else if (proto) {
-        parts.push(`ip protocol ${proto}`);
-      }
-      if (parts.length) {
-        nft(`add rule ${TABLE} ${chain} ${parts.join(' ')} ${target}`);
+
+      if (dport && proto !== 'tcp' && proto !== 'udp') {
+        // * Port set but protocol empty/other: emit two rules (tcp and udp) so port is enforced.
+        const baseParts = dest ? [`ip daddr ${dest}`] : [];
+        nft(`add rule ${TABLE} ${chain} ${[...baseParts, `tcp dport ${dport}`].join(' ')} ${target}`);
+        nft(`add rule ${TABLE} ${chain} ${[...baseParts, `udp dport ${dport}`].join(' ')} ${target}`);
       } else {
-        nft(`add rule ${TABLE} ${chain} ${target}`);
+        const parts = [];
+        if (dest) parts.push(`ip daddr ${dest}`);
+        if (proto === 'tcp' || proto === 'udp') {
+          if (dport) parts.push(`${proto} dport ${dport}`);
+        } else if (proto) {
+          parts.push(`ip protocol ${proto}`);
+        }
+        if (parts.length) {
+          nft(`add rule ${TABLE} ${chain} ${parts.join(' ')} ${target}`);
+        } else {
+          nft(`add rule ${TABLE} ${chain} ${target}`);
+        }
       }
     }
     nft(`add rule ${TABLE} ${chain} accept`);

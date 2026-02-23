@@ -112,23 +112,25 @@ function clientsGetByIdIncludingDeleted(id) {
 
 function clientsCreate(row) {
   getDb().prepare(
-    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_level)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_level, use_server_dns)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     row.id, row.name, row.address, row.public_key, row.private_key, row.pre_shared_key ?? null,
     row.enabled ?? 1, row.note ?? null, row.created_at, row.updated_at,
-    row.expires_at ?? null, row.rule_profile_id ?? null, row.default_profile ?? null, row.default_level ?? null
+    row.expires_at ?? null, row.rule_profile_id ?? null, row.default_profile ?? null, row.default_level ?? null,
+    row.use_server_dns === 0 ? 0 : 1
   );
 }
 
 function clientsUpdate(row) {
   getDb().prepare(
-    `UPDATE clients SET name=?, address=?, public_key=?, private_key=?, pre_shared_key=?, enabled=?, note=?, updated_at=?, expires_at=?, rule_profile_id=?, default_profile=?, default_level=?
+    `UPDATE clients SET name=?, address=?, public_key=?, private_key=?, pre_shared_key=?, enabled=?, note=?, updated_at=?, expires_at=?, rule_profile_id=?, default_profile=?, default_level=?, use_server_dns=?
      WHERE id = ?`
   ).run(
     row.name, row.address, row.public_key, row.private_key, row.pre_shared_key ?? null,
     row.enabled ?? 1, row.note ?? null, row.updated_at, row.expires_at ?? null,
     row.rule_profile_id ?? null, row.default_profile ?? null, row.default_level ?? null,
+    row.use_server_dns === 0 ? 0 : 1,
     row.id
   );
 }
@@ -162,14 +164,15 @@ function clientsReplaceAll(rows) {
   const database = getDb();
   database.prepare('DELETE FROM clients WHERE deleted_at IS NULL').run();
   const stmt = database.prepare(
-    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_level)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_level, use_server_dns)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const row of rows) {
     stmt.run(
       row.id, row.name, row.address, row.public_key, row.private_key, row.pre_shared_key ?? null,
       row.enabled ?? 1, row.note ?? null, row.created_at, row.updated_at,
-      row.expires_at ?? null, row.rule_profile_id ?? null, row.default_profile ?? null, row.default_level ?? null
+      row.expires_at ?? null, row.rule_profile_id ?? null, row.default_profile ?? null, row.default_level ?? null,
+      row.use_server_dns === 0 ? 0 : 1
     );
   }
 }

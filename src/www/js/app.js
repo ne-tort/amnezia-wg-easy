@@ -94,8 +94,10 @@ new Vue({
 
     clientLevels: {},
     clientProfiles: {},
+    clientUseServerDns: {},
     profileIds: [],
     defaultProfile: 'dns',
+    amneziaDnsAvailable: false,
     regeneratingSignatures: false,
     ruleProfiles: [],
     globalFirewallRules: [],
@@ -111,6 +113,8 @@ new Vue({
 
     currentRelease: null,
     latestRelease: null,
+
+    refreshError: null,
 
     uiTrafficStats: false,
 
@@ -258,6 +262,22 @@ new Vue({
           alert(err.message || err.toString());
         });
     },
+    getClientUseServerDns(client) {
+      return this.clientUseServerDns[client.id] !== false;
+    },
+    toggleClientDns(client) {
+      if (!this.amneziaDnsAvailable) return;
+      const next = !this.getClientUseServerDns(client);
+      const prev = this.getClientUseServerDns(client);
+      this.$set(this.clientUseServerDns, client.id, next);
+      this.$set(client, 'useServerDns', next);
+      this.api.updateClientDns({ clientId: client.id, useServerDns: next })
+        .catch((err) => {
+          this.$set(this.clientUseServerDns, client.id, prev);
+          this.$set(client, 'useServerDns', prev);
+          alert(err.message || err.toString());
+        });
+    },
     onObfuscationProfileChange(client, ev) {
       const profile = ev.target.value;
       const prev = this.getClientProfile(client);
@@ -365,10 +385,17 @@ new Vue({
     } = {}) {
       if (!this.authenticated) return;
 
-      const clients = await this.api.getClients();
-      this.clients = clients.map((client) => {
+      try {
+        const res = await this.api.getClients();
+        this.refreshError = null;
+        this.amneziaDnsAvailable = res.serverCapabilities?.amneziaDnsAvailable ?? false;
+        const list = Array.isArray(res.clients) ? res.clients : [];
+        this.clients = list.map((client) => {
         this.$set(this.clientLevels, client.id, client.defaultLevel != null ? client.defaultLevel : 1);
         this.$set(this.clientProfiles, client.id, client.defaultProfile || this.defaultProfile || 'dns');
+        if (this.amneziaDnsAvailable) {
+          this.$set(this.clientUseServerDns, client.id, client.useServerDns !== false);
+        }
 
         if (client.name.includes('@') && client.name.includes('.')) {
           client.avatar = `https://gravatar.com/avatar/${sha256(client.name.toLowerCase().trim())}.jpg`;
@@ -425,6 +452,16 @@ new Vue({
 
         return client;
       });
+      } catch (err) {
+        this.refreshError = err.code === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : (err.message || String(err));
+        throw err;
+      }
+    },
+    refreshErrorDisplay() {
+      if (!this.refreshError) return '';
+      return this.refreshError === 'NETWORK_ERROR' && this.$t('networkError')
+        ? this.$t('networkError')
+        : this.refreshError;
     },
     login(e) {
       e.preventDefault();
@@ -851,8 +888,8 @@ new Vue({
     setInterval(() => {
       this.refresh({
         updateCharts: this.updateCharts,
-      }).catch(console.error);
-    }, 1000);
+      }).catch(() => { /* refreshError already set; avoid duplicate log */ });
+    }, 5000);
 
     this.api.getuiTrafficStats()
       .then((res) => {

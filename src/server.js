@@ -7,6 +7,7 @@ const db = require('./lib/db');
 const { ensureFirstAdmin } = require('./lib/ensureFirstAdmin');
 const WireGuard = require('./lib/WireGuard');
 const { applyFirewall } = require('./lib/firewall');
+const { startAmneziaDns, stopAmneziaDns } = require('./lib/amneziaDns');
 
 async function main() {
   db.getDb();
@@ -25,6 +26,8 @@ async function main() {
   }
 
   await WireGuard.getConfig();
+  // * Start Amnezia DNS (dnsmasq) after WG interface is up so it can bind to 0.0.0.0 including awg0.
+  startAmneziaDns();
 
   const firewallApplied = applyFirewall();
   if (!firewallApplied && process.env.FIREWALL_FAIL_FAST === '1') {
@@ -45,6 +48,7 @@ main().catch((err) => {
 process.on('SIGTERM', async () => {
   // eslint-disable-next-line no-console
   console.log('SIGTERM signal received.');
+  stopAmneziaDns();
   await WireGuard.Shutdown();
   process.exit(0);
 });

@@ -54,16 +54,33 @@ function apply(descriptor) {
       const proto = (safe.protocol && escape(safe.protocol).toLowerCase()) || '';
       const dport = safe.port_range ? escape(safe.port_range).trim() : '';
       const target = r.action === 'deny' ? 'drop' : 'accept';
-      let rule = `rule family="ipv4" source address="${safeSrc}"`;
-      if (dest) rule += ` destination address="${dest}"`;
-      if (proto === 'tcp' || proto === 'udp') {
-        if (dport) rule += ` ${proto} port="${dport}"`;
-      }
-      rule += ` ${target}`;
-      try {
-        fw(`--permanent --zone=${ZONE} --add-rich-rule="${rule}"`);
-      } catch (e) {
-        if (process.env.NODE_ENV !== 'test') console.error('firewalld add-rich-rule:', e.message);
+
+      if (dport && proto !== 'tcp' && proto !== 'udp') {
+        // * Port set but protocol empty/other: add two rich-rules (tcp and udp) so port is enforced.
+        let base = `rule family="ipv4" source address="${safeSrc}"`;
+        if (dest) base += ` destination address="${dest}"`;
+        try {
+          fw(`--permanent --zone=${ZONE} --add-rich-rule="${base} tcp port="${dport}" ${target}"`);
+        } catch (e) {
+          if (process.env.NODE_ENV !== 'test') console.error('firewalld add-rich-rule:', e.message);
+        }
+        try {
+          fw(`--permanent --zone=${ZONE} --add-rich-rule="${base} udp port="${dport}" ${target}"`);
+        } catch (e) {
+          if (process.env.NODE_ENV !== 'test') console.error('firewalld add-rich-rule:', e.message);
+        }
+      } else {
+        let rule = `rule family="ipv4" source address="${safeSrc}"`;
+        if (dest) rule += ` destination address="${dest}"`;
+        if (proto === 'tcp' || proto === 'udp') {
+          if (dport) rule += ` ${proto} port="${dport}"`;
+        }
+        rule += ` ${target}`;
+        try {
+          fw(`--permanent --zone=${ZONE} --add-rich-rule="${rule}"`);
+        } catch (e) {
+          if (process.env.NODE_ENV !== 'test') console.error('firewalld add-rich-rule:', e.message);
+        }
       }
     }
   }

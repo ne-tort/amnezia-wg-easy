@@ -71,6 +71,7 @@ async function migrateAwgToDb() {
       rule_profile_id: null,
       default_profile: null,
       default_level: null,
+      use_server_dns: 1,
     });
   }
   return true;

@@ -12,6 +12,7 @@ const db = require('./db');
 const { migrateAwgToDb } = require('./migrateAwgToDb');
 const { getProfileI1, isKnownProfile, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
 const { loadSignatures, runSignatureGeneration } = require('./signatures');
+const { isAmneziaDnsAvailable } = require('./amneziaDns');
 
 const {
   WG_PATH,
@@ -19,6 +20,7 @@ const {
   WG_PORT,
   WG_MTU,
   WG_DEFAULT_DNS,
+  WG_DIRECT_DNS,
   WG_DEFAULT_ADDRESS,
   WG_PERSISTENT_KEEPALIVE,
   WG_PRE_UP,
@@ -116,6 +118,7 @@ const WireGuard = class {
         ruleProfileId: c.rule_profile_id ?? undefined,
         defaultProfile: c.default_profile || undefined,
         defaultLevel: c.default_level ?? undefined,
+        useServerDns: c.use_server_dns !== 0,
       };
     }
     return { server, clients };
@@ -238,6 +241,7 @@ const WireGuard = class {
       rule_profile_id: c.ruleProfileId ?? null,
       default_profile: c.defaultProfile || null,
       default_level: c.defaultLevel ?? null,
+      use_server_dns: c.useServerDns !== false ? 1 : 0,
     }));
     db.clients.replaceAll(clientRows);
 
@@ -301,6 +305,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       applyFirewall();
     }
     const config = await this.getConfig();
+    const amneziaDnsAvailable = isAmneziaDnsAvailable();
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
       name: client.name,
@@ -314,6 +319,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       allowedIPs: getAllowedIPsForClient(client),
       defaultProfile: client.defaultProfile || undefined,
       defaultLevel: client.defaultLevel ?? undefined,
+      useServerDns: client.useServerDns !== false,
       downloadableConfig: 'privateKey' in client,
       persistentKeepalive: null,
       latestHandshakeAt: null,
@@ -352,7 +358,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
         client.persistentKeepalive = persistentKeepalive;
       });
 
-    return clients;
+    return { clients, serverCapabilities: { amneziaDnsAvailable } };
   }
 
   async getClient({ clientId }) {
@@ -408,10 +414,14 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     }
     const iBlock = iLines.length ? iLines.join('\n') + '\n\n' : '';
 
+    const dnsAvailable = isAmneziaDnsAvailable();
+    const useServerDns = dnsAvailable && (client.useServerDns !== false);
+    const dnsValue = useServerDns ? WG_DEFAULT_DNS : WG_DIRECT_DNS;
+
     return `[Interface]
 PrivateKey = ${client.privateKey ? `${client.privateKey}` : 'REPLACE_ME'}
 Address = ${client.address}
-${WG_DEFAULT_DNS ? `DNS = ${WG_DEFAULT_DNS}\n` : ''}\
+${dnsValue ? `DNS = ${dnsValue}\n` : ''}\
 ${WG_MTU ? `MTU = ${WG_MTU}\n` : ''}\
 Jc = ${config.server.jc}
 Jmin = ${config.server.jmin}
@@ -496,6 +506,7 @@ Endpoint = ${this.__getEndpoint()}`;
       rule_profile_id: 1,
       default_profile: null,
       default_level: null,
+      use_server_dns: 1,
     });
 
     this.__config = null;
@@ -590,6 +601,16 @@ Endpoint = ${this.__getEndpoint()}`;
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
     if (profile !== undefined) client.default_profile = profile;
     if (level !== undefined) client.default_level = level;
+    client.updated_at = Math.floor(Date.now() / 1000);
+    db.clients.update(client);
+    this.__config = null;
+    await this.saveConfig();
+  }
+
+  async updateClientDns({ clientId, useServerDns }) {
+    const client = db.clients.getById(clientId);
+    if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    client.use_server_dns = useServerDns === true ? 1 : 0;
     client.updated_at = Math.floor(Date.now() / 1000);
     db.clients.update(client);
     this.__config = null;

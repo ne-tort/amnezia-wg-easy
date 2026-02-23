@@ -326,6 +326,17 @@ module.exports = class Server {
         await WireGuard.updateClientObfuscation({ clientId, profile, level });
         return { success: true };
       }))
+      .put('/api/wireguard/client/:clientId/dns', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
+          throw createError({ status: 403 });
+        }
+        const body = await readBody(event);
+        const useServerDns = body.useServerDns === true;
+        await WireGuard.updateClientDns({ clientId, useServerDns });
+        return { success: true };
+      }))
       .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
         requireRoles(event, ['admin', 'moderator']);
         const clientId = getRouterParam(event, 'clientId');

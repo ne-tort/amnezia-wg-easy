@@ -77,6 +77,17 @@
           <h1 class="text-4xl dark:text-neutral-200 font-medium flex-grow self-start mb-4">
           </h1>
           <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center">
+            <!-- Server availability: green = OK, red = last refresh failed -->
+            <span
+              class="flex items-center justify-center w-8 h-8 rounded-full flex-shrink-0"
+              :title="refreshError ? (refreshErrorDisplay() || $t('serverOffline')) : $t('serverOnline')"
+              role="img"
+              :aria-label="refreshError ? $t('serverOffline') : $t('serverOnline')">
+              <span
+                class="w-4 h-4 rounded-full transition-colors"
+                :class="refreshError ? 'bg-red-500 dark:bg-red-500' : 'bg-green-500 dark:bg-green-500'">
+              </span>
+            </span>
             <!-- Dark / light theme -->
             <button @click="toggleTheme"
               class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition" :title="$t(`theme.${uiTheme}`)">
@@ -313,6 +324,18 @@
                       :class="getClientLevel(client) === 0 ? 'bg-gray-100 dark:bg-neutral-600 text-gray-400 dark:text-neutral-500 cursor-default' : 'bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white'"
                       :title="$t('profileTitle', { profile: getClientProfileLabel(client) })">
                       {{ getClientProfileLabel(client) }}
+                    </button>
+                    <!-- DNS: server (Amnezia) vs direct (8.8.8.8 etc). Shown only when Amnezia DNS is available. Only icon changes, no red highlight. -->
+                    <button v-if="client.downloadableConfig && amneziaDnsAvailable" type="button"
+                      @click="toggleClientDns(client)"
+                      class="align-middle p-2 rounded transition min-h-[2.25rem] min-w-[2.25rem] bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-gray-200 dark:hover:bg-neutral-500"
+                      :title="getClientUseServerDns(client) ? $t('dnsServerTitle') : $t('dnsDirectTitle')">
+                      <svg v-if="getClientUseServerDns(client)" class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                      </svg>
+                      <svg v-else class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
+                      </svg>
                     </button>
                     <!-- Regenerate I1 signatures (all protocols) -->
                     <button v-if="client.downloadableConfig" type="button"

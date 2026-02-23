@@ -27,16 +27,16 @@ RUN poetry config virtualenvs.create false && \
 FROM amneziavpn/amneziawg-go:latest
 
 HEALTHCHECK CMD /usr/bin/timeout 5s /bin/sh -c "/usr/bin/wg show awg0 >/dev/null 2>&1 || exit 1" --interval=1m --timeout=5s --retries=3
-COPY --from=build_node_modules /app /app
+
+# * Layer order for cache: heavy installs (apk, pip) before any COPY that changes with app code.
+#   Changing src/ or python_signatures then only re-copies artifacts, not re-downloads packages.
+RUN mkdir -p /app /opt/amnezia/awg
 
 RUN apk add --no-cache \
     nodejs \
     npm
 
-COPY --from=build_node_modules /node_modules /node_modules
-
-# * Runtime Python from Alpine; version must satisfy pyproject.toml (>=3.10).
-# * nftables: required for firewall backend (FIREWALL_BACKEND=nftables, default).
+# * Runtime Python and DNS/tooling; nftables for firewall backend (FIREWALL_BACKEND=nftables).
 RUN apk add --no-cache \
     bind-tools \
     dpkg \
@@ -51,14 +51,11 @@ RUN apk add --no-cache \
     openssl
 
 COPY --from=pybuilder /build/requirements.txt /app/requirements.txt
-COPY python_signatures /app/python_signatures
 RUN pip install --no-cache-dir --break-system-packages -r /app/requirements.txt
 
+COPY python_signatures /app/python_signatures
 ENV PYTHONPATH=/app
-
 ENV DEBUG=Server,WireGuard
-
-RUN mkdir -p /opt/amnezia/awg
 
 # * After amneziawg-go daemonizes, wait for UAPI socket before awg setconf (fixes "Unable to modify interface: Invalid argument").
 RUN mkdir -p /var/run/amneziawg && \
@@ -72,6 +69,10 @@ RUN chmod +x /entrypoint.sh
 
 # * Migrations path in runtime: path.join(__dirname, '..','..','migrations') from /app/lib => /migrations
 COPY migrations /migrations
+
+# * App code and node_modules last so cache is invalidated only when src/ or lockfile changes.
+COPY --from=build_node_modules /app /app
+COPY --from=build_node_modules /node_modules /app/node_modules
 
 WORKDIR /app
 CMD ["/entrypoint.sh"]

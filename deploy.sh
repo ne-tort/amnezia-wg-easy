@@ -57,6 +57,20 @@ if [ -z "$ADMIN_PWD_VAL" ] || [ "$ADMIN_PWD_VAL" = "your_admin_password" ]; then
   echo "[deploy] Generated ADMIN_PASSWORD (saved in $ENV_WORKING)"
 fi
 
+# Amnezia DNS: if WG_DEFAULT_DNS is unset, set it to VPN gateway so dnsmasq starts and clients use gateway as DNS.
+WG_ADDR=$(grep -E "^WG_DEFAULT_ADDRESS=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+WG_ADDR=${WG_ADDR:-10.8.0.x}
+WG_GW="${WG_ADDR%x}1"
+CURRENT_DNS=$(grep -E "^WG_DEFAULT_DNS=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+if [ -z "$CURRENT_DNS" ]; then
+  if grep -qE "^WG_DEFAULT_DNS=" "$ENV_WORKING" 2>/dev/null; then
+    sed -i "s|^WG_DEFAULT_DNS=.*|WG_DEFAULT_DNS=${WG_GW}|" "$ENV_WORKING"
+  else
+    echo "WG_DEFAULT_DNS=${WG_GW}" >> "$ENV_WORKING"
+  fi
+  echo "[deploy] WG_DEFAULT_DNS set to ${WG_GW} (Amnezia DNS enabled)"
+fi
+
 # Build and start without forcing recreate so already-running services are left running
 echo "[deploy] Building and starting..."
 docker compose up -d --build --remove-orphans
@@ -70,4 +84,4 @@ ADMIN_PWD=$(grep -E "^ADMIN_PASSWORD=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2-
 echo "[deploy] Done. Panel (HTTPS): https://${PANEL_DOMAIN:-panel.ai-qwerty.ru}"
 echo "[deploy] Admin login: ${ADMIN_USER}"
 echo "[deploy] Admin password: ${ADMIN_PWD}"
-echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). Amnezia DNS: set WG_DEFAULT_DNS to gateway in $ENV_WORKING if needed."
+echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). DNS: WG_DEFAULT_DNS in $ENV_WORKING (gateway = Amnezia DNS)."

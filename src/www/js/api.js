@@ -6,16 +6,26 @@
 class API {
 
   async call({ method, path, body }) {
-    const res = await fetch(`./api${path}`, {
-      method,
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: body
-        ? JSON.stringify(body)
-        : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(`./api${path}`, {
+        method,
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: body
+          ? JSON.stringify(body)
+          : undefined,
+      });
+    } catch (e) {
+      const msg = (e && e.message === 'Failed to fetch') || (e && e.name === 'TypeError')
+        ? 'NETWORK_ERROR'
+        : (e && e.message) || 'Request failed';
+      const err = new Error(msg);
+      err.code = msg === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : err.code;
+      throw err;
+    }
 
     if (res.status === 204) {
       return undefined;
@@ -128,17 +138,24 @@ class API {
     return this.call({
       method: 'get',
       path: '/wireguard/client',
-    }).then((clients) => clients.map((client) => ({
-      ...client,
-      createdAt: new Date(client.createdAt),
-      updatedAt: new Date(client.updatedAt),
-      latestHandshakeAt: client.latestHandshakeAt !== null && client.latestHandshakeAt !== undefined
-        ? new Date(client.latestHandshakeAt)
-        : null,
-      expiresAt: client.expiresAt !== null && client.expiresAt !== undefined
-        ? new Date(client.expiresAt)
-        : null,
-    })));
+    }).then((res) => {
+      const raw = res.clients;
+      const list = Array.isArray(raw)
+        ? raw
+        : (raw && typeof raw === 'object' ? Object.values(raw) : []);
+      const clients = list.map((client) => ({
+        ...client,
+        createdAt: new Date(client.createdAt),
+        updatedAt: new Date(client.updatedAt),
+        latestHandshakeAt: client.latestHandshakeAt !== null && client.latestHandshakeAt !== undefined
+          ? new Date(client.latestHandshakeAt)
+          : null,
+        expiresAt: client.expiresAt !== null && client.expiresAt !== undefined
+          ? new Date(client.expiresAt)
+          : null,
+      }));
+      return { clients, serverCapabilities: res.serverCapabilities || {} };
+    });
   }
 
   async createClient({ name }) {
@@ -191,6 +208,14 @@ class API {
       method: 'put',
       path: `/wireguard/client/${clientId}/obfuscation`,
       body: { profile, level },
+    });
+  }
+
+  async updateClientDns({ clientId, useServerDns }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/dns`,
+      body: { useServerDns },
     });
   }
 

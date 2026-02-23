@@ -46,6 +46,8 @@ const messages = { // eslint-disable-line no-unused-vars
     dpiSave: 'Save',
     obfuscationLevelTitle: 'Obfuscation level: {level}. Click to cycle I1→I2→…→I5→I0→I1.',
     profileTitle: 'Protocol / profile: {profile}. Click to switch.',
+    dnsServerTitle: 'DNS: server (Amnezia). Click to use direct DNS.',
+    dnsDirectTitle: 'DNS: direct (e.g. 8.8.8.8). Click to use server DNS.',
     regenerateSignatures: 'Regenerate I1 signatures (all protocols)',
     firewallProfileTitle: 'Firewall profile for this client',
     firewallProfileFullAccess: 'Full access',
@@ -87,6 +89,9 @@ const messages = { // eslint-disable-line no-unused-vars
     editProfile: 'Edit profile',
     profileInUseCannotDelete: 'Profile is in use by at least one client and cannot be deleted.',
     description: 'Description',
+    networkError: 'Network unavailable',
+    serverOnline: 'Server reachable',
+    serverOffline: 'Server unreachable',
   },
   ru: {
     name: 'Имя',
@@ -130,6 +135,8 @@ const messages = { // eslint-disable-line no-unused-vars
     dpiSave: 'Сохранить',
     obfuscationLevelTitle: 'Уровень обфускации: {level}. Клик — цикл I1→I2→…→I5→I0→I1.',
     profileTitle: 'Протокол / профиль: {profile}. Клик — переключить.',
+    dnsServerTitle: 'DNS: серверный (Amnezia). Клик — перейти на прямой DNS.',
+    dnsDirectTitle: 'DNS: прямой (напр. 8.8.8.8). Клик — перейти на серверный DNS.',
     regenerateSignatures: 'Перегенерировать подписи I1 (все протоколы)',
     firewallProfileTitle: 'Профиль фаерволла для этого клиента',
     firewallProfileFullAccess: 'Полный доступ',
@@ -171,5 +178,8 @@ const messages = { // eslint-disable-line no-unused-vars
     editProfile: 'Редактировать профиль',
     profileInUseCannotDelete: 'Профиль используется хотя бы одним клиентом, удаление невозможно.',
     description: 'Описание',
+    networkError: 'Сеть недоступна',
+    serverOnline: 'Сервер доступен',
+    serverOffline: 'Сервер недоступен',
   }
 };

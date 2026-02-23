@@ -24,10 +24,14 @@ module.exports.WG_PERSISTENT_KEEPALIVE = process.env.WG_PERSISTENT_KEEPALIVE !==
   ? process.env.WG_PERSISTENT_KEEPALIVE
   : '25';
 module.exports.WG_DEFAULT_ADDRESS = process.env.WG_DEFAULT_ADDRESS || '10.8.0.x';
-// * Default DNS for client configs. 1.1.1.1 (Cloudflare) is often blocked in Russia; 8.8.8.8 works more reliably. Override via WG_DEFAULT_DNS.
+// * Default DNS for client configs (comma-separated for multiple). 8.8.8.8, 8.8.4.4 = Google Public DNS. Override via WG_DEFAULT_DNS.
 module.exports.WG_DEFAULT_DNS = typeof process.env.WG_DEFAULT_DNS === 'string'
   ? process.env.WG_DEFAULT_DNS
-  : '8.8.8.8';
+  : '8.8.8.8, 8.8.4.4';
+// * DNS used in client config when "direct DNS" is selected (not server/Amnezia DNS). Override via WG_DIRECT_DNS.
+module.exports.WG_DIRECT_DNS = typeof process.env.WG_DIRECT_DNS === 'string' && process.env.WG_DIRECT_DNS.trim()
+  ? process.env.WG_DIRECT_DNS.trim()
+  : '8.8.8.8, 8.8.4.4';
 // * DEPRECATED: AllowedIPs in client config now come from firewall allow rules (global + profile + client). Left for env compatibility.
 module.exports.WG_ALLOWED_IPS = process.env.WG_ALLOWED_IPS || '0.0.0.0/0';
 
