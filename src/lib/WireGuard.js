@@ -52,29 +52,79 @@ const AWG_CONF = 'awg0.conf';
 const AWG_IFACE = 'awg0';
 
 /**
- * Builds AllowedIPs string for client config from allow rules (global + profile + client).
- * Uses Set to deduplicate; trims whitespace from destination_cidr.
+ * Parses IPv4 CIDR string (a.b.c.d/len) into numeric prefix and prefix length.
+ * @param {string} cidr - e.g. "10.8.0.0/24"
+ * @returns {{ prefix: number, prefixLen: number } | null} 32-bit prefix and 0–32 length, or null if invalid
+ */
+function parseIPv4Cidr(cidr) {
+  if (typeof cidr !== 'string') return null;
+  const s = cidr.trim();
+  const slash = s.indexOf('/');
+  if (slash < 0) return null;
+  const addr = s.slice(0, slash).trim();
+  const lenStr = s.slice(slash + 1).trim();
+  const len = parseInt(lenStr, 10);
+  if (!Number.isInteger(len) || len < 0 || len > 32) return null;
+  const parts = addr.split('.');
+  if (parts.length !== 4) return null;
+  let prefix = 0;
+  for (let i = 0; i < 4; i++) {
+    const n = parseInt(parts[i], 10);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    prefix = (prefix << 8) | n;
+  }
+  prefix >>>= 0;
+  return { prefix, prefixLen: len };
+}
+
+/**
+ * Returns true iff outer IPv4 CIDR fully contains inner (every IP in inner is in outer).
+ * @param {string} outerCidr - broader CIDR
+ * @param {string} innerCidr - narrower or equal CIDR
+ * @returns {boolean}
+ */
+function cidrContains(outerCidr, innerCidr) {
+  const outer = parseIPv4Cidr(outerCidr);
+  const inner = parseIPv4Cidr(innerCidr);
+  if (!outer || !inner) return false;
+  if (outer.prefixLen > inner.prefixLen) return false;
+  const maskLen = outer.prefixLen;
+  const mask = maskLen === 0 ? 0 : (0xffffffff << (32 - maskLen)) >>> 0;
+  return (outer.prefix & mask) === (inner.prefix & mask);
+}
+
+/**
+ * Builds AllowedIPs string for client config from allow rules (client → profile → global).
+ * Cascading collapse: a CIDR fully contained in an earlier one is skipped; a new CIDR
+ * removes from the result any that it fully contains. Invalid CIDRs are kept as-is.
  * @param {{ id: string, ruleProfileId?: number|null, rule_profile_id?: number|null }} client - client id and profile
  * @returns {string} comma-separated destination_cidr or empty string
  */
 function getAllowedIPsForClient(client) {
-  const cidrs = new Set();
-  const add = (v) => { const s = (v || '').trim(); if (s) cidrs.add(s); };
-  for (const r of db.globalFirewallRules.getAll()) {
-    if (r.action === 'allow') add(r.destination_cidr);
-  }
   const raw = client.ruleProfileId ?? client.rule_profile_id ?? null;
   const profileId = raw != null ? raw : 1;
+
+  const ordered = [];
+  const push = (r) => {
+    const s = (r.destination_cidr || '').trim();
+    if (s && r.action === 'allow') ordered.push(s);
+  };
+  for (const r of db.clientFirewallRules.getByClientId(client.id)) push(r);
   if (profileId != null) {
-    for (const r of db.ipRules.getByProfileId(profileId)) {
-      if (r.action === 'allow') add(r.destination_cidr);
+    for (const r of db.ipRules.getByProfileId(profileId)) push(r);
+  }
+  for (const r of db.globalFirewallRules.getAll()) push(r);
+
+  const result = [];
+  for (const cidr of ordered) {
+    const containedInResult = result.some((existing) => cidrContains(existing, cidr));
+    if (containedInResult) continue;
+    for (let i = result.length - 1; i >= 0; i--) {
+      if (cidrContains(cidr, result[i])) result.splice(i, 1);
     }
+    result.push(cidr);
   }
-  const clientRules = db.clientFirewallRules.getByClientId(client.id);
-  for (const r of clientRules) {
-    if (r.action === 'allow') add(r.destination_cidr);
-  }
-  return [...cidrs].join(', ') || '';
+  return result.join(', ') || '';
 }
 
 const WireGuard = class {

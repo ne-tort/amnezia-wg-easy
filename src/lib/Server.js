@@ -455,6 +455,57 @@ module.exports = class Server {
         applyFirewall();
         return { success: true };
       }))
+      .get('/api/traffic/client/:clientId', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator', 'user']);
+        const clientId = getRouterParam(event, 'clientId');
+        const client = db.clients.getById(clientId);
+        if (!client) throw createError({ status: 404, message: 'Client not found' });
+        const query = getQuery(event);
+        const period = (query.period && String(query.period).toLowerCase()) || 'day';
+        const periodSeconds = { hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000 }[period];
+        if (!periodSeconds) throw createError({ status: 400, message: 'period must be hour, day, week, month, or year' });
+        const tsFrom = Math.floor(Date.now() / 1000) - periodSeconds;
+        return db.traffic.deltas.sumByClientAndPeriod(clientId, tsFrom);
+      }))
+      .delete('/api/traffic/client/:clientId/history', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        const client = db.clients.getById(clientId);
+        if (!client) throw createError({ status: 404, message: 'Client not found' });
+        const Util = require('./Util');
+        let lastRx = 0;
+        let lastTx = 0;
+        try {
+          const dump = await Util.exec('wg show awg0 dump', { log: false });
+          const lines = dump.trim().split('\n').slice(1);
+          for (const line of lines) {
+            const parts = line.split('\t');
+            if (parts[0] === client.public_key) {
+              lastRx = Number(parts[5]) || 0;
+              lastTx = Number(parts[6]) || 0;
+              break;
+            }
+          }
+        } catch (_) {}
+        const now = Math.floor(Date.now() / 1000);
+        const database = db.getDb();
+        database.transaction(() => {
+          db.traffic.deltas.deleteByClientId(clientId);
+          db.traffic.snapshot.upsert(clientId, lastRx, lastTx, now);
+        })();
+        const { updateSnapshotForClient } = require('./trafficRecorder');
+        updateSnapshotForClient(clientId, lastRx, lastTx);
+        return { success: true };
+      }))
+      .get('/api/traffic/aggregate', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator', 'user']);
+        const query = getQuery(event);
+        const period = (query.period && String(query.period).toLowerCase()) || 'day';
+        const periodSeconds = { hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000 }[period];
+        if (!periodSeconds) throw createError({ status: 400, message: 'period must be hour, day, week, month, or year' });
+        const tsFrom = Math.floor(Date.now() / 1000) - periodSeconds;
+        return db.traffic.deltas.sumByPeriod(tsFrom);
+      }))
       .get('/api/signatures/profiles', defineEventHandler(() => {
         return { profileIds: getProfileIds(), defaultProfile: DEFAULT_PROFILE_ID };
       }))

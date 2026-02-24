@@ -14,6 +14,12 @@ function escape(s) {
   return s.replace(/"/g, '\\"').replace(/[^0-9a-fA-F.:\/\-\s]/g, '');
 }
 
+// * Escapes double quotes for shell so the full rule string is passed correctly to firewall-cmd.
+function escapeRuleForShell(rule) {
+  if (typeof rule !== 'string') return '';
+  return rule.replace(/"/g, '\\"');
+}
+
 /**
  * Applies per-client firewall rules using firewalld rich rules.
  * @param {Object} descriptor - { clients, globalRules, profileRules }
@@ -37,6 +43,10 @@ function apply(descriptor) {
   try {
     fw(`--permanent --zone=${ZONE} --set-target=ACCEPT`);
   } catch (_) {}
+  // * Bind zone to WireGuard interface so rich rules apply to traffic from awg0 (same name as in nftables).
+  try {
+    fw(`--permanent --zone=${ZONE} --add-interface=awg0 2>/dev/null || true`);
+  } catch (_) {}
 
   const bySortOrder = (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.id - b.id);
   for (const client of clients) {
@@ -59,13 +69,15 @@ function apply(descriptor) {
         // * Port set but protocol empty/other: add two rich-rules (tcp and udp) so port is enforced.
         let base = `rule family="ipv4" source address="${safeSrc}"`;
         if (dest) base += ` destination address="${dest}"`;
+        const ruleTcp = `${base} tcp port="${dport}" ${target}`;
+        const ruleUdp = `${base} udp port="${dport}" ${target}`;
         try {
-          fw(`--permanent --zone=${ZONE} --add-rich-rule="${base} tcp port="${dport}" ${target}"`);
+          fw(`--permanent --zone=${ZONE} --add-rich-rule="${escapeRuleForShell(ruleTcp)}"`);
         } catch (e) {
           if (process.env.NODE_ENV !== 'test') console.error('firewalld add-rich-rule:', e.message);
         }
         try {
-          fw(`--permanent --zone=${ZONE} --add-rich-rule="${base} udp port="${dport}" ${target}"`);
+          fw(`--permanent --zone=${ZONE} --add-rich-rule="${escapeRuleForShell(ruleUdp)}"`);
         } catch (e) {
           if (process.env.NODE_ENV !== 'test') console.error('firewalld add-rich-rule:', e.message);
         }
@@ -77,7 +89,7 @@ function apply(descriptor) {
         }
         rule += ` ${target}`;
         try {
-          fw(`--permanent --zone=${ZONE} --add-rich-rule="${rule}"`);
+          fw(`--permanent --zone=${ZONE} --add-rich-rule="${escapeRuleForShell(rule)}"`);
         } catch (e) {
           if (process.env.NODE_ENV !== 'test') console.error('firewalld add-rich-rule:', e.message);
         }

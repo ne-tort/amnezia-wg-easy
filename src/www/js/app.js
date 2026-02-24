@@ -25,6 +25,21 @@ function bytes(bytes, decimals, kib, maxunit) {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
+// * Formats bytes as "X.XX MB" / "X.XX GB" etc.: 2 decimals, unit from MB, switch at 0.1 of next unit.
+function formatTrafficShort(bytesIn) {
+  if (bytesIn == null || !Number.isFinite(bytesIn) || bytesIn < 0) return '0.00 MB';
+  const k = 1024;
+  const units = ['MB', 'GB', 'TB', 'PB'];
+  let valueMb = bytesIn / (k * k);
+  let idx = 0;
+  while (idx < units.length - 1 && valueMb >= 0.1 * k) {
+    valueMb /= k;
+    idx += 1;
+  }
+  const value = parseFloat(valueMb.toFixed(2));
+  return `${value} ${units[idx]}`;
+}
+
 // * Default UI language. No auto-detection; user selects via language switcher only.
 const DEFAULT_LOCALE = 'ru';
 const LOCALE_STORAGE_KEY = 'lang';
@@ -110,6 +125,9 @@ new Vue({
     clientExpiryEdit: null,
     expiryEditValue: '',
     expandedClientStatsId: null,
+    clientTrafficHistory: {},
+    aggregateTrafficDisplay: '0.00 MB',
+    resettingTrafficClientId: null,
 
     currentRelease: null,
     latestRelease: null,
@@ -207,6 +225,9 @@ new Vue({
     },
   },
   methods: {
+    formatTrafficShort(bytesIn) {
+      return formatTrafficShort(bytesIn);
+    },
     getClientLevel(client) {
       return this.clientLevels[client.id] ?? 1;
     },
@@ -452,9 +473,40 @@ new Vue({
 
         return client;
       });
+        this.loadAggregateTraffic().catch(() => {});
       } catch (err) {
         this.refreshError = err.code === 'NETWORK_ERROR' ? 'NETWORK_ERROR' : (err.message || String(err));
         throw err;
+      }
+    },
+    async loadClientTrafficHistory(clientId) {
+      const periods = ['hour', 'day', 'week', 'month', 'year'];
+      const result = {};
+      await Promise.all(periods.map(async (period) => {
+        const data = await this.api.getTrafficClient(clientId, period).catch(() => ({ rx: 0, tx: 0 }));
+        result[period] = data;
+      }));
+      this.$set(this.clientTrafficHistory, clientId, result);
+    },
+    async loadAggregateTraffic() {
+      const data = await this.api.getTrafficAggregate('year').catch(() => ({ rx: 0, tx: 0 }));
+      const total = (data.rx || 0) + (data.tx || 0);
+      this.aggregateTrafficDisplay = formatTrafficShort(total);
+    },
+    async resetClientTraffic(client) {
+      if (this.resettingTrafficClientId) return;
+      this.resettingTrafficClientId = client.id;
+      try {
+        await this.api.resetTrafficHistory(client.id);
+        await this.loadClientTrafficHistory(client.id);
+        await this.loadAggregateTraffic();
+      } catch (err) {
+        const msg = err.status === 403
+          ? (this.$t('trafficResetForbidden') || 'Not allowed to reset traffic.')
+          : (err.message || String(err));
+        alert(msg);
+      } finally {
+        this.resettingTrafficClientId = null;
       }
     },
     refreshErrorDisplay() {
@@ -836,7 +888,9 @@ new Vue({
       localStorage.setItem('uiShowCharts', this.uiShowCharts ? 1 : 0);
     },
     toggleClientStats(client) {
-      this.expandedClientStatsId = this.expandedClientStatsId === client.id ? null : client.id;
+      const next = this.expandedClientStatsId === client.id ? null : client.id;
+      this.expandedClientStatsId = next;
+      if (next) this.loadClientTrafficHistory(next).catch(() => {});
     },
     toggleFirewallBlocks() {
       this.firewallBlocksVisible = !this.firewallBlocksVisible;

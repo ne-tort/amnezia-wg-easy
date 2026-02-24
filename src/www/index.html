@@ -67,16 +67,27 @@
     gap: 0.75rem;
     margin-top: 1.5rem;
   }
+  /* Main content width: independent of Tailwind purge */
+  .main-content {
+    width: 100%;
+    max-width: 60rem;
+  }
 </style>
 
 <body class="bg-gray-50 dark:bg-neutral-800">
   <div id="app">
-    <div v-cloak class="container mx-auto max-w-3xl px-3 md:px-0 mt-4 xs:mt-6">
+    <div v-cloak class="main-content mx-auto px-3 md:px-0 mt-4 xs:mt-6">
       <div v-if="authenticated === true">
         <div class="flex flex-col-reverse xxs:flex-row flex-auto items-center items-end gap-3">
           <h1 class="text-4xl dark:text-neutral-200 font-medium flex-grow self-start mb-4">
           </h1>
           <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center">
+            <!-- Aggregate traffic (year) -->
+            <span
+              class="flex items-center justify-center min-h-8 px-2 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-sm font-medium tabular-nums"
+              :title="$t('trafficAggregateTitle')">
+              {{ aggregateTrafficDisplay }}
+            </span>
             <!-- Server availability: green = OK, red = last refresh failed -->
             <span
               class="flex items-center justify-center w-8 h-8 rounded-full flex-shrink-0"
@@ -84,8 +95,8 @@
               role="img"
               :aria-label="refreshError ? $t('serverOffline') : $t('serverOnline')">
               <span
-                class="w-4 h-4 rounded-full transition-colors"
-                :class="refreshError ? 'bg-red-500 dark:bg-red-500' : 'bg-green-500 dark:bg-green-500'">
+                class="w-4 h-4 rounded-full transition-colors shrink-0"
+                :style="refreshError ? { backgroundColor: '#ef4444' } : { backgroundColor: '#22c55e' }">
               </span>
             </span>
             <!-- Dark / light theme -->
@@ -277,7 +288,7 @@
                 </div>
 
                 <div class="flex items-center justify-end shrink-0" @click.stop>
-                  <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-between">
+                  <div class="text-gray-400 dark:text-neutral-400 flex gap-1 items-center justify-start min-w-[28rem]">
 
                     <!-- Enable/Disable (leftmost) -->
                     <div @click="disableClient(client)" v-if="client.enabled === true" :title="$t('disableClient')"
@@ -407,24 +418,40 @@
                 </div>
                 </div>
 
-                <!-- Expandable stats: last seen, download, upload — own row below buttons -->
+                <!-- Expandable stats: last seen, download, upload; traffic history; reset -->
                 <div v-if="expandedClientStatsId === client.id"
-                  class="w-full text-left text-xs text-gray-500 dark:text-neutral-400 pt-2 mt-1 border-t border-gray-100 dark:border-neutral-600 px-3 pb-2 flex flex-nowrap items-center gap-3">
-                  <span v-if="client.latestHandshakeAt" :title="$t('lastSeen') + ' ' + dateTime(new Date(client.latestHandshakeAt))">
-                    {{ new Date(client.latestHandshakeAt) | timeago }}
-                  </span>
-                  <span v-if="client.transferTx" :title="$t('totalDownload') + ' ' + bytes(client.transferTx)">
-                    <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                      <path fill-rule="evenodd" d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 012 0v11.586l4.293-4.293a1 1 0 011.414 0z" clip-rule="evenodd" />
-                    </svg>
-                    {{ client.transferTxCurrent | bytes }}/s
-                  </span>
-                  <span v-if="client.transferRx" :title="$t('totalUpload') + ' ' + bytes(client.transferRx)">
-                    <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                      <path fill-rule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
-                    </svg>
-                    {{ client.transferRxCurrent | bytes }}/s
-                  </span>
+                  class="w-full text-left text-xs text-gray-500 dark:text-neutral-400 pt-2 mt-1 border-t border-gray-100 dark:border-neutral-600 px-3 pb-2 flex flex-col gap-3">
+                  <div class="flex flex-nowrap items-center gap-3">
+                    <span v-if="client.latestHandshakeAt" :title="$t('lastSeen') + ' ' + dateTime(new Date(client.latestHandshakeAt))">
+                      {{ new Date(client.latestHandshakeAt) | timeago }}
+                    </span>
+                    <span v-if="client.transferTx" :title="$t('totalDownload') + ' ' + bytes(client.transferTx)">
+                      <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M16.707 10.293a1 1 0 010 1.414l-6 6a1 1 0 01-1.414 0l-6-6a1 1 0 111.414-1.414L9 14.586V3a1 1 0 012 0v11.586l4.293-4.293a1 1 0 011.414 0z" clip-rule="evenodd" />
+                      </svg>
+                      {{ client.transferTxCurrent | bytes }}/s
+                    </span>
+                    <span v-if="client.transferRx" :title="$t('totalUpload') + ' ' + bytes(client.transferRx)">
+                      <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M3.293 9.707a1 1 0 010-1.414l6-6a1 1 0 011.414 0l6 6a1 1 0 01-1.414 1.414L11 5.414V17a1 1 0 11-2 0V5.414L4.707 9.707a1 1 0 01-1.414 0z" clip-rule="evenodd" />
+                      </svg>
+                      {{ client.transferRxCurrent | bytes }}/s
+                    </span>
+                  </div>
+                  <div class="flex flex-col gap-1">
+                    <div class="text-gray-600 dark:text-neutral-300 font-medium">{{ $t('trafficHistory') }}</div>
+                    <template v-for="period in ['hour','day','week','month','year']">
+                      <div :key="period" class="flex justify-between gap-2">
+                        <span>{{ $t('trafficPeriod' + period.charAt(0).toUpperCase() + period.slice(1)) }}</span>
+                        <span class="tabular-nums">{{ formatTrafficShort((clientTrafficHistory[client.id] && clientTrafficHistory[client.id][period]) ? (clientTrafficHistory[client.id][period].rx || 0) + (clientTrafficHistory[client.id][period].tx || 0) : 0) }}</span>
+                      </div>
+                    </template>
+                    <button type="button" @click.stop="resetClientTraffic(client)"
+                      :disabled="resettingTrafficClientId === client.id"
+                      class="mt-2 self-start px-3 py-1.5 rounded bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-700 dark:text-neutral-200 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed">
+                      {{ $t('trafficReset') }}
+                    </button>
+                  </div>
                 </div>
 
               </div>

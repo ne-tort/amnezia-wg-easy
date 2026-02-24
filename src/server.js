@@ -8,6 +8,7 @@ const { ensureFirstAdmin } = require('./lib/ensureFirstAdmin');
 const WireGuard = require('./lib/WireGuard');
 const { applyFirewall } = require('./lib/firewall');
 const { startAmneziaDns, stopAmneziaDns } = require('./lib/amneziaDns');
+const { startTrafficRecorder, stopTrafficRecorder } = require('./lib/trafficRecorder');
 
 async function main() {
   db.getDb();
@@ -37,6 +38,7 @@ async function main() {
   }
 
   await server.start();
+  startTrafficRecorder();
 }
 
 main().catch((err) => {
@@ -48,6 +50,7 @@ main().catch((err) => {
 process.on('SIGTERM', async () => {
   // eslint-disable-next-line no-console
   console.log('SIGTERM signal received.');
+  stopTrafficRecorder();
   stopAmneziaDns();
   await WireGuard.Shutdown();
   process.exit(0);

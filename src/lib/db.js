@@ -388,6 +388,60 @@ function protocolTemplatesGetByProfileId(profileId) {
   return row?.default_hex ?? null;
 }
 
+// * Traffic history: snapshot (last WG counters) and deltas (per-sample increments)
+function trafficSnapshotGetAll() {
+  return getDb().prepare('SELECT client_id, last_rx, last_tx, sampled_at FROM traffic_snapshot').all();
+}
+
+function trafficSnapshotGetByClientId(clientId) {
+  return getDb().prepare('SELECT client_id, last_rx, last_tx, sampled_at FROM traffic_snapshot WHERE client_id = ?').get(clientId);
+}
+
+function trafficSnapshotUpsert(clientId, lastRx, lastTx, sampledAt) {
+  getDb().prepare(
+    `INSERT INTO traffic_snapshot (client_id, last_rx, last_tx, sampled_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(client_id) DO UPDATE SET last_rx = excluded.last_rx, last_tx = excluded.last_tx, sampled_at = excluded.sampled_at`
+  ).run(clientId, lastRx, lastTx, sampledAt);
+}
+
+function trafficSnapshotUpsertMany(rows) {
+  const stmt = getDb().prepare(
+    `INSERT INTO traffic_snapshot (client_id, last_rx, last_tx, sampled_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(client_id) DO UPDATE SET last_rx = excluded.last_rx, last_tx = excluded.last_tx, sampled_at = excluded.sampled_at`
+  );
+  for (const r of rows) {
+    stmt.run(r.client_id, r.last_rx, r.last_tx, r.sampled_at);
+  }
+}
+
+function trafficDeltasInsertBatch(rows) {
+  if (rows.length === 0) return;
+  const stmt = getDb().prepare('INSERT INTO traffic_deltas (client_id, ts, rx_delta, tx_delta) VALUES (?, ?, ?, ?)');
+  for (const r of rows) {
+    stmt.run(r.client_id, r.ts, r.rx_delta, r.tx_delta);
+  }
+}
+
+function trafficDeltasSumByClientAndPeriod(clientId, tsFrom) {
+  const row = getDb()
+    .prepare(
+      'SELECT COALESCE(SUM(rx_delta), 0) AS rx, COALESCE(SUM(tx_delta), 0) AS tx FROM traffic_deltas WHERE client_id = ? AND ts >= ?'
+    )
+    .get(clientId, tsFrom);
+  return { rx: row.rx ?? 0, tx: row.tx ?? 0 };
+}
+
+function trafficDeltasSumByPeriod(tsFrom) {
+  const row = getDb()
+    .prepare('SELECT COALESCE(SUM(rx_delta), 0) AS rx, COALESCE(SUM(tx_delta), 0) AS tx FROM traffic_deltas WHERE ts >= ?')
+    .get(tsFrom);
+  return { rx: row.rx ?? 0, tx: row.tx ?? 0 };
+}
+
+function trafficDeltasDeleteByClientId(clientId) {
+  return getDb().prepare('DELETE FROM traffic_deltas WHERE client_id = ?').run(clientId);
+}
+
 module.exports = {
   getDb,
   panelUsers: {
@@ -457,5 +511,19 @@ module.exports = {
   protocolTemplates: {
     getAll: protocolTemplatesGetAll,
     getByProfileId: protocolTemplatesGetByProfileId,
+  },
+  traffic: {
+    snapshot: {
+      getAll: trafficSnapshotGetAll,
+      getByClientId: trafficSnapshotGetByClientId,
+      upsert: trafficSnapshotUpsert,
+      upsertMany: trafficSnapshotUpsertMany,
+    },
+    deltas: {
+      insertBatch: trafficDeltasInsertBatch,
+      sumByClientAndPeriod: trafficDeltasSumByClientAndPeriod,
+      sumByPeriod: trafficDeltasSumByPeriod,
+      deleteByClientId: trafficDeltasDeleteByClientId,
+    },
   },
 };

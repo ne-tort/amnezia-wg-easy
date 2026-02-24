@@ -291,4 +291,25 @@ class API {
     return this.call({ method: 'post', path: '/signatures/regenerate' });
   }
 
+  async getTrafficClient(clientId, period) {
+    return this.call({
+      method: 'get',
+      path: `/traffic/client/${clientId}?period=${encodeURIComponent(period)}`,
+    });
+  }
+
+  async getTrafficAggregate(period) {
+    return this.call({
+      method: 'get',
+      path: `/traffic/aggregate?period=${encodeURIComponent(period)}`,
+    });
+  }
+
+  async resetTrafficHistory(clientId) {
+    return this.call({
+      method: 'delete',
+      path: `/traffic/client/${clientId}/history`,
+    });
+  }
+
 }

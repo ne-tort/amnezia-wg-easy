@@ -84,6 +84,11 @@ module.exports.LANG = process.env.LANGUAGE || 'ru';
 module.exports.UI_TRAFFIC_STATS = process.env.UI_TRAFFIC_STATS || 'false';
 module.exports.UI_CHART_TYPE = process.env.UI_CHART_TYPE || 0;
 
+// * Traffic recorder: sample interval (seconds), flush interval (seconds), max buffer size before flush.
+module.exports.TRAFFIC_SAMPLE_INTERVAL_SEC = Math.max(30, parseInt(process.env.TRAFFIC_SAMPLE_INTERVAL_SEC || '60', 10));
+module.exports.TRAFFIC_FLUSH_INTERVAL_SEC = Math.max(60, parseInt(process.env.TRAFFIC_FLUSH_INTERVAL_SEC || '120', 10));
+module.exports.TRAFFIC_BUFFER_MAX = Math.max(100, parseInt(process.env.TRAFFIC_BUFFER_MAX || '500', 10));
+
 const getRandomInt = (min, max) => min + Math.floor(Math.random() * (max - min));
 const getRandomJunkSize = () => getRandomInt(15, 150);
 
