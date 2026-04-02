@@ -290,7 +290,7 @@ def main() -> None:
         print(f"  3. Upload .env -> {remote_path}/.env")
         print(
             f"  4. Stop stack (this project only, volumes kept): "
-            f"cd {remote_path} && docker compose --profile letsencrypt down --remove-orphans"
+            f"cd {remote_path} && docker compose -f docker-compose.yml --profile letsencrypt down --remove-orphans"
         )
         print(f"  5. Run: cd {remote_path} && chmod +x deploy.sh && ./deploy.sh")
         return
@@ -321,7 +321,7 @@ R={r}
 URL={u}
 BR={b}
 if [ -f "$R/deploy.sh" ]; then
-  cd "$R" && git fetch origin && git checkout "$BR" && git pull
+  cd "$R" && git fetch origin && git checkout "$BR" && git pull origin "$BR"
 elif [ -d "$R" ]; then
   echo "Directory $R exists but deploy.sh missing; remove or fix manually." >&2
   exit 1
@@ -371,10 +371,10 @@ rm -f {tq}
             sftp.close()
 
         wd = shlex.quote(remote_path)
-        # Stop project containers before rebuild. No -v: named volumes (e.g. amnezia-wg-data, SQLite) are preserved.
+        # Only this compose project (cwd + docker-compose.yml). No -v: DB volumes kept.
         code, out, err = run_remote(
             client,
-            f"cd {wd} && docker compose --profile letsencrypt down --remove-orphans",
+            f"cd {wd} && docker compose -f docker-compose.yml --profile letsencrypt down --remove-orphans",
             dry_run=False,
         )
         if code != 0:
