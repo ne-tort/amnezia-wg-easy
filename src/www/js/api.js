@@ -71,23 +71,28 @@ class API {
   }
 
   /**
-   * Fetches QR code SVG for client. When level/profile are passed, config is built with that obfuscation.
+   * Fetches QR code SVG(s) for client. When level/profile are passed, config is built with that obfuscation.
    * @param {string} clientId
    * @param {number} [level] 0–5 (I0–I5)
    * @param {string} [profile] quic, dns, sip
-   * @param {string} [encoding] 'text' or 'base64' (QR content encoding)
-   * @returns {Promise<string>} SVG markup
+   * @param {string} [encoding] 'text' (plain ini in one SVG) or 'amnezia' (AmneziaVPN chunked JSON → array of SVG)
+   * @returns {Promise<string|string[]>} SVG markup, or array of SVGs for Amnezia
    */
   async getClientQRCodeSVG(clientId, level, profile, encoding) {
     const params = [];
     if (level !== undefined && level !== null) params.push(`level=${Number(level)}`);
     if (profile !== undefined && profile !== null && profile !== '') params.push(`profile=${encodeURIComponent(profile)}`);
-    if (encoding === 'base64' || encoding === 'text') params.push(`encoding=${encodeURIComponent(encoding)}`);
+    if (encoding === 'amnezia' || encoding === 'text') params.push(`encoding=${encodeURIComponent(encoding)}`);
     const qs = params.length ? `?${params.join('&')}` : '';
     const res = await fetch(`./api/wireguard/client/${clientId}/qrcode.svg${qs}`, {
       credentials: 'include',
     });
     if (!res.ok) throw new Error(res.statusText);
+    if (encoding === 'amnezia') {
+      const data = await res.json();
+      if (!data.svgs || !Array.isArray(data.svgs)) throw new Error('Invalid QR response');
+      return data.svgs;
+    }
     return res.text();
   }
 

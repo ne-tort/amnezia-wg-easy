@@ -230,8 +230,12 @@ module.exports = class Server {
         }
         let profile;
         if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
-        const encoding = query.encoding === 'base64' ? 'base64' : 'text';
-        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile, encoding });
+        if (query.encoding === 'amnezia') {
+          const svgs = await WireGuard.getClientAmneziaQRCodeSvgs({ clientId, level, profile });
+          setHeader(event, 'Content-Type', 'application/json');
+          return JSON.stringify({ svgs });
+        }
+        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile });
         setHeader(event, 'Content-Type', 'image/svg+xml');
         return svg;
       }))

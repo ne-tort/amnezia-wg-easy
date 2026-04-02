@@ -13,6 +13,7 @@ const { migrateAwgToDb } = require('./migrateAwgToDb');
 const { getProfileI1, isKnownProfile, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
 const { loadSignatures, runSignatureGeneration } = require('./signatures');
 const { isAmneziaDnsAvailable } = require('./amneziaDns');
+const { generateAmneziaClientQrSvgs } = require('./amneziaClientQr');
 
 const {
   WG_PATH,
@@ -500,21 +501,37 @@ Endpoint = ${this.__getEndpoint()}`;
     return fromEnv;
   }
 
-  async getClientQRCodeSVG({ clientId, level, profile, encoding }) {
+  async getClientQRCodeSVG({ clientId, level, profile }) {
     // When level is provided, build config by level (may be large for L5). Otherwise compact (no I1).
-    let config = await this.getClientConfiguration({
+    const config = await this.getClientConfiguration({
       clientId,
       forQR: level === undefined || level === null,
       forceOmitI1ForCapacity: level === undefined || level === null,
       level,
       profile,
     });
-    const payload = encoding === 'base64' ? Buffer.from(config, 'utf8').toString('base64') : config;
-    return QRCode.toString(payload, {
+    return QRCode.toString(config, {
       type: 'svg',
       width: 512,
       errorCorrectionLevel: 'L',
     });
+  }
+
+  /**
+   * AmneziaVPN app: chunked Base64URL QR payloads (see amneziaClientQr.js).
+   * @returns {Promise<string[]>} One SVG per chunk
+   */
+  async getClientAmneziaQRCodeSvgs({ clientId, level, profile }) {
+    const config = await this.getClientConfiguration({
+      clientId,
+      forQR: level === undefined || level === null,
+      forceOmitI1ForCapacity: level === undefined || level === null,
+      level,
+      profile,
+    });
+    const client = await this.getClient({ clientId });
+    const description = client.name && String(client.name).trim() ? client.name : 'AmneziaWG';
+    return generateAmneziaClientQrSvgs(config, description);
   }
 
   async createClient({ name }) {

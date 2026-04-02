@@ -109,8 +109,8 @@ new Vue({
     clientEditAddress: null,
     clientEditAddressId: null,
     qrcodeText: null,
-    qrcodeBase64: null,
-    qrcodeTab: 'text',
+    qrcodeAmneziaSvgs: null,
+    qrcodeTab: 'amnezia',
     configViewClient: null,
     configViewText: '',
 
@@ -362,21 +362,23 @@ new Vue({
       try {
         const level = this.getClientLevel(client);
         const profile = this.getClientProfile(client);
-        const [svgText, svgBase64] = await Promise.all([
+        const [svgText, svgsAmnezia] = await Promise.all([
           this.api.getClientQRCodeSVG(client.id, level, profile, 'text'),
-          this.api.getClientQRCodeSVG(client.id, level, profile, 'base64'),
+          this.api.getClientQRCodeSVG(client.id, level, profile, 'amnezia'),
         ]);
         this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(svgText);
-        this.qrcodeBase64 = 'data:image/svg+xml,' + encodeURIComponent(svgBase64);
-        this.qrcodeTab = 'text';
+        this.qrcodeAmneziaSvgs = svgsAmnezia.map(
+          (s) => 'data:image/svg+xml,' + encodeURIComponent(s),
+        );
+        this.qrcodeTab = 'amnezia';
       } catch (err) {
         alert(err.message || 'Failed to load QR code');
       }
     },
     closeQR() {
       this.qrcodeText = null;
-      this.qrcodeBase64 = null;
-      this.qrcodeTab = 'text';
+      this.qrcodeAmneziaSvgs = null;
+      this.qrcodeTab = 'amnezia';
     },
     closeConfigView() {
       this.configViewClient = null;
@@ -1061,10 +1063,6 @@ new Vue({
   computed: {
     qrcodeModalVisible() {
       return this.qrcodeText != null;
-    },
-    qrcodeModalImageSrc() {
-      if (this.qrcodeTab === 'base64' && this.qrcodeBase64) return this.qrcodeBase64;
-      return this.qrcodeText || '';
     },
     chartOptionsTX() {
       const opts = {
