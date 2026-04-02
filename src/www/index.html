@@ -72,13 +72,14 @@
     width: 100%;
     max-width: 60rem;
   }
+  /* Password bullets follow `color`: dark on light theme, light on dark theme */
   .main-content input[type="password"] {
     color: #111827;
     caret-color: #111827;
   }
   .dark .main-content input[type="password"] {
-    color: #111827;
-    caret-color: #111827;
+    color: #f5f5f5;
+    caret-color: #f5f5f5;
   }
   /* 8px below separator; height matches .panel-password-field */
   .panel-password-row-gap {
@@ -90,6 +91,9 @@
     min-height: 36px;
     max-height: 36px;
     box-sizing: border-box;
+  }
+  .panel-password-form {
+    column-gap: 8px;
   }
 </style>
 
@@ -179,7 +183,7 @@
               v-show="passwordChangeOpen"
               class="w-full mt-3 box-border border-t border-gray-200 dark:border-neutral-600 panel-password-row-gap">
               <form
-                class="flex flex-wrap items-center w-full justify-start gap-x-4 gap-y-3 sm:gap-x-5 sm:gap-y-4"
+                class="panel-password-form flex flex-wrap items-center w-full justify-start gap-y-3"
                 @submit.prevent="submitPasswordChange"
                 @click.stop>
                 <span class="text-base font-semibold text-gray-800 dark:text-neutral-200 whitespace-nowrap shrink-0">{{ $t('passwordChangeTitle') }}:</span>
@@ -203,7 +207,7 @@
                 <button
                   type="submit"
                   :disabled="passwordChangeSubmitting"
-                  class="panel-password-submit inline-flex items-center justify-center shrink-0 rounded text-sm font-medium bg-red-800 hover:bg-red-700 dark:bg-red-800 dark:hover:bg-red-700 text-white dark:text-white disabled:opacity-50 transition shadow-sm px-4 border border-red-900/20 dark:border-red-950/30 box-border">
+                  class="panel-password-submit inline-flex items-center justify-center shrink-0 rounded text-sm font-medium bg-red-800 hover:bg-red-700 dark:bg-red-800 dark:hover:bg-red-700 text-white dark:text-white disabled:opacity-50 transition shadow-sm px-4 box-border border-0">
                   {{ $t('passwordChangeSubmit') }}
                 </button>
               </form>
