@@ -16,13 +16,17 @@ cd remote-deploy
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
 # Отредактируйте config.yaml (хост, ключ или пароль, env)
-python install.py --config config.yaml
+python install.py
 ```
+
+По умолчанию берётся **первый существующий** файл в каталоге `remote-deploy/`: `config.yaml`, иначе `deploy-runtime.yaml`, иначе ожидается `config.yaml` (скопируйте из `config.example.yaml`). Явный путь: `python install.py -c config.yaml`.
+
+Таймаут **только** установления TCP-соединения SSH — 5 с (в `install.py`); длительность `docker build`/`deploy.sh` на сервере не ограничивается.
 
 Проверка без SSH (`--dry-run`): вывод сгенерированного `.env` с замазанными секретами и список шагов.
 
 ```bash
-python install.py --config config.yaml --dry-run
+python install.py --dry-run
 ```
 
 ## Повторный запуск (обновление)
@@ -33,7 +37,7 @@ python install.py --config config.yaml --dry-run
 
 Так останавливаются только контейнеры этого compose-проекта (включая сервис с профилем `letsencrypt`, если он был поднят). Флаг **`-v` не используется** — именованные тома Docker (`amnezia-wg-data` с SQLite и данными панели, тома certbot) **не удаляются**. Затем `deploy.sh` пересобирает образы и поднимает стек заново с актуальным кодом из git/tar и новым `.env` (веб-панель в образе пересобирается из текущего репозитория).
 
-Проверка без SSH: `python install.py --config config.yaml --dry-run` — в выводе видно шаги `git pull`, `compose down` и `./deploy.sh`, то есть существующая установка будет перезаписана кодом из `git_url` / локального архива, данные в томах сохранятся.
+Проверка без SSH: `python install.py --dry-run` — в выводе видно шаги `git pull`, `compose down` и `./deploy.sh`, то есть существующая установка будет перезаписана кодом из `git_url` / локального архива, данные в томах сохранятся.
 
 ## Конфигурация
 

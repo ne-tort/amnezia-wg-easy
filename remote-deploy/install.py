@@ -21,6 +21,8 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REMOTE_DEPLOY_DIR = Path(__file__).resolve().parent
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
+# * SSH TCP connect timeout (seconds). Keep low; no artificial sleeps in this script.
+SSH_CONNECT_TIMEOUT_SEC = 5
 
 ENV_SUBST_PATTERN = re.compile(r"\$\{ENV:([^}]+)\}")
 
@@ -192,7 +194,7 @@ def connect_ssh(cfg: dict[str, Any]) -> paramiko.SSHClient:
         "hostname": host,
         "port": port,
         "username": user,
-        "timeout": 30,
+        "timeout": SSH_CONNECT_TIMEOUT_SEC,
         "allow_agent": True,
         "look_for_keys": not ident and not password,
     }
@@ -228,6 +230,17 @@ def upload_bytes(sftp: paramiko.SFTPClient, data: bytes, remote_path: str) -> No
         f.write(data)
 
 
+def resolve_config_path(explicit: Path | None) -> Path:
+    """Default: first existing file among config.yaml, deploy-runtime.yaml in remote-deploy/."""
+    if explicit is not None:
+        return explicit
+    for name in ("config.yaml", "deploy-runtime.yaml"):
+        p = REMOTE_DEPLOY_DIR / name
+        if p.is_file():
+            return p
+    return REMOTE_DEPLOY_DIR / "config.yaml"
+
+
 def mask_env_for_print(text: str) -> str:
     out_lines = []
     for line in text.splitlines():
@@ -245,16 +258,27 @@ def mask_env_for_print(text: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Deploy amnezia-wg-easy over SSH from YAML config.")
-    ap.add_argument("--config", "-c", type=Path, default=REMOTE_DEPLOY_DIR / "config.yaml", help="Path to config YAML")
+    ap.add_argument(
+        "--config",
+        "-c",
+        type=Path,
+        default=None,
+        help=f"Path to YAML (default: first of {REMOTE_DEPLOY_DIR / 'config.yaml'}, "
+        f"{REMOTE_DEPLOY_DIR / 'deploy-runtime.yaml'} if present, else config.yaml)",
+    )
     ap.add_argument("--dry-run", action="store_true", help="Print actions and masked .env; no SSH.")
     args = ap.parse_args()
 
-    if not args.config.is_file():
-        print(f"Config not found: {args.config}", file=sys.stderr)
-        print("Copy config.example.yaml to config.yaml and edit.", file=sys.stderr)
+    config_path = resolve_config_path(args.config)
+    if not config_path.is_file():
+        print(f"Config not found: {config_path}", file=sys.stderr)
+        print(
+            f"Copy {REMOTE_DEPLOY_DIR / 'config.example.yaml'} to config.yaml or deploy-runtime.yaml and edit.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    raw = yaml.safe_load(args.config.read_text(encoding="utf-8")) or {}
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
     try:
         cfg = expand_env_vars(raw)
     except KeyError as e:
@@ -277,6 +301,7 @@ def main() -> None:
     remote_path = cfg.get("remote", {}).get("path", "/opt/amnezia-wg-easy")
     remote_path = remote_path.rstrip("/")
 
+    print(f"Using config: {config_path}")
     print("--- Rendered .env (secrets masked in dry-run / log) ---")
     print(mask_env_for_print(env_body))
 
