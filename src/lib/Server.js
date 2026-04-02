@@ -183,7 +183,7 @@ module.exports = class Server {
         debug(`Deleted Session: ${sessionId}`);
         return { success: true };
       }))
-      .patch('/api/me/password', defineEventHandler(async (event) => {
+      .post('/api/me/password', defineEventHandler(async (event) => {
         const userId = event.node.req.session?.userId;
         const user = userId ? db.panelUsers.findById(userId) : null;
         if (!user || !user.is_active) {

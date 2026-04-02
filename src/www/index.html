@@ -81,46 +81,16 @@
         <div class="flex flex-col-reverse xxs:flex-row flex-auto items-center items-end gap-3">
           <h1 class="text-4xl dark:text-neutral-200 font-medium flex-grow self-start mb-4">
           </h1>
-          <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center">
-            <!-- Panel user + password change -->
-            <div class="flex flex-col items-end gap-1">
+          <div class="flex flex-1 flex-col gap-2 w-full min-w-0">
+            <div class="flex flex-row flex-wrap items-center justify-between gap-3 w-full">
               <button
                 type="button"
                 @click="togglePasswordChangeOpen"
-                class="flex items-center justify-center min-h-8 max-w-[11rem] px-3 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-sm font-medium truncate transition hover:bg-gray-300 dark:hover:bg-neutral-600"
+                class="flex items-center justify-center min-h-8 max-w-[11rem] px-3 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-sm font-medium truncate transition hover:bg-gray-300 dark:hover:bg-neutral-600 shrink-0"
                 :title="$t('passwordChangeToggleHint')">
                 {{ panelUsername || '—' }}
               </button>
-              <form
-                v-show="passwordChangeOpen"
-                class="flex flex-col gap-1 items-stretch w-[min(100%,14rem)]"
-                @submit.prevent="submitPasswordChange"
-                @click.stop>
-                <span class="text-xs text-gray-600 dark:text-neutral-400 leading-tight">{{ $t('passwordChangeTitle') }}</span>
-                <label class="sr-only" for="panel-password-new">{{ $t('passwordChangeNew') }}</label>
-                <input
-                  id="panel-password-new"
-                  v-model="passwordNew"
-                  type="password"
-                  autocomplete="new-password"
-                  :placeholder="$t('passwordChangeNew')"
-                  :class="passwordInputClass(passwordFieldError)" />
-                <label class="sr-only" for="panel-password-confirm">{{ $t('passwordChangeConfirm') }}</label>
-                <input
-                  id="panel-password-confirm"
-                  v-model="passwordConfirm"
-                  type="password"
-                  autocomplete="new-password"
-                  :placeholder="$t('passwordChangeConfirm')"
-                  :class="passwordInputClass(passwordFieldError)" />
-                <button
-                  type="submit"
-                  :disabled="passwordChangeSubmitting"
-                  class="text-sm px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-neutral-600 dark:hover:bg-neutral-500 disabled:opacity-50 transition">
-                  {{ $t('passwordChangeSubmit') }}
-                </button>
-              </form>
-            </div>
+              <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center flex-shrink-0">
             <!-- Aggregate traffic (year) -->
             <span
               class="flex items-center justify-center min-h-8 px-2 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-sm font-medium tabular-nums"
@@ -156,9 +126,6 @@
                 <path
                   d="M12,2.2c-5.4,0-9.8,4.4-9.8,9.8s4.4,9.8,9.8,9.8s9.8-4.4,9.8-9.8S17.4,2.2,12,2.2z M3.8,12c0-4.5,3.7-8.2,8.2-8.2v16.5C7.5,20.2,3.8,16.5,3.8,12z" />
               </svg>
-                <path stroke-linecap="round" stroke-linejoin="round"
-                  d="M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 15V5.25m18 0A2.25 2.25 0 0 0 18.75 3H5.25A2.25 2.25 0 0 0 3 5.25m18 0V12a2.25 2.25 0 0 1-2.25 2.25H5.25A2.25 2.25 0 0 1 3 12V5.25" />
-              </svg>
             </button>
             <!-- Show / hide firewall blocks -->
             <button type="button" @click="toggleFirewallBlocks()"
@@ -190,6 +157,38 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
               </svg>
             </button>
+              </div>
+            </div>
+            <form
+              v-show="passwordChangeOpen"
+              class="flex flex-wrap items-center gap-x-2 gap-y-2 w-full justify-start"
+              @submit.prevent="submitPasswordChange"
+              @click.stop>
+              <span class="text-sm text-gray-600 dark:text-neutral-400 whitespace-nowrap shrink-0">{{ $t('passwordChangeTitle') }}:</span>
+              <label class="sr-only" for="panel-password-new">{{ $t('passwordChangeNew') }}</label>
+              <input
+                id="panel-password-new"
+                v-model="passwordNew"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="$t('passwordChangeNew')"
+                :class="passwordInputClass(passwordFieldError)" />
+              <span class="text-sm text-gray-600 dark:text-neutral-400 whitespace-nowrap shrink-0">{{ $t('passwordChangeConfirm') }}:</span>
+              <label class="sr-only" for="panel-password-confirm">{{ $t('passwordChangeConfirm') }}</label>
+              <input
+                id="panel-password-confirm"
+                v-model="passwordConfirm"
+                type="password"
+                autocomplete="new-password"
+                :placeholder="$t('passwordChangeConfirm')"
+                :class="passwordInputClass(passwordFieldError)" />
+              <button
+                type="submit"
+                :disabled="passwordChangeSubmitting"
+                class="text-sm px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-neutral-600 dark:hover:bg-neutral-500 disabled:opacity-50 transition shrink-0">
+                {{ $t('passwordChangeSubmit') }}
+              </button>
+            </form>
           </div>
         </div>
         <div class="text-sm text-gray-400 dark:text-neutral-400 mb-5"></div>

@@ -927,7 +927,7 @@ new Vue({
       this.passwordFieldError = false;
     },
     passwordInputClass(hasErr) {
-      const base = 'text-sm px-2 py-1 rounded border bg-white dark:bg-neutral-900 text-gray-900 dark:text-neutral-100 w-full';
+      const base = 'text-sm px-2 py-1 rounded border bg-white dark:bg-neutral-900 text-gray-900 dark:text-neutral-100 flex-1 min-w-[7rem] max-w-[16rem]';
       return hasErr
         ? `${base} border-red-500 dark:border-red-500`
         : `${base} border-gray-300 dark:border-neutral-600`;

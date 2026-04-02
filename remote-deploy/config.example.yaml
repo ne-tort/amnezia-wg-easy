@@ -29,5 +29,6 @@ env:
   CERTBOT_EMAIL: "you@example.com"
   ADMIN_USERNAME: "admin"
   ADMIN_PASSWORD: "change-me-strong"
+  LANGUAGE: "ru"
   WG_PORT: 51820
   PORT: 51821

@@ -31,7 +31,21 @@ class API {
       return undefined;
     }
 
-    const json = await res.json();
+    const text = await res.text();
+    let json;
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch (e) {
+      const preview = String(text).replace(/\s+/g, ' ').trim().slice(0, 160);
+      const isHtml = preview.startsWith('<') || preview.toUpperCase().startsWith('<!DOCTYPE');
+      const err = new Error(
+        isHtml
+          ? 'Server returned HTML instead of JSON (check API path and HTTP method).'
+          : `Invalid JSON response: ${preview}`,
+      );
+      err.status = res.status;
+      throw err;
+    }
 
     if (!res.ok) {
       const msg = json.error || json.message || json.statusMessage || res.statusText;
@@ -136,7 +150,7 @@ class API {
 
   async changePassword({ password, passwordConfirm }) {
     return this.call({
-      method: 'patch',
+      method: 'post',
       path: '/me/password',
       body: { password, passwordConfirm },
     });

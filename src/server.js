@@ -19,6 +19,13 @@ async function main() {
     db.appSettings.set('endpoint', `${WG_HOST}:${WG_PORT || '51820'}`);
   }
 
+  // * When LANGUAGE is set in .env (e.g. remote-deploy YAML), sync to app_settings for GET /api/lang.
+  if (process.env.LANGUAGE && String(process.env.LANGUAGE).trim()) {
+    const raw = String(process.env.LANGUAGE).trim().toLowerCase();
+    const code = raw === 'en' || raw === 'english' ? 'en' : (raw === 'ru' || raw === 'russian' ? 'ru' : null);
+    if (code) db.appSettings.set('language', code);
+  }
+
   await ensureFirstAdmin();
   if (db.panelUsers.count() === 0) {
     // eslint-disable-next-line no-console
