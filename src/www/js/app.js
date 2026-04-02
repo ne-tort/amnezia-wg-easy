@@ -515,6 +515,12 @@ new Vue({
         ? this.$t('networkError')
         : this.refreshError;
     },
+    /** Must complete before first refresh() so firewall profile <select> has <option> rows (avoids empty dropdown on first paint). */
+    ensureRuleProfiles() {
+      return this.api.getRuleProfiles()
+        .then((r) => { this.ruleProfiles = Array.isArray(r) ? r : []; })
+        .catch(() => { this.ruleProfiles = []; });
+    },
     login(e) {
       e.preventDefault();
 
@@ -526,6 +532,7 @@ new Vue({
         .then(async () => {
           const session = await this.api.getSession();
           this.authenticated = session.authenticated;
+          await this.ensureRuleProfiles();
           return this.refresh();
         })
         .catch((err) => {
@@ -925,14 +932,12 @@ new Vue({
             this.profileIds = FALLBACK_PROFILE_IDS;
             this.defaultProfile = 'dns';
           });
-        this.api.getRuleProfiles()
-          .then((r) => { this.ruleProfiles = Array.isArray(r) ? r : []; })
-          .catch(() => { this.ruleProfiles = []; });
         this.loadGlobalFirewallRules();
-        this.refresh({
+        return this.ensureRuleProfiles();
+      })
+      .then(() => {
+        return this.refresh({
           updateCharts: this.updateCharts,
-        }).catch((err) => {
-          alert(err.message || err.toString());
         });
       })
       .catch((err) => {
