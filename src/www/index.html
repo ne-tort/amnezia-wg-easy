@@ -72,16 +72,21 @@
     width: 100%;
     max-width: 60rem;
   }
+  .main-content input[type="password"] {
+    color: #111827;
+    caret-color: #111827;
+  }
+  .dark .main-content input[type="password"] {
+    color: #111827;
+    caret-color: #111827;
+  }
 </style>
 
 <body class="bg-gray-50 dark:bg-neutral-800">
   <div id="app">
     <div v-cloak class="main-content mx-auto px-3 md:px-0 mt-4 xs:mt-6">
       <div v-if="authenticated === true">
-        <div class="flex flex-col-reverse xxs:flex-row flex-auto items-center items-end gap-3">
-          <h1 class="text-4xl dark:text-neutral-200 font-medium flex-grow self-start mb-4">
-          </h1>
-          <div class="flex flex-1 flex-col gap-2 w-full min-w-0">
+        <div class="flex flex-col gap-2 w-full min-w-0">
             <div class="flex flex-row flex-wrap items-center justify-between gap-3 w-full">
               <button
                 type="button"
@@ -164,7 +169,7 @@
               class="flex flex-wrap items-center gap-x-2 gap-y-2 w-full justify-start"
               @submit.prevent="submitPasswordChange"
               @click.stop>
-              <span class="text-sm text-gray-600 dark:text-neutral-400 whitespace-nowrap shrink-0">{{ $t('passwordChangeTitle') }}:</span>
+              <span class="text-base font-semibold text-gray-800 dark:text-neutral-200 whitespace-nowrap shrink-0">{{ $t('passwordChangeTitle') }}:</span>
               <label class="sr-only" for="panel-password-new">{{ $t('passwordChangeNew') }}</label>
               <input
                 id="panel-password-new"
@@ -173,7 +178,7 @@
                 autocomplete="new-password"
                 :placeholder="$t('passwordChangeNew')"
                 :class="passwordInputClass(passwordFieldError)" />
-              <span class="text-sm text-gray-600 dark:text-neutral-400 whitespace-nowrap shrink-0">{{ $t('passwordChangeConfirm') }}:</span>
+              <span class="text-base font-semibold text-gray-800 dark:text-neutral-200 whitespace-nowrap shrink-0">{{ $t('passwordChangeConfirmLabel') }}:</span>
               <label class="sr-only" for="panel-password-confirm">{{ $t('passwordChangeConfirm') }}</label>
               <input
                 id="panel-password-confirm"
@@ -189,7 +194,6 @@
                 {{ $t('passwordChangeSubmit') }}
               </button>
             </form>
-          </div>
         </div>
         <div class="text-sm text-gray-400 dark:text-neutral-400 mb-5"></div>
         <div v-if="latestRelease"
