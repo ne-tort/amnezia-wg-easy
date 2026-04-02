@@ -24,6 +24,23 @@ ENV_EXAMPLE = REPO_ROOT / ".env.example"
 
 ENV_SUBST_PATTERN = re.compile(r"\$\{ENV:([^}]+)\}")
 
+
+def _safe_write(stream: Any, text: str) -> None:
+    """Avoid UnicodeEncodeError on Windows consoles when remote output has non-ASCII."""
+    if not text:
+        return
+    if not text.endswith("\n"):
+        text += "\n"
+    enc = getattr(stream, "encoding", None) or "utf-8"
+    buf = getattr(stream, "buffer", None)
+    try:
+        if buf is not None:
+            buf.write(text.encode(enc, errors="replace"))
+        else:
+            stream.write(text.encode(enc, errors="replace").decode(enc, errors="replace"))
+    except OSError:
+        stream.write(text.encode("ascii", errors="replace").decode("ascii"))
+
 # Paths excluded when packing local source (relative to repo root)
 TAR_EXCLUDE_NAMES = {
     ".git",
@@ -361,7 +378,7 @@ rm -f {tq}
             dry_run=False,
         )
         if code != 0:
-            print(err or out, file=sys.stderr)
+            _safe_write(sys.stderr, err or out)
             sys.exit(f"docker compose down failed with exit {code}")
 
         dp = shlex.quote(f"{remote_path}/deploy.sh")
@@ -370,9 +387,9 @@ rm -f {tq}
             f"chmod +x {dp} && cd {wd} && ./deploy.sh",
             dry_run=False,
         )
-        print(out)
+        _safe_write(sys.stdout, out)
         if err:
-            print(err, file=sys.stderr)
+            _safe_write(sys.stderr, err)
         if code != 0:
             sys.exit(f"deploy.sh exited with {code}")
 
