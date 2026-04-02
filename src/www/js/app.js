@@ -1064,6 +1064,11 @@ new Vue({
     qrcodeModalVisible() {
       return this.qrcodeText != null;
     },
+    /** Safe for Vue 2 template (avoids ReferenceError if stale cached app.js lacks data key). */
+    amneziaQrImages() {
+      const q = this.qrcodeAmneziaSvgs;
+      return Array.isArray(q) ? q : [];
+    },
     chartOptionsTX() {
       const opts = {
         ...this.chartOptions,
