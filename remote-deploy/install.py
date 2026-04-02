@@ -301,9 +301,9 @@ def main() -> None:
     remote_path = cfg.get("remote", {}).get("path", "/opt/amnezia-wg-easy")
     remote_path = remote_path.rstrip("/")
 
-    print(f"Using config: {config_path}")
-    print("--- Rendered .env (secrets masked in dry-run / log) ---")
-    print(mask_env_for_print(env_body))
+    print(f"Using config: {config_path}", flush=True)
+    print("--- Rendered .env (secrets masked in dry-run / log) ---", flush=True)
+    print(mask_env_for_print(env_body), flush=True)
 
     source = cfg.get("source") or {}
     mode = (source.get("mode") or "git").lower()
