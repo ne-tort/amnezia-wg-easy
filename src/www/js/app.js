@@ -91,6 +91,13 @@ new Vue({
     authenticating: false,
     username: null,
     password: null,
+    panelUsername: null,
+    passwordChangeOpen: false,
+    passwordNew: '',
+    passwordConfirm: '',
+    passwordFieldError: false,
+    passwordChangeSubmitting: false,
+    passwordErrorClearTimer: null,
 
     clients: null,
     clientsPersist: {},
@@ -532,6 +539,7 @@ new Vue({
         .then(async () => {
           const session = await this.api.getSession();
           this.authenticated = session.authenticated;
+          this.syncPanelUserFromSession(session);
           await this.ensureRuleProfiles();
           return this.refresh();
         })
@@ -823,6 +831,7 @@ new Vue({
         .then(() => {
           this.authenticated = false;
           this.clients = null;
+          this.clearPasswordChangeUi();
         })
         .catch((err) => {
           alert(err.message || err.toString());
@@ -903,6 +912,64 @@ new Vue({
       this.firewallBlocksVisible = !this.firewallBlocksVisible;
       localStorage.setItem('firewallBlocksVisible', this.firewallBlocksVisible ? '1' : '0');
     },
+    syncPanelUserFromSession(session) {
+      this.panelUsername = session && session.authenticated ? (session.username || null) : null;
+    },
+    clearPasswordChangeUi() {
+      if (this.passwordErrorClearTimer) {
+        clearTimeout(this.passwordErrorClearTimer);
+        this.passwordErrorClearTimer = null;
+      }
+      this.panelUsername = null;
+      this.passwordChangeOpen = false;
+      this.passwordNew = '';
+      this.passwordConfirm = '';
+      this.passwordFieldError = false;
+    },
+    passwordInputClass(hasErr) {
+      const base = 'text-sm px-2 py-1 rounded border bg-white dark:bg-neutral-900 text-gray-900 dark:text-neutral-100 w-full';
+      return hasErr
+        ? `${base} border-red-500 dark:border-red-500`
+        : `${base} border-gray-300 dark:border-neutral-600`;
+    },
+    togglePasswordChangeOpen() {
+      this.passwordChangeOpen = !this.passwordChangeOpen;
+    },
+    passwordChangeErrorMessage(err) {
+      const c = err && err.code;
+      if (c === 'PASSWORD_TOO_SHORT') return this.$t('passwordErrTooShort');
+      if (c === 'PASSWORD_TOO_LONG') return this.$t('passwordErrTooLong');
+      if (c === 'PASSWORD_MISMATCH') return this.$t('passwordErrMismatch');
+      return (err && err.message) || String(err);
+    },
+    submitPasswordChange() {
+      if (this.passwordChangeSubmitting) return;
+      if (this.passwordErrorClearTimer) {
+        clearTimeout(this.passwordErrorClearTimer);
+        this.passwordErrorClearTimer = null;
+      }
+      this.passwordFieldError = false;
+      this.passwordChangeSubmitting = true;
+      this.api.changePassword({ password: this.passwordNew, passwordConfirm: this.passwordConfirm })
+        .then(() => {
+          this.passwordNew = '';
+          this.passwordConfirm = '';
+          alert(this.$t('passwordChangedOk'));
+        })
+        .catch((err) => {
+          if (err.status === 400) {
+            this.passwordFieldError = true;
+            this.passwordErrorClearTimer = setTimeout(() => {
+              this.passwordFieldError = false;
+              this.passwordErrorClearTimer = null;
+            }, 3000);
+          }
+          alert(this.passwordChangeErrorMessage(err));
+        })
+        .finally(() => {
+          this.passwordChangeSubmitting = false;
+        });
+    },
   },
   filters: {
     bytes,
@@ -923,6 +990,7 @@ new Vue({
     this.api.getSession()
       .then((session) => {
         this.authenticated = session.authenticated;
+        this.syncPanelUserFromSession(session);
         this.api.getSignaturesProfiles()
           .then((r) => {
             this.profileIds = r && r.profileIds ? r.profileIds : FALLBACK_PROFILE_IDS;

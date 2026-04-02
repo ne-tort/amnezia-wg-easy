@@ -34,10 +34,10 @@ class API {
     const json = await res.json();
 
     if (!res.ok) {
-      const msg = json.error || json.message || res.statusText;
+      const msg = json.error || json.message || json.statusMessage || res.statusText;
       const err = new Error(msg);
       err.status = res.status;
-      err.code = json.code;
+      err.code = json.code || (json.data && json.data.code);
       throw err;
     }
 
@@ -131,6 +131,14 @@ class API {
     return this.call({
       method: 'delete',
       path: '/session',
+    });
+  }
+
+  async changePassword({ password, passwordConfirm }) {
+    return this.call({
+      method: 'patch',
+      path: '/me/password',
+      body: { password, passwordConfirm },
     });
   }
 

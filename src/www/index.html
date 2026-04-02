@@ -82,6 +82,45 @@
           <h1 class="text-4xl dark:text-neutral-200 font-medium flex-grow self-start mb-4">
           </h1>
           <div class="flex items-center grow-0 gap-3 items-end self-end xxs:self-center">
+            <!-- Panel user + password change -->
+            <div class="flex flex-col items-end gap-1">
+              <button
+                type="button"
+                @click="togglePasswordChangeOpen"
+                class="flex items-center justify-center min-h-8 max-w-[11rem] px-3 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-sm font-medium truncate transition hover:bg-gray-300 dark:hover:bg-neutral-600"
+                :title="$t('passwordChangeToggleHint')">
+                {{ panelUsername || '—' }}
+              </button>
+              <form
+                v-show="passwordChangeOpen"
+                class="flex flex-col gap-1 items-stretch w-[min(100%,14rem)]"
+                @submit.prevent="submitPasswordChange"
+                @click.stop>
+                <span class="text-xs text-gray-600 dark:text-neutral-400 leading-tight">{{ $t('passwordChangeTitle') }}</span>
+                <label class="sr-only" for="panel-password-new">{{ $t('passwordChangeNew') }}</label>
+                <input
+                  id="panel-password-new"
+                  v-model="passwordNew"
+                  type="password"
+                  autocomplete="new-password"
+                  :placeholder="$t('passwordChangeNew')"
+                  :class="passwordInputClass(passwordFieldError)" />
+                <label class="sr-only" for="panel-password-confirm">{{ $t('passwordChangeConfirm') }}</label>
+                <input
+                  id="panel-password-confirm"
+                  v-model="passwordConfirm"
+                  type="password"
+                  autocomplete="new-password"
+                  :placeholder="$t('passwordChangeConfirm')"
+                  :class="passwordInputClass(passwordFieldError)" />
+                <button
+                  type="submit"
+                  :disabled="passwordChangeSubmitting"
+                  class="text-sm px-2 py-1 rounded bg-gray-200 hover:bg-gray-300 dark:bg-neutral-600 dark:hover:bg-neutral-500 disabled:opacity-50 transition">
+                  {{ $t('passwordChangeSubmit') }}
+                </button>
+              </form>
+            </div>
             <!-- Aggregate traffic (year) -->
             <span
               class="flex items-center justify-center min-h-8 px-2 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-sm font-medium tabular-nums"

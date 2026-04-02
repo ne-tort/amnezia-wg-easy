@@ -117,14 +117,16 @@ module.exports = class Server {
         const session = event.node.req.session;
         let authenticated = false;
         let role = null;
+        let username = null;
         if (session?.userId) {
           const user = db.panelUsers.findById(session.userId);
           if (user && user.is_active) {
             authenticated = true;
             role = user.role ?? null;
+            username = user.username ?? null;
           }
         }
-        return { authenticated, role };
+        return { authenticated, role, username };
       }))
       .post('/api/session', defineEventHandler(async (event) => {
         const body = await readBody(event);
@@ -147,7 +149,7 @@ module.exports = class Server {
         event.node.req.session.save();
         db.panelUsers.updateLastLogin(user.id, Math.floor(Date.now() / 1000));
         debug('Session: user %s', user.username);
-        return { success: true, role: user.role };
+        return { success: true, role: user.role, username: user.username };
       }));
 
     app.use(
@@ -179,6 +181,42 @@ module.exports = class Server {
         event.node.req.session.destroy();
 
         debug(`Deleted Session: ${sessionId}`);
+        return { success: true };
+      }))
+      .patch('/api/me/password', defineEventHandler(async (event) => {
+        const userId = event.node.req.session?.userId;
+        const user = userId ? db.panelUsers.findById(userId) : null;
+        if (!user || !user.is_active) {
+          throw createError({ status: 401, message: 'Not authenticated' });
+        }
+        const body = await readBody(event);
+        const password = typeof body.password === 'string' ? body.password : '';
+        const passwordConfirm = typeof body.passwordConfirm === 'string' ? body.passwordConfirm : '';
+        const minLen = 5;
+        const maxLen = 256;
+        if (password.length < minLen) {
+          throw createError({
+            status: 400,
+            message: `Password must be at least ${minLen} characters`,
+            data: { code: 'PASSWORD_TOO_SHORT' },
+          });
+        }
+        if (password.length > maxLen) {
+          throw createError({
+            status: 400,
+            message: `Password must be at most ${maxLen} characters`,
+            data: { code: 'PASSWORD_TOO_LONG' },
+          });
+        }
+        if (password !== passwordConfirm) {
+          throw createError({
+            status: 400,
+            message: 'Passwords do not match',
+            data: { code: 'PASSWORD_MISMATCH' },
+          });
+        }
+        const password_hash = await auth.hashPassword(password);
+        db.panelUsers.updatePasswordHash(user.id, password_hash);
         return { success: true };
       }))
       .get('/api/wireguard/client', defineEventHandler(() => WireGuard.getClients()))

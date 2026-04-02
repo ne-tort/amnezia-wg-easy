@@ -63,6 +63,11 @@ function panelUsersCount() {
   return getDb().prepare('SELECT COUNT(*) AS n FROM panel_users').get().n;
 }
 
+function panelUsersUpdatePasswordHash(id, password_hash) {
+  const now = Math.floor(Date.now() / 1000);
+  getDb().prepare('UPDATE panel_users SET password_hash = ?, updated_at = ? WHERE id = ?').run(password_hash, now, id);
+}
+
 // * Server config (singleton)
 function serverConfigGet() {
   return getDb().prepare('SELECT * FROM server_config WHERE id = 1').get();
@@ -450,6 +455,7 @@ module.exports = {
     create: panelUsersCreate,
     updateLastLogin: panelUsersUpdateLastLogin,
     count: panelUsersCount,
+    updatePasswordHash: panelUsersUpdatePasswordHash,
   },
   serverConfig: {
     get: serverConfigGet,

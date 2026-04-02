@@ -293,6 +293,11 @@ def main() -> None:
             f"cd {remote_path} && docker compose -f docker-compose.yml --profile letsencrypt down --remove-orphans"
         )
         print(f"  5. Run: cd {remote_path} && chmod +x deploy.sh && ./deploy.sh")
+        print(
+            f"  6. Sync panel admin password from .env: "
+            f"docker compose -f docker-compose.yml exec -T amnezia-wg-easy "
+            f"node scripts/applyAdminPasswordFromEnv.js"
+        )
         return
 
     client = connect_ssh(cfg)
@@ -392,6 +397,20 @@ rm -f {tq}
             _safe_write(sys.stderr, err)
         if code != 0:
             sys.exit(f"deploy.sh exited with {code}")
+
+        code, out, err = run_remote(
+            client,
+            f"cd {wd} && docker compose -f docker-compose.yml exec -T amnezia-wg-easy node scripts/applyAdminPasswordFromEnv.js",
+            dry_run=False,
+        )
+        _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code != 0:
+            sys.exit(
+                f"applyAdminPasswordFromEnv.js exited with {code} "
+                "(check ADMIN_USERNAME matches an active panel user; see stderr above)"
+            )
 
         wg_port = merged.get("WG_PORT", "51820")
         panel = merged.get("PANEL_DOMAIN") or merged.get("WG_HOST", "")
