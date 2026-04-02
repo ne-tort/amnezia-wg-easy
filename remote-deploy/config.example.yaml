@@ -1,0 +1,33 @@
+# Copy to config.yaml and adjust. Do not commit secrets (see .gitignore).
+
+ssh:
+  host: "203.0.113.10"
+  port: 22
+  user: "root"
+  # Prefer key auth:
+  identity_file: "~/.ssh/id_ed25519"
+  # Or password (or use env: ssh_password_env below)
+  # password: "secret"
+
+  # If set, read SSH password from this environment variable on the operator machine
+  # ssh_password_env: "AMNEZIA_SSH_PASSWORD"
+
+source:
+  mode: "git" # "git" | "local"
+  git_url: "https://github.com/your-org/amnezia-wg-easy.git"
+  branch: "master"
+  # For mode: local — path to repo root (default: parent of remote-deploy/)
+  # local_path: ".."
+
+remote:
+  path: "/opt/amnezia-wg-easy"
+
+# Merged into .env on the server (see ../.env.example for all keys).
+env:
+  WG_HOST: "203.0.113.10"
+  PANEL_DOMAIN: "panel.example.com"
+  CERTBOT_EMAIL: "you@example.com"
+  ADMIN_USERNAME: "admin"
+  ADMIN_PASSWORD: "change-me-strong"
+  WG_PORT: 51820
+  PORT: 51821

@@ -9,6 +9,14 @@ FROM docker.io/library/node:20-alpine AS build_node_modules
 
 RUN npm install -g npm@latest
 
+# better-sqlite3 при отсутствии prebuild падает в сборку через node-gyp,
+# которому нужен Python и toolchain.
+RUN for i in 1 2 3 4 5; do \
+  apk add --no-cache --virtual .gyp-deps python3 make g++ && break; \
+  echo "[build_node_modules] apk add build deps failed, retry $i/5..." >&2; \
+  sleep 2; \
+done
+
 COPY src /app
 WORKDIR /app
 RUN npm ci --omit=dev && \
@@ -32,23 +40,31 @@ HEALTHCHECK CMD /usr/bin/timeout 5s /bin/sh -c "/usr/bin/wg show awg0 >/dev/null
 #   Changing src/ or python_signatures then only re-copies artifacts, not re-downloads packages.
 RUN mkdir -p /app /opt/amnezia/awg
 
-RUN apk add --no-cache \
-    nodejs \
-    npm
+# Alpine apk иногда падает из-за временных проблем с загрузкой индексов.
+# Добавляем небольшой retry, чтобы сборка была стабильнее.
+RUN for i in 1 2 3 4 5; do \
+    apk add --no-cache nodejs npm && break; \
+    echo "[panel] apk add nodejs/npm failed, retry $i/5..." >&2; \
+    sleep 2; \
+done
 
 # * Runtime Python and DNS/tooling; nftables for firewall backend (FIREWALL_BACKEND=nftables).
-RUN apk add --no-cache \
-    bind-tools \
-    dpkg \
-    dumb-init \
-    dnsmasq \
-    iptables \
-    nftables \
-    python3 \
-    py3-pip \
-    tcpdump \
-    curl \
-    openssl
+RUN for i in 1 2 3 4 5; do \
+    apk add --no-cache \
+      bind-tools \
+      dpkg \
+      dumb-init \
+      dnsmasq \
+      iptables \
+      nftables \
+      python3 \
+      py3-pip \
+      tcpdump \
+      curl \
+      openssl && break; \
+    echo "[panel] apk add runtime tools failed, retry $i/5..." >&2; \
+    sleep 2; \
+done
 
 COPY --from=pybuilder /build/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --break-system-packages -r /app/requirements.txt

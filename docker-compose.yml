@@ -67,8 +67,10 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      PANEL_DOMAIN: ${PANEL_DOMAIN:-panel.ai-qwerty.ru}
+      # Leave empty by default to allow self-signed cert to match WG_HOST in nginx entrypoint.
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
       PANEL_PORT: ${PORT:-51821}
+      WG_HOST: ${WG_HOST:-}
     volumes:
       - certbot_conf:/etc/letsencrypt
       - certbot_www:/var/www/certbot:ro
@@ -78,6 +80,8 @@ services:
       - default
 
   certbot:
+    profiles:
+      - letsencrypt
     build:
       context: certbot
       dockerfile: Dockerfile

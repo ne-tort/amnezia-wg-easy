@@ -29,7 +29,9 @@ issue_first() {
 }
 
 if [ -z "$PANEL_DOMAIN" ] || [ -z "$CERTBOT_EMAIL" ]; then
-  echo "PANEL_DOMAIN and CERTBOT_EMAIL must be set. Skipping first-time issue."
+  echo "PANEL_DOMAIN and CERTBOT_EMAIL must be set. Certbot is disabled (nginx self-signed will be used until configuration is provided)."
+  # Keep container running to avoid noisy restarts; do not attempt any certbot operations.
+  while :; do sleep 12h; done
 elif ! is_letsencrypt_cert; then
   # Remove self-signed or stale cert so certbot can create LE structure (archive + symlinks).
   rm -rf "$LIVE_DIR" "$ARCHIVE_DIR"

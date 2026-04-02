@@ -1,17 +1,17 @@
 #!/bin/bash
 # Open firewall ports for Amnezia WG-Easy (run on host, with sudo if needed).
-# Ports are read from .env in project root; defaults: WG_PORT=41194, PORT=51821.
+# Ports are read from .env in project root; defaults: WG_PORT=51820, PORT=51821.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${SCRIPT_DIR}/../.env"
-WG_PORT=41194
+WG_PORT=51820
 PORT=51821
 
 if [ -f "$ENV_FILE" ]; then
   . "$ENV_FILE" 2>/dev/null || true
 fi
-WG_PORT="${WG_PORT:-41194}"
+WG_PORT="${WG_PORT:-51820}"
 PORT="${PORT:-51821}"
 
 echo "Opening UDP ${WG_PORT} (VPN) and TCP ${PORT} (Web UI)..."
