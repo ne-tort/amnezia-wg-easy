@@ -104,15 +104,18 @@ if [ -z "$CURRENT_DNS" ]; then
   echo "[deploy] WG_DEFAULT_DNS set to ${WG_GW} (Amnezia DNS enabled)"
 fi
 
-# HTTPS: self-signed (no certbot) for empty / 127.0.0.1 / localhost PANEL_DOMAIN.
-# Let's Encrypt + certbot only when PANEL_DOMAIN is a real hostname and CERTBOT_EMAIL is set.
+# HTTPS: self-signed (no certbot) for empty / 127.0.0.1 / localhost / plain IPv4 (no ACME for IP).
+# Let's Encrypt + certbot when PANEL_DOMAIN is a DNS name and CERTBOT_EMAIL is set.
 is_panel_local() {
   local p
   p=$(echo "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   case "$p" in
     ""|127.0.0.1|localhost) return 0 ;;
-    *) return 1 ;;
   esac
+  if echo "$p" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
+    return 0
+  fi
+  return 1
 }
 
 is_valid_certbot_email() {
@@ -132,7 +135,7 @@ if is_panel_local "$PANEL_FOR_TLS"; then
   COMPOSE_TLS_ARGS=()
   echo "[deploy] HTTPS: self-signed (certbot service not started)"
 elif ! is_valid_certbot_email "$CERTBOT_EMAIL_FOR_TLS"; then
-  echo "[deploy] ERROR: PANEL_DOMAIN points to a hostname (not 127.0.0.1 or localhost). Set CERTBOT_EMAIL in $ENV_WORKING for Let's Encrypt (a real mailbox you control)."
+  echo "[deploy] ERROR: PANEL_DOMAIN is a DNS name (not localhost/IPv4). Set CERTBOT_EMAIL in $ENV_WORKING for Let's Encrypt (a real mailbox you control)."
   exit 1
 else
   COMPOSE_TLS_ARGS=(--profile letsencrypt)
