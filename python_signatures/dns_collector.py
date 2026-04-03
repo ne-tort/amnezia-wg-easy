@@ -4,6 +4,10 @@ DNS signature collector.
 Builds real DNS queries in wire format (RFC 1035) for configured domains and
 emits them as AmneziaWG-compatible `<b 0x...>` signatures (I1 payloads).
 
+Config:
+  - mode: "query" (client query wire, default) or "response" (full resolver reply).
+  - use_edns: if true (default), add EDNS0 (RFC 6891) — typical for resolvers/clients.
+
 Requires:
     pip install dnspython
 """
@@ -38,9 +42,13 @@ class DnsSignatureCollector(SignatureCollector):
     if not isinstance(domains, list) or not all(isinstance(d, str) for d in domains):
       raise RuntimeError("Config must contain \"domains\": [\"example.com\", ...].")
 
-    mode = (cfg.get("mode") or "response").lower()
+    mode = (cfg.get("mode") or "query").lower()
     if mode not in {"response", "query"}:
       raise RuntimeError("Config field \"mode\" must be \"response\" or \"query\" if set.")
+
+    use_edns = cfg.get("use_edns", True)
+    if not isinstance(use_edns, bool):
+      use_edns = str(use_edns).lower() in ("1", "true", "yes")
 
     rtype_str = (cfg.get("record_type") or "A").upper()
     try:
@@ -58,11 +66,12 @@ class DnsSignatureCollector(SignatureCollector):
       if len(signatures) >= limit:
         break
 
-      # Build a standard DNS query message.
+      # Build a standard DNS query message (optional EDNS0 for realistic size/shape).
       msg = dns.message.make_query(
         qname=domain.rstrip("."),
         rdtype=rtype,
         rdclass=dns.rdataclass.IN,
+        use_edns=use_edns,
       )
       if mode == "query":
         wire = msg.to_wire()
@@ -85,7 +94,12 @@ class DnsSignatureCollector(SignatureCollector):
       alt_name = "google.com"
       if domain.rstrip(".").lower() == alt_name:
         alt_name = "cloudflare.com"
-      msg2 = dns.message.make_query(alt_name, rdtype=rtype, rdclass=dns.rdataclass.IN)
+      msg2 = dns.message.make_query(
+        alt_name,
+        rdtype=rtype,
+        rdclass=dns.rdataclass.IN,
+        use_edns=use_edns,
+      )
       if mode == "query":
         wire2 = msg2.to_wire()
       else:

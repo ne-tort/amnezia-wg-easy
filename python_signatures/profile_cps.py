@@ -10,17 +10,23 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-# * Habr / AmneziaWG 2.0 examples: second QUIC-like fragment after Initial (magic + t + rc + r).
-_QUIC_I2_TEMPLATE = "<b 0xf6ab3267fa><t><rc 20><r 80>"
+# * Habr / AmneziaWG 2.0: QUIC v1 Initial-like CPS + second fragment (blog example).
+QUIC_CPS_I1_HABR = "<b 0xc700000001><rc 8><t><r 100>"
+QUIC_CPS_I2_HABR = "<b 0xf6ab3267fa><t><rc 20><r 80>"
+
+# * Second DNS wire when collector did not run: A query for example.com with EDNS0 (40 B), realistic client.
+_DNS_FALLBACK_I2_WIRE = (
+    "ad3801000001000000000001076578616d706c6503636f6d000001000100002904d0000000000000"
+)
 
 # * Profile-specific fallbacks (I1 comes from collector "hex").
 PROFILE_DEFAULTS: Dict[str, Dict[str, str]] = {
     "dns": {
-        "i2": "<rc 32><r 72>",
+        "i2": f"<b 0x{_DNS_FALLBACK_I2_WIRE}>",
         "i3": "<t>",
     },
     "quic": {
-        "i2": _QUIC_I2_TEMPLATE,
+        "i2": QUIC_CPS_I2_HABR,
         "i3": "<t>",
     },
     "stun": {
@@ -36,7 +42,8 @@ PROFILE_DEFAULTS: Dict[str, Dict[str, str]] = {
         "i3": "<t>",
     },
     "dtls": {
-        "i2": "<b 0x14feff0000000000000000000000><r 96>",
+        # Handshake record (0x16), DTLS 1.2 (0xfefd), not ChangeCipherSpec (0x14).
+        "i2": "<b 0x16fefd0000000000000000000000><r 96>",
         "i3": "<t>",
     },
 }

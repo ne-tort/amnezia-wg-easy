@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
+from python_signatures.profile_cps import QUIC_CPS_I1_HABR, QUIC_CPS_I2_HABR
 
 try:
     from python_signatures.capture import (
@@ -105,23 +106,17 @@ class QuicSignatureCollector(SignatureCollector):
         signatures: List[Dict[str, Any]] = []
 
         if self.options.dry_run:
+            # CPS from Habr / AmneziaWG 2.0 (QUIC-like), not URL bytes — those are not QUIC Initial.
             for url in urls:
                 if len(signatures) >= limit:
                     break
-                payload = url.encode("utf-8")
-                if len(payload) > 200:
-                    payload = payload[:200]
-                alt = (url + "/").encode("utf-8")
-                if len(alt) > 200:
-                    alt = alt[:200]
                 entry: Dict[str, Any] = {
                     "protocol": self.protocol_name,
                     "target": url,
                     "direction": "client",
-                    "hex": self.format_signature(payload),
+                    "hex": QUIC_CPS_I1_HABR,
+                    "i2": QUIC_CPS_I2_HABR,
                 }
-                if alt != payload:
-                    entry["i2"] = self.format_signature(alt)
                 signatures.append(entry)
             return signatures
 

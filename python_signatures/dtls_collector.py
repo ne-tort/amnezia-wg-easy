@@ -25,8 +25,9 @@ except ImportError:
     CaptureError = RuntimeError  # type: ignore[misc, assignment]
     capture_udp_payloads_with_trigger = None  # type: ignore[misc, assignment]
 
-# * Minimal placeholder: not a full ClientHello, just a recognizable prefix for dry-run.
-DTLS_PLACEHOLDER = bytes.fromhex("16feff000000000000000000")
+# * DTLS 1.2 record layer (RFC 6347): Handshake 0x16, version 0xfe 0xfd — not DTLS 1.0 0xfe 0xff.
+# * Minimal placeholder (not a full ClientHello); live capture uses full openssl flight.
+DTLS_PLACEHOLDER = bytes.fromhex("16fefd0000000000000000000000")
 
 
 def _parse_target(target: str) -> tuple[str, int]:
@@ -123,7 +124,8 @@ class DtlsSignatureCollector(SignatureCollector):
             for target in targets:
                 if len(signatures) >= limit:
                     break
-                tail = DTLS_PLACEHOLDER + os.urandom(24)
+                # Second outgoing fragment: same record type (handshake), extra entropy (not CCS 0x14).
+                tail = DTLS_PLACEHOLDER + os.urandom(48)
                 entry: Dict[str, Any] = {
                     "protocol": self.protocol_name,
                     "target": target,

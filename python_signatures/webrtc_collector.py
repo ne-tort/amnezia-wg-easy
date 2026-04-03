@@ -14,7 +14,7 @@ from typing import Any, Dict, List
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
 from python_signatures.stun_collector import (
-    _capture_stun_packet,
+    _binding_success_xor_mapped,
     _capture_stun_request_response,
 )
 
@@ -62,13 +62,13 @@ class WebrtcSignatureCollector(SignatureCollector):
                     break
                 tid = os.urandom(12)
                 req = bytes.fromhex("000100002112a442") + tid
-                resp_hdr = bytes.fromhex("010100002112a442") + tid
+                resp = _binding_success_xor_mapped(tid)
                 entry: Dict[str, Any] = {
                     "protocol": self.protocol_name,
                     "target": server,
                     "direction": "client",
                     "hex": self.format_signature(req),
-                    "i2": self.format_signature(resp_hdr + os.urandom(8)),
+                    "i2": self.format_signature(resp),
                 }
                 signatures.append(entry)
             return signatures
@@ -77,27 +77,16 @@ class WebrtcSignatureCollector(SignatureCollector):
             if len(signatures) >= limit:
                 break
             try:
-                if use_response:
-                    payload = _capture_stun_packet(server, True, iface, timeout)
-                    signatures.append(
-                        {
-                            "protocol": self.protocol_name,
-                            "target": server,
-                            "direction": direction,
-                            "hex": self.format_signature(payload),
-                        }
-                    )
-                else:
-                    req_b, resp_b = _capture_stun_request_response(server, iface, timeout)
-                    entry = {
-                        "protocol": self.protocol_name,
-                        "target": server,
-                        "direction": direction,
-                        "hex": self.format_signature(req_b),
-                    }
-                    if resp_b:
-                        entry["i2"] = self.format_signature(resp_b)
-                    signatures.append(entry)
+                req_b, resp_b = _capture_stun_request_response(server, iface, timeout)
+                entry = {
+                    "protocol": self.protocol_name,
+                    "target": server,
+                    "direction": "server" if use_response else "client",
+                    "hex": self.format_signature(req_b),
+                }
+                if resp_b:
+                    entry["i2"] = self.format_signature(resp_b)
+                signatures.append(entry)
             except (CaptureError, OSError) as e:
                 raise RuntimeError(f"WebRTC (STUN) capture failed for {server}: {e}") from e
 

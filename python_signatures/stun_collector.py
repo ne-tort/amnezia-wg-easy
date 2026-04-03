@@ -3,15 +3,16 @@ STUN signature collector.
 
 - With `--dry-run` or when capture is unavailable: emits minimal STUN Binding
   Request payloads (synthetic) as used in Node obfuscation profiles.
-- Without `--dry-run`: sends a real STUN Binding Request and captures traffic;
-  uses either the first outgoing (client) or first incoming (server) packet as
-  l1, according to config \"use_response\": true|false (default: client request).
+- Without `--dry-run`: sends a Binding Request and captures outgoing (I1) and
+  first server reply (I2). Config \"use_response\" only affects the stored
+  direction label on the entry.
 """
 
 from __future__ import annotations
 
 import os
 import socket
+import struct
 from typing import Any, Dict, List
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
@@ -27,6 +28,14 @@ except ImportError:
 
 # * Minimal STUN Binding Request (type 0x0001, length 0, magic 0x2112A442 + 12-byte tid).
 STUN_BINDING_REQUEST = bytes.fromhex("000100002112a442") + os.urandom(12)
+
+
+def _binding_success_xor_mapped(tid: bytes) -> bytes:
+    """RFC 5389 Binding Success with XOR-MAPPED-ADDRESS (IPv4-shaped 8-byte value)."""
+    xval = bytes([0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+    attr = struct.pack(">HH", 0x0020, 8) + xval
+    mlen = len(attr)
+    return struct.pack(">HHI", 0x0101, mlen, 0x2112A442) + tid + attr
 
 
 def _parse_server(server: str) -> tuple[str, int]:
@@ -64,31 +73,6 @@ def _send_stun_binding_request(host: str, port: int) -> None:
         sock.recv(1024)
     finally:
         sock.close()
-
-
-def _capture_stun_packet(
-    server: str,
-    use_response: bool,
-    iface: str | None,
-    timeout: int,
-) -> bytes:
-    """Single packet: client request (default) or server response (use_response)."""
-    if not use_response:
-        req, _resp = _capture_stun_request_response(server, iface, timeout)
-        return req
-    host, port = _parse_server(server)
-    host_ip = _resolve_host(host, port)
-    local_ip = _get_local_ip_for_target(host_ip, port)
-    bpf = f"udp and host {host_ip} and port {port}"
-
-    def trigger() -> None:
-        _send_stun_binding_request(host_ip, port)
-
-    packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
-    for payload, src_ip, _sport, _dst_ip, _dport in packets:
-        if src_ip != local_ip and len(payload) >= 4:
-            return payload
-    raise CaptureError("No STUN response packet found in capture.")
 
 
 def _capture_stun_request_response(
@@ -153,13 +137,13 @@ class StunSignatureCollector(SignatureCollector):
                     break
                 tid = os.urandom(12)
                 req = bytes.fromhex("000100002112a442") + tid
-                resp_hdr = bytes.fromhex("010100002112a442") + tid
+                resp = _binding_success_xor_mapped(tid)
                 entry: Dict[str, Any] = {
                     "protocol": self.protocol_name,
                     "target": server,
                     "direction": "client",
                     "hex": self.format_signature(req),
-                    "i2": self.format_signature(resp_hdr + os.urandom(8)),
+                    "i2": self.format_signature(resp),
                 }
                 signatures.append(entry)
             return signatures
@@ -168,27 +152,17 @@ class StunSignatureCollector(SignatureCollector):
             if len(signatures) >= limit:
                 break
             try:
-                if use_response:
-                    payload = _capture_stun_packet(server, True, iface, timeout)
-                    signatures.append(
-                        {
-                            "protocol": self.protocol_name,
-                            "target": server,
-                            "direction": direction,
-                            "hex": self.format_signature(payload),
-                        }
-                    )
-                else:
-                    req_b, resp_b = _capture_stun_request_response(server, iface, timeout)
-                    entry = {
-                        "protocol": self.protocol_name,
-                        "target": server,
-                        "direction": direction,
-                        "hex": self.format_signature(req_b),
-                    }
-                    if resp_b:
-                        entry["i2"] = self.format_signature(resp_b)
-                    signatures.append(entry)
+                # Always Binding Request (I1) then server reply (I2) — Habr order; use_response only affects label.
+                req_b, resp_b = _capture_stun_request_response(server, iface, timeout)
+                entry = {
+                    "protocol": self.protocol_name,
+                    "target": server,
+                    "direction": "server" if use_response else "client",
+                    "hex": self.format_signature(req_b),
+                }
+                if resp_b:
+                    entry["i2"] = self.format_signature(resp_b)
+                signatures.append(entry)
             except (CaptureError, OSError) as e:
                 raise RuntimeError(f"STUN capture failed for {server}: {e}") from e
 

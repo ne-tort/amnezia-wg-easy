@@ -1,10 +1,13 @@
 """
 SIP signature collector.
 
-- With `--dry-run`: emits a minimal synthetic SIP OPTIONS request as l1.
-- Without `--dry-run`: sends a real SIP OPTIONS to each server and captures
-  the first outgoing UDP packet as l1. Config may set \"use_response\": true
-  to use the first incoming (server) packet instead.
+- With `--dry-run`: synthetic SIP requests (OPTIONS / REGISTER / INVITE) + minimal 200 OK for I2.
+- Without `--dry-run`: sends UDP SIP to each server, captures first outgoing (I1) and first
+  incoming (I2) datagram in one flow.
+
+Config:
+  - method: OPTIONS (default), REGISTER, or INVITE (RFC 3261-shaped text).
+  - use_response: legacy; only sets \"direction\" label — I1 is always request, I2 is response.
 """
 
 from __future__ import annotations
@@ -26,19 +29,68 @@ except ImportError:
 
 
 def _minimal_sip_options(host: str, port: int) -> bytes:
-    """Build minimal SIP OPTIONS request for wire capture placeholder."""
+    """Minimal SIP OPTIONS request."""
     branch = "z9hG4bK" + os.urandom(8).hex()
     return (
         f"OPTIONS sip:{host} SIP/2.0\r\n"
         f"Via: SIP/2.0/UDP 127.0.0.1:5060;branch={branch}\r\n"
         "Max-Forwards: 70\r\n"
         "From: <sip:collector@localhost>;tag=1\r\n"
-        "To: <sip:user@{host}>\r\n"
+        f"To: <sip:user@{host}>\r\n"
         "Call-ID: " + os.urandom(8).hex() + "\r\n"
         "CSeq: 1 OPTIONS\r\n"
         "Contact: <sip:collector@127.0.0.1:5060>\r\n"
         "Content-Length: 0\r\n\r\n"
-    ).format(host=host).encode("utf-8")
+    ).encode("utf-8")
+
+
+def _minimal_sip_register(host: str, port: int) -> bytes:
+    """Minimal REGISTER (VoIP client registration)."""
+    branch = "z9hG4bK" + os.urandom(8).hex()
+    return (
+        f"REGISTER sip:{host} SIP/2.0\r\n"
+        f"Via: SIP/2.0/UDP 127.0.0.1:5060;branch={branch}\r\n"
+        "Max-Forwards: 70\r\n"
+        f"From: <sip:u@{host}>;tag=reg\r\n"
+        f"To: <sip:u@{host}>\r\n"
+        "Call-ID: " + os.urandom(8).hex() + "\r\n"
+        "CSeq: 1 REGISTER\r\n"
+        "Contact: <sip:collector@127.0.0.1:5060>\r\n"
+        "Expires: 3600\r\n"
+        "Content-Length: 0\r\n\r\n"
+    ).encode("utf-8")
+
+
+def _minimal_sip_invite(host: str, port: int) -> bytes:
+    """INVITE with minimal SDP (typical VoIP offer)."""
+    branch = "z9hG4bK" + os.urandom(8).hex()
+    sdp = (
+        "v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\n"
+        "t=0 0\r\nm=audio 9 RTP/AVP 0\r\n"
+    )
+    body = sdp.encode("utf-8")
+    head = (
+        f"INVITE sip:peer@{host} SIP/2.0\r\n"
+        f"Via: SIP/2.0/UDP 127.0.0.1:5060;branch={branch}\r\n"
+        "Max-Forwards: 70\r\n"
+        f"From: <sip:u@{host}>;tag=1\r\n"
+        f"To: <sip:peer@{host}>\r\n"
+        "Call-ID: " + os.urandom(8).hex() + "\r\n"
+        "CSeq: 1 INVITE\r\n"
+        "Contact: <sip:collector@127.0.0.1:5060>\r\n"
+        "Content-Type: application/sdp\r\n"
+        f"Content-Length: {len(body)}\r\n\r\n"
+    ).encode("utf-8")
+    return head + body
+
+
+def _build_sip_message(host: str, port: int, method: str) -> bytes:
+    m = method.upper()
+    if m == "REGISTER":
+        return _minimal_sip_register(host, port)
+    if m == "INVITE":
+        return _minimal_sip_invite(host, port)
+    return _minimal_sip_options(host, port)
 
 
 def _parse_server(server: str) -> tuple[str, int]:
@@ -67,12 +119,11 @@ def _get_local_ip_for_target(host: str, port: int) -> str:
         sock.close()
 
 
-def _send_sip_options(host: str, port: int) -> None:
-    msg = _minimal_sip_options(host, port)
+def _send_sip_payload(host: str, port: int, payload: bytes) -> None:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.settimeout(3)
-        sock.sendto(msg, (host, port))
+        sock.sendto(payload, (host, port))
         sock.recv(4096)
     finally:
         sock.close()
@@ -82,15 +133,17 @@ def _capture_sip_request_response(
     server: str,
     iface: str | None,
     timeout: int,
+    method: str = "OPTIONS",
 ) -> tuple[bytes, bytes | None]:
-    """First outgoing OPTIONS and optional first incoming datagram (for I2)."""
+    """First outgoing SIP request and optional first incoming datagram (I2)."""
     host, port = _parse_server(server)
     host_ip = _resolve_host(host, port)
     local_ip = _get_local_ip_for_target(host_ip, port)
     bpf = f"udp and host {host_ip} and port {port}"
 
     def trigger() -> None:
-        _send_sip_options(host_ip, port)
+        msg = _build_sip_message(host_ip, port, method)
+        _send_sip_payload(host_ip, port, msg)
 
     packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
     req: bytes | None = None
@@ -107,32 +160,8 @@ def _capture_sip_request_response(
     return req, resp
 
 
-def _capture_sip_packet(
-    server: str,
-    use_response: bool,
-    iface: str | None,
-    timeout: int,
-) -> bytes:
-    if not use_response:
-        req, _resp = _capture_sip_request_response(server, iface, timeout)
-        return req
-    host, port = _parse_server(server)
-    host_ip = _resolve_host(host, port)
-    local_ip = _get_local_ip_for_target(host_ip, port)
-    bpf = f"udp and host {host_ip} and port {port}"
-
-    def trigger() -> None:
-        _send_sip_options(host_ip, port)
-
-    packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
-    for payload, src_ip, _sport, _dst_ip, _dport in packets:
-        if src_ip != local_ip and len(payload) >= 4:
-            return payload
-    raise CaptureError("No SIP response packet found in capture.")
-
-
 class SipSignatureCollector(SignatureCollector):
-    """Produces SIP request or response signatures; uses capture when not dry-run."""
+    """Produces SIP request/response signatures; uses capture when not dry-run."""
 
     def __init__(self, options):
         super().__init__("sip", options)
@@ -153,6 +182,10 @@ class SipSignatureCollector(SignatureCollector):
 
         use_response = cfg.get("use_response") is True
         direction = "server" if use_response else "client"
+        method = (cfg.get("method") or "OPTIONS").upper()
+        if method not in {"OPTIONS", "REGISTER", "INVITE"}:
+            raise RuntimeError('Config "method" must be OPTIONS, REGISTER, or INVITE.')
+
         limit = self.options.count or len(servers)
         timeout = self.options.timeout or 5
         iface = self.options.iface
@@ -163,7 +196,7 @@ class SipSignatureCollector(SignatureCollector):
                 if len(signatures) >= limit:
                     break
                 host, port = _parse_server(server)
-                payload = _minimal_sip_options(host, port)
+                payload = _build_sip_message(host, port, method)
                 resp_like = (
                     b"SIP/2.0 200 OK\r\n"
                     b"Via: SIP/2.0/UDP 127.0.0.1:5060\r\n"
@@ -183,27 +216,18 @@ class SipSignatureCollector(SignatureCollector):
             if len(signatures) >= limit:
                 break
             try:
-                if use_response:
-                    payload = _capture_sip_packet(server, True, iface, timeout)
-                    signatures.append(
-                        {
-                            "protocol": self.protocol_name,
-                            "target": server,
-                            "direction": direction,
-                            "hex": self.format_signature(payload),
-                        }
-                    )
-                else:
-                    req_b, resp_b = _capture_sip_request_response(server, iface, timeout)
-                    entry = {
-                        "protocol": self.protocol_name,
-                        "target": server,
-                        "direction": direction,
-                        "hex": self.format_signature(req_b),
-                    }
-                    if resp_b:
-                        entry["i2"] = self.format_signature(resp_b)
-                    signatures.append(entry)
+                req_b, resp_b = _capture_sip_request_response(
+                    server, iface, timeout, method
+                )
+                entry = {
+                    "protocol": self.protocol_name,
+                    "target": server,
+                    "direction": direction,
+                    "hex": self.format_signature(req_b),
+                }
+                if resp_b:
+                    entry["i2"] = self.format_signature(resp_b)
+                signatures.append(entry)
             except (CaptureError, OSError) as e:
                 raise RuntimeError(f"SIP capture failed for {server}: {e}") from e
 
@@ -212,7 +236,7 @@ class SipSignatureCollector(SignatureCollector):
 
 def main(argv: List[str] | None = None) -> int:
     parser = build_arg_parser(
-        "SIP signature collector (use --dry-run for synthetic OPTIONS payloads)"
+        "SIP signature collector (OPTIONS/REGISTER/INVITE; use --dry-run for synthetic)"
     )
     args = parser.parse_args(argv)
     opts = options_from_args(args)
