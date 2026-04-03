@@ -298,11 +298,16 @@ check_tcp() {{
     ss -tlnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
     return 1
   fi
-  out=$(docker compose -f docker-compose.yml port nginx "$inner" 2>/dev/null || true)
-  if echo "$out" | grep -qE ":${{hostport}}($|\\s)"; then
+  cid=$(docker compose -f docker-compose.yml ps -q nginx 2>/dev/null || true)
+  if [ -z "$cid" ]; then
+    echo "ERROR: TCP $hostport is in use but nginx service container not found in this compose project." >&2
+    return 1
+  fi
+  out=$(docker port "$cid" "$inner" 2>/dev/null || true)
+  if echo "$out" | grep -qE ":${{hostport}}$"; then
     return 0
   fi
-  echo "ERROR: TCP port $hostport is in use (not published by this compose nginx $inner)." >&2
+  echo "ERROR: TCP port $hostport is in use (not published by nginx container $inner; got: $out)." >&2
   ss -tlnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
   return 1
 }}
@@ -317,11 +322,16 @@ check_udp() {{
     ss -ulnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
     return 1
   fi
-  out=$(docker compose -f docker-compose.yml port amnezia-wg-easy "${{hostport}}/udp" 2>/dev/null || true)
-  if echo "$out" | grep -qE ":${{hostport}}($|\\s)"; then
+  cid=$(docker compose -f docker-compose.yml ps -q amnezia-wg-easy 2>/dev/null || true)
+  if [ -z "$cid" ]; then
+    echo "ERROR: UDP $hostport is in use but amnezia-wg-easy container not found in this compose project." >&2
+    return 1
+  fi
+  out=$(docker port "$cid" "${{hostport}}/udp" 2>/dev/null || true)
+  if echo "$out" | grep -qE ":${{hostport}}$"; then
     return 0
   fi
-  echo "ERROR: UDP port $hostport is in use (not published by this compose amnezia-wg-easy)." >&2
+  echo "ERROR: UDP port $hostport is in use (not published by amnezia-wg-easy ${{hostport}}/udp; got: $out)." >&2
   ss -ulnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
   return 1
 }}
