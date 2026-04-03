@@ -22,6 +22,18 @@ source:
 remote:
   path: "/opt/amnezia-wg-easy"
 
+# Optional: document cascade / double-VPN intent for operators and --dry-run output.
+# Does not change .env or run extra SSH steps. See docs/cascade-vpn-modes.md.
+# topology:
+#   mode: manual_site_to_site # manual_site_to_site | client_double_tunnel | single_exit_only | unspecified
+#   entry:
+#     host: "wg-entry.example.com"
+#     wg_port: 51820
+#   exit:
+#     host: "wg-exit.example.net"
+#     wg_port: 51820
+#   notes: "Clients on entry only; exit provides internet egress."
+
 # Merged into .env on the server (see ../.env.example for all keys).
 env:
   WG_HOST: "203.0.113.10"
@@ -32,3 +44,6 @@ env:
   LANGUAGE: "ru"
   WG_PORT: 51820
   PORT: 51821
+  # Host ports for nginx (maps to 80/443 inside container). Browser uses https://PANEL_DOMAIN:PANEL_HTTPS_PORT
+  PANEL_HTTP_PORT: 80
+  PANEL_HTTPS_PORT: 443

@@ -148,12 +148,21 @@ docker compose "${COMPOSE_TLS_ARGS[@]}" up -d --build --remove-orphans
 
 PORT=$(grep -E "^PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "51821")
 WG_PORT=$(grep -E "^WG_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "51820")
+PANEL_HTTPS_PORT=$(grep -E "^PANEL_HTTPS_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "443")
+PANEL_HTTP_PORT=$(grep -E "^PANEL_HTTP_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "80")
 WG_HOST=$(grep -E "^WG_HOST=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "localhost")
 PANEL_DOMAIN=$(grep -E "^PANEL_DOMAIN=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || echo "")
 ADMIN_USER=$(grep -E "^ADMIN_USERNAME=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || echo "admin")
 ADMIN_PWD=$(grep -E "^ADMIN_PASSWORD=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || echo "")
 PANEL_DOMAIN_PRINT="${PANEL_DOMAIN:-$WG_HOST}"
-echo "[deploy] Done. Panel (HTTPS): https://${PANEL_DOMAIN_PRINT}"
+HTTPS_SUFFIX=""
+if [ "$PANEL_HTTPS_PORT" != "443" ]; then
+  HTTPS_SUFFIX=":${PANEL_HTTPS_PORT}"
+fi
+echo "[deploy] Done. Panel (HTTPS): https://${PANEL_DOMAIN_PRINT}${HTTPS_SUFFIX}"
+if [ "$PANEL_HTTP_PORT" != "80" ]; then
+  echo "[deploy] Note: HTTP (redirect/ACME) is on host TCP port ${PANEL_HTTP_PORT} — allow it in firewall; Let's Encrypt HTTP-01 uses this mapping to container port 80."
+fi
 echo "[deploy] Admin login: ${ADMIN_USER}"
 echo "[deploy] Admin password: ${ADMIN_PWD}"
 echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). DNS: WG_DEFAULT_DNS in $ENV_WORKING (gateway = Amnezia DNS)."

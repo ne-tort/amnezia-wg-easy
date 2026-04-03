@@ -33,6 +33,7 @@ async function main() {
     process.exit(1);
   }
 
+  // * getConfig() persists awg0.conf with ListenPort from WG_PORT and brings awg0 up; restart container after changing WG_PORT.
   await WireGuard.getConfig();
   // * Start Amnezia DNS (dnsmasq) after WG interface is up so it can bind to 0.0.0.0 including awg0.
   startAmneziaDns();

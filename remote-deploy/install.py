@@ -230,6 +230,109 @@ def upload_bytes(sftp: paramiko.SFTPClient, data: bytes, remote_path: str) -> No
         f.write(data)
 
 
+def parse_target_ports(merged: dict[str, str]) -> tuple[int, int, int]:
+    """WG UDP, panel HTTP TCP (host), panel HTTPS TCP (host)."""
+
+    def g(key: str, default: str) -> int:
+        raw = merged.get(key)
+        if raw is None or str(raw).strip() == "":
+            raw = default
+        try:
+            v = int(str(raw).strip(), 10)
+        except ValueError as e:
+            raise SystemExit(f"Invalid {key}: expected integer port, got {raw!r}") from e
+        if not (1 <= v <= 65535):
+            raise SystemExit(f"Invalid {key}: must be 1-65535, got {v}")
+        return v
+
+    return (
+        g("WG_PORT", "51820"),
+        g("PANEL_HTTP_PORT", "80"),
+        g("PANEL_HTTPS_PORT", "443"),
+    )
+
+
+def build_remote_port_preflight_script(remote_path: str, wg: int, http: int, https: int) -> str:
+    """Bash: verify target ports are free or owned by this compose project (before compose down)."""
+    rq = shlex.quote(remote_path)
+    return f"""set -e
+R={rq}
+WG={wg}
+HTTP={http}
+HTTPS={https}
+cd "$R" || {{ echo "ERROR: cannot cd to $R" >&2; exit 1; }}
+
+listening_tcp() {{
+  local p="$1"
+  if ss -tln 2>/dev/null | awk '{{print $4}}' | grep -qE ":${{p}}$|\\[::\\]:${{p}}$"; then
+    return 0
+  fi
+  return 1
+}}
+
+listening_udp() {{
+  local p="$1"
+  if ss -uln 2>/dev/null | awk '{{print $4}}' | grep -qE ":${{p}}$|\\[::\\]:${{p}}$"; then
+    return 0
+  fi
+  return 1
+}}
+
+compose_up() {{
+  local n
+  n=$(docker compose -f docker-compose.yml ps -q 2>/dev/null | wc -l)
+  if [ "${{n:-0}}" -ge 1 ]; then
+    return 0
+  fi
+  return 1
+}}
+
+check_tcp() {{
+  local inner="$1"
+  local hostport="$2"
+  if ! listening_tcp "$hostport"; then
+    return 0
+  fi
+  if ! compose_up; then
+    echo "ERROR: TCP port $hostport is in use, but this project's docker compose stack is not running in $R." >&2
+    ss -tlnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
+    return 1
+  fi
+  out=$(docker compose -f docker-compose.yml port nginx "$inner" 2>/dev/null || true)
+  if echo "$out" | grep -qE ":${{hostport}}($|\\s)"; then
+    return 0
+  fi
+  echo "ERROR: TCP port $hostport is in use (not published by this compose nginx $inner)." >&2
+  ss -tlnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
+  return 1
+}}
+
+check_udp() {{
+  local hostport="$1"
+  if ! listening_udp "$hostport"; then
+    return 0
+  fi
+  if ! compose_up; then
+    echo "ERROR: UDP port $hostport is in use, but this project's docker compose stack is not running in $R." >&2
+    ss -ulnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
+    return 1
+  fi
+  out=$(docker compose -f docker-compose.yml port amnezia-wg-easy "${{hostport}}/udp" 2>/dev/null || true)
+  if echo "$out" | grep -qE ":${{hostport}}($|\\s)"; then
+    return 0
+  fi
+  echo "ERROR: UDP port $hostport is in use (not published by this compose amnezia-wg-easy)." >&2
+  ss -ulnp 2>/dev/null | grep -E ":${{hostport}}\\s" || true
+  return 1
+}}
+
+check_tcp "443/tcp" "$HTTPS"
+check_tcp "80/tcp" "$HTTP"
+check_udp "$WG"
+echo "Port preflight OK (UDP WG $WG, TCP HTTP $HTTP, TCP HTTPS $HTTPS)."
+"""
+
+
 def resolve_config_path(explicit: Path | None) -> Path:
     """Default: first existing file among config.yaml, deploy-runtime.yaml in remote-deploy/."""
     if explicit is not None:
@@ -256,6 +359,70 @@ def mask_env_for_print(text: str) -> str:
     return "\n".join(out_lines) + ("\n" if text.endswith("\n") else "")
 
 
+def _topology_key_is_sensitive(key: str) -> bool:
+    u = key.upper()
+    return any(x in u for x in ("PASSWORD", "SECRET", "TOKEN", "PRIVATE", "PRESHARED", "KEY"))
+
+
+def mask_topology_for_print(obj: Any, parent_key: str = "") -> Any:
+    """Mask values when the dict key looks like a secret (e.g. preshared_key)."""
+    if isinstance(obj, dict):
+        return {k: mask_topology_for_print(v, k) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [mask_topology_for_print(x, parent_key) for x in obj]
+    if parent_key and _topology_key_is_sensitive(parent_key):
+        return "(hidden)"
+    return obj
+
+
+def get_topology(cfg: dict[str, Any]) -> dict[str, Any] | None:
+    raw = cfg.get("topology")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        sys.exit("Invalid config: topology must be a mapping or omitted.")
+    return raw
+
+
+def print_topology_informational(topology: dict[str, Any]) -> None:
+    print("--- Cascade / double VPN (informational) ---", flush=True)
+    masked = mask_topology_for_print(topology)
+    print(yaml.safe_dump(masked, allow_unicode=True, default_flow_style=False).rstrip(), flush=True)
+    print(
+        "This block documents intent only; install.py does not configure cascade routing or a second hub.",
+        flush=True,
+    )
+
+
+def print_topology_dry_run_extra_steps(topology: dict[str, Any]) -> None:
+    mode = str(topology.get("mode", "unspecified")).strip().lower()
+    print("[dry-run] Cascade / double VPN (manual steps; not executed):", flush=True)
+    print(f"  7. (manual) topology.mode={mode!r} - documentation only; no remote commands for cascade.", flush=True)
+    if mode == "manual_site_to_site":
+        print(
+            "  8. (manual) On ENTRY: route/NAT toward EXIT per docs/cascade-vpn-modes.md; "
+            "site-to-site tunnel is outside WG-Easy.",
+            flush=True,
+        )
+        print(
+            "  9. (manual) Ensure distinct WG subnets per hub; align firewall/AllowedIPs on each panel.",
+            flush=True,
+        )
+    elif mode == "client_double_tunnel":
+        print(
+            "  8. (manual) Client: two tunnels; tune MTU and split-tunnel (AllowedIPs) to avoid routing loops.",
+            flush=True,
+        )
+        print("  9. (manual) See docs/cascade-vpn-modes.md (DPI/MTU).", flush=True)
+    elif mode == "single_exit_only":
+        print(
+            "  8. (manual) Single-exit topology: no cascade automation; verify env matches this host only.",
+            flush=True,
+        )
+    else:
+        print("  8. (manual) Review topology.notes and docs/cascade-vpn-modes.md.", flush=True)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Deploy amnezia-wg-easy over SSH from YAML config.")
     ap.add_argument(
@@ -267,6 +434,11 @@ def main() -> None:
         f"{REMOTE_DEPLOY_DIR / 'deploy-runtime.yaml'} if present, else config.yaml)",
     )
     ap.add_argument("--dry-run", action="store_true", help="Print actions and masked .env; no SSH.")
+    ap.add_argument(
+        "--skip-port-check",
+        action="store_true",
+        help="Skip remote port preflight before docker compose down (not recommended).",
+    )
     args = ap.parse_args()
 
     config_path = resolve_config_path(args.config)
@@ -297,19 +469,33 @@ def main() -> None:
         sys.exit("Invalid config: env must be a mapping.")
     merged = merge_env(order, defaults, env_section)
     env_body = render_env_file(order, merged)
+    wg_p, http_p, https_p = parse_target_ports(merged)
 
     remote_path = cfg.get("remote", {}).get("path", "/opt/amnezia-wg-easy")
     remote_path = remote_path.rstrip("/")
 
     print(f"Using config: {config_path}", flush=True)
+    print(
+        f"--- Target ports: WG UDP {wg_p}, panel HTTP TCP {http_p}, panel HTTPS TCP {https_p} ---",
+        flush=True,
+    )
     print("--- Rendered .env (secrets masked in dry-run / log) ---", flush=True)
     print(mask_env_for_print(env_body), flush=True)
+
+    topology = get_topology(cfg)
+    if topology:
+        print_topology_informational(topology)
 
     source = cfg.get("source") or {}
     mode = (source.get("mode") or "git").lower()
 
     if args.dry_run:
         print("[dry-run] Would connect SSH and:")
+        sk = " (skipped with --skip-port-check)" if args.skip_port_check else ""
+        print(
+            f"  0. Port preflight on remote (ss + docker compose port){sk}: "
+            f"UDP {wg_p}, TCP {http_p}/{https_p}"
+        )
         print(f"  1. Ensure Docker: docker compose version")
         print(f"  2. Sync source ({mode}) -> {remote_path}")
         print(f"  3. Upload .env -> {remote_path}/.env")
@@ -323,6 +509,8 @@ def main() -> None:
             f"docker compose -f docker-compose.yml exec -T amnezia-wg-easy "
             f"node scripts/applyAdminPasswordFromEnv.js"
         )
+        if topology:
+            print_topology_dry_run_extra_steps(topology)
         return
 
     client = connect_ssh(cfg)
@@ -392,6 +580,22 @@ rm -f {tq}
         else:
             sys.exit(f"Unknown source.mode: {mode}")
 
+        if not args.skip_port_check:
+            pf = build_remote_port_preflight_script(remote_path, wg_p, http_p, https_p)
+            print("--- Remote port preflight ---", flush=True)
+            code, out, err = run_remote(client, pf, dry_run=False)
+            if out:
+                _safe_write(sys.stdout, out)
+            if err:
+                _safe_write(sys.stderr, err)
+            if code != 0:
+                sys.exit(
+                    f"Port preflight failed (exit {code}). "
+                    "Free the ports or fix conflicts; or use --skip-port-check if you accept the risk."
+                )
+        else:
+            print("[install] Skipping port preflight (--skip-port-check).", flush=True)
+
         sftp = client.open_sftp()
         try:
             env_remote = f"{remote_path}/.env"
@@ -438,12 +642,19 @@ rm -f {tq}
             )
 
         wg_port = merged.get("WG_PORT", "51820")
+        https_port = merged.get("PANEL_HTTPS_PORT", "443")
+        http_port = merged.get("PANEL_HTTP_PORT", "80")
         panel = merged.get("PANEL_DOMAIN") or merged.get("WG_HOST", "")
         print()
         print("Done.")
-        print(f"  Panel URL: https://{panel}/")
+        url_suffix = "" if str(https_port) == "443" else f":{https_port}"
+        print(f"  Panel URL: https://{panel}{url_suffix}/")
         print(f"  VPN endpoint: {merged.get('WG_HOST', '?')}:{wg_port} (UDP)")
-        print("  Ensure firewall: 80/tcp, 443/tcp, and WG_PORT/udp. DNS A/AAAA for PANEL_DOMAIN if using Let's Encrypt.")
+        print(
+            f"  Ensure firewall: TCP {http_port} (HTTP), TCP {https_port} (HTTPS), "
+            f"UDP {wg_port} (VPN). Cloud SG / external firewall: open these manually if needed."
+        )
+        print("  DNS A/AAAA for PANEL_DOMAIN if using Let's Encrypt.")
     finally:
         client.close()
 
