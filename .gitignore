@@ -1,4 +1,5 @@
 .env
+/modules/sui/deploy/deploy.config.yaml
 /wg0.conf
 /wg0.json
 /vpn-client-test/wg0.conf

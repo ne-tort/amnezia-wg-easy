@@ -35,7 +35,12 @@ remote:
 #   notes: "Clients on entry only; exit provides internet egress."
 
 # Merged into .env on the server (see ../.env.example for all keys).
+# On every install.py run the remote .env is fully replaced — set WG_HOST here so
+# the VPN Endpoint (WG_HOST:WG_PORT in client configs) matches your intent on reinstall.
+# Use public IP or a DNS name (A/AAAA must point to this server). PANEL_DOMAIN is only
+# for HTTPS to the panel; it does not set Endpoint unless you also put that name in WG_HOST.
 env:
+  # Endpoint host for AmneziaWG clients (not the panel URL by itself).
   WG_HOST: "203.0.113.10"
   PANEL_DOMAIN: "panel.example.com"
   CERTBOT_EMAIL: "you@example.com"
