@@ -10,8 +10,8 @@ const Util = require('./Util');
 const ServerError = require('./ServerError');
 const db = require('./db');
 const { migrateAwgToDb } = require('./migrateAwgToDb');
-const { getProfileI1, isKnownProfile, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
-const { loadSignatures, runSignatureGeneration } = require('./signatures');
+const { isKnownProfile, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
+const { loadSignatures, runSignatureGeneration, getProfileSignatures } = require('./signatures');
 const { isAmneziaDnsAvailable } = require('./amneziaDns');
 const { generateAmneziaClientQrSvgs } = require('./amneziaClientQr');
 
@@ -44,7 +44,6 @@ const {
   I4,
   I5,
   WG_QR_COMPACT,
-  OBFS_R_BYTES,
 } = require('../config');
 
 // * Official Amnezia client pattern: awg0.conf and interface awg0 in /opt/amnezia/awg/
@@ -428,27 +427,27 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     const client = await this.getClient({ clientId });
 
     const profileId = (profile != null && isKnownProfile(profile)) ? profile : DEFAULT_PROFILE_ID;
-    const i1 = getProfileI1(profileId);
+    const prof = getProfileSignatures(profileId);
 
     let iLines = [];
     if (level !== undefined && level !== null) {
-      // * Level-based obfuscation (QUIC-realistic): I0 = none, I1 = I1 only,
-      // I2 = <c>, I3 = <t>, I4 = <r N>, I5 = <r N> — dynamic chain per protocol recommendations.
+      // * Level-based: I0 = none; I1 = CPS from profile; I2–I5 from signatures.json (Python CPS)
+      // or per-profile defaults. Never use <c> — not implemented in amneziawg-go CPS parser.
       const l = Number(level);
       if (l === 0) {
         iLines = [];
       } else if (l === 1) {
-        if (i1) iLines.push(`I1 = ${i1}`);
+        if (prof.i1) iLines.push(`I1 = ${prof.i1}`);
       } else if (l >= 2 && l <= 5) {
-        if (i1) iLines.push(`I1 = ${i1}`);
-        if (l >= 2) iLines.push('I2 = <c>');
-        if (l >= 3) iLines.push('I3 = <t>');
-        if (l >= 4) iLines.push(`I4 = <r ${OBFS_R_BYTES}>`);
-        if (l >= 5) iLines.push(`I5 = <r ${OBFS_R_BYTES}>`);
+        if (prof.i1) iLines.push(`I1 = ${prof.i1}`);
+        if (l >= 2) iLines.push(`I2 = ${prof.i2}`);
+        if (l >= 3) iLines.push(`I3 = ${prof.i3}`);
+        if (l >= 4) iLines.push(`I4 = ${prof.i4}`);
+        if (l >= 5) iLines.push(`I5 = ${prof.i5}`);
       } else {
         // Invalid level: fall back to legacy behavior.
         const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
-        if (!omitI1 && i1) iLines.push(`I1 = ${i1}`);
+        if (!omitI1 && prof.i1) iLines.push(`I1 = ${prof.i1}`);
         if (config.server.i2) iLines.push(`I2 = ${config.server.i2}`);
         if (config.server.i3) iLines.push(`I3 = ${config.server.i3}`);
         if (config.server.i4) iLines.push(`I4 = ${config.server.i4}`);
@@ -457,7 +456,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     } else {
       // Legacy: no level — use omitI1 and server i2–i5.
       const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
-      if (!omitI1 && i1) iLines.push(`I1 = ${i1}`);
+      if (!omitI1 && prof.i1) iLines.push(`I1 = ${prof.i1}`);
       if (config.server.i2) iLines.push(`I2 = ${config.server.i2}`);
       if (config.server.i3) iLines.push(`I3 = ${config.server.i3}`);
       if (config.server.i4) iLines.push(`I4 = ${config.server.i4}`);

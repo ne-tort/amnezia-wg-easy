@@ -15,6 +15,7 @@ from pathlib import Path
 
 from python_signatures.base import CollectorOptions
 from python_signatures.dns_collector import DnsSignatureCollector
+from python_signatures.profile_cps import merge_collector_output
 from python_signatures.quic_collector import QuicSignatureCollector
 from python_signatures.stun_collector import StunSignatureCollector
 from python_signatures.sip_collector import SipSignatureCollector
@@ -37,10 +38,10 @@ PROTOCOL_REGISTRY = [
 
 def run_all(config_dir: Path, out_path: Path, timeout: int, dry_run: bool) -> dict:
     """
-    Run each collector and build a single map profile_id -> hex string.
+    Run each collector and build profile_id -> { i1, i2, i3, i4, i5 } (CPS strings).
     Raises on first collector failure; does not write to disk.
     """
-    result: dict[str, str] = {}
+    result: dict[str, dict] = {}
     for profile_id, collector_cls, config_name in PROTOCOL_REGISTRY:
         config_path = config_dir / config_name
         if not config_path.exists():
@@ -60,13 +61,13 @@ def run_all(config_dir: Path, out_path: Path, timeout: int, dry_run: bool) -> di
             raise
         if not signatures or not isinstance(signatures[0].get("hex"), str):
             raise ValueError(f"Collector {profile_id} returned no valid hex")
-        result[profile_id] = signatures[0]["hex"]
+        result[profile_id] = merge_collector_output(profile_id, signatures[0])
     return result
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run all signature collectors and write a single JSON (profile_id -> I1 hex)."
+        description="Run all signature collectors and write JSON (profile_id -> { i1..i5 } CPS)."
     )
     parser.add_argument(
         "--out",

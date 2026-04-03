@@ -72,6 +72,10 @@ def _capture_stun_packet(
     iface: str | None,
     timeout: int,
 ) -> bytes:
+    """Single packet: client request (default) or server response (use_response)."""
+    if not use_response:
+        req, _resp = _capture_stun_request_response(server, iface, timeout)
+        return req
     host, port = _parse_server(server)
     host_ip = _resolve_host(host, port)
     local_ip = _get_local_ip_for_target(host_ip, port)
@@ -82,17 +86,38 @@ def _capture_stun_packet(
 
     packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
     for payload, src_ip, _sport, _dst_ip, _dport in packets:
-        if use_response:
-            if src_ip != local_ip and len(payload) >= 4:
-                return payload
-        else:
-            if src_ip == local_ip and len(payload) >= 4:
-                return payload
-    raise CaptureError(
-        "No STUN packet found in capture (expected "
-        + ("response" if use_response else "request")
-        + ")."
-    )
+        if src_ip != local_ip and len(payload) >= 4:
+            return payload
+    raise CaptureError("No STUN response packet found in capture.")
+
+
+def _capture_stun_request_response(
+    server: str,
+    iface: str | None,
+    timeout: int,
+) -> tuple[bytes, bytes | None]:
+    """First outgoing Binding Request and optional first incoming packet (for I2)."""
+    host, port = _parse_server(server)
+    host_ip = _resolve_host(host, port)
+    local_ip = _get_local_ip_for_target(host_ip, port)
+    bpf = f"udp and host {host_ip} and port {port}"
+
+    def trigger() -> None:
+        _send_stun_binding_request(host_ip, port)
+
+    packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
+    req: bytes | None = None
+    resp: bytes | None = None
+    for payload, src_ip, _sport, _dst_ip, _dport in packets:
+        if src_ip == local_ip and len(payload) >= 4:
+            if req is None:
+                req = payload
+        elif src_ip != local_ip and len(payload) >= 4:
+            if resp is None:
+                resp = payload
+    if req is None:
+        raise CaptureError("No outgoing STUN packet found in capture.")
+    return req, resp
 
 
 class StunSignatureCollector(SignatureCollector):
@@ -126,29 +151,44 @@ class StunSignatureCollector(SignatureCollector):
             for server in servers:
                 if len(signatures) >= limit:
                     break
-                signatures.append(
-                    {
-                        "protocol": self.protocol_name,
-                        "target": server,
-                        "direction": "client",
-                        "hex": self.format_signature(STUN_BINDING_REQUEST),
-                    }
-                )
+                tid = os.urandom(12)
+                req = bytes.fromhex("000100002112a442") + tid
+                resp_hdr = bytes.fromhex("010100002112a442") + tid
+                entry: Dict[str, Any] = {
+                    "protocol": self.protocol_name,
+                    "target": server,
+                    "direction": "client",
+                    "hex": self.format_signature(req),
+                    "i2": self.format_signature(resp_hdr + os.urandom(8)),
+                }
+                signatures.append(entry)
             return signatures
 
         for server in servers:
             if len(signatures) >= limit:
                 break
             try:
-                payload = _capture_stun_packet(server, use_response, iface, timeout)
-                signatures.append(
-                    {
+                if use_response:
+                    payload = _capture_stun_packet(server, True, iface, timeout)
+                    signatures.append(
+                        {
+                            "protocol": self.protocol_name,
+                            "target": server,
+                            "direction": direction,
+                            "hex": self.format_signature(payload),
+                        }
+                    )
+                else:
+                    req_b, resp_b = _capture_stun_request_response(server, iface, timeout)
+                    entry = {
                         "protocol": self.protocol_name,
                         "target": server,
                         "direction": direction,
-                        "hex": self.format_signature(payload),
+                        "hex": self.format_signature(req_b),
                     }
-                )
+                    if resp_b:
+                        entry["i2"] = self.format_signature(resp_b)
+                    signatures.append(entry)
             except (CaptureError, OSError) as e:
                 raise RuntimeError(f"STUN capture failed for {server}: {e}") from e
 

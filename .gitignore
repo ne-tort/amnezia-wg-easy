@@ -5,3 +5,6 @@
 /src/node_modules
 .DS_Store
 *.swp
+
+# https://github.com/amnezia-vpn/amnezia-xray-core
+/amnezia-xray-core/

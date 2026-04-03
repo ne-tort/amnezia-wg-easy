@@ -31,3 +31,5 @@ def test_dns_collector_basic(tmp_path: Path) -> None:
     assert sig.endswith(">")
     # payload must not be empty
     assert len(sig) > len("<b 0x>")
+    i2 = sigs[0].get("i2")
+    assert isinstance(i2, str) and i2.startswith("<b 0x")

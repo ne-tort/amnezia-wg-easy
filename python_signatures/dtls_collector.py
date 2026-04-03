@@ -9,6 +9,7 @@ DTLS signature collector.
 
 from __future__ import annotations
 
+import os
 import socket
 import subprocess
 from typing import Any, Dict, List
@@ -66,11 +67,12 @@ def _run_dtls_client(host: str, port: int, timeout: int) -> None:
     )
 
 
-def _capture_dtls_client_hello(
+def _capture_dtls_client_packets(
     target: str,
     iface: str | None,
     timeout: int,
-) -> bytes:
+) -> tuple[bytes, bytes | None]:
+    """First and optional second outgoing DTLS UDP payload (ClientHello flight)."""
     host, port = _parse_target(target)
     host_ip = _resolve_host(host, port)
     local_ip = _get_local_ip_for_target(host_ip, port)
@@ -80,12 +82,16 @@ def _capture_dtls_client_hello(
         _run_dtls_client(host_ip, port, timeout)
 
     packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
+    outgoing: List[bytes] = []
     for payload, src_ip, _sport, _dst_ip, _dport in packets:
         if src_ip == local_ip and len(payload) >= 4:
-            return payload
-    raise CaptureError(
-        "No outgoing DTLS packet found (openssl s_client -dtls1_2 may be unsupported)."
-    )
+            outgoing.append(payload)
+    if not outgoing:
+        raise CaptureError(
+            "No outgoing DTLS packet found (openssl s_client -dtls1_2 may be unsupported)."
+        )
+    second = outgoing[1] if len(outgoing) > 1 else None
+    return outgoing[0], second
 
 
 class DtlsSignatureCollector(SignatureCollector):
@@ -117,29 +123,31 @@ class DtlsSignatureCollector(SignatureCollector):
             for target in targets:
                 if len(signatures) >= limit:
                     break
-                signatures.append(
-                    {
-                        "protocol": self.protocol_name,
-                        "target": target,
-                        "direction": "client",
-                        "hex": self.format_signature(DTLS_PLACEHOLDER),
-                    }
-                )
+                tail = DTLS_PLACEHOLDER + os.urandom(24)
+                entry: Dict[str, Any] = {
+                    "protocol": self.protocol_name,
+                    "target": target,
+                    "direction": "client",
+                    "hex": self.format_signature(DTLS_PLACEHOLDER),
+                    "i2": self.format_signature(tail),
+                }
+                signatures.append(entry)
             return signatures
 
         for target in targets:
             if len(signatures) >= limit:
                 break
             try:
-                payload = _capture_dtls_client_hello(target, iface, timeout)
-                signatures.append(
-                    {
-                        "protocol": self.protocol_name,
-                        "target": target,
-                        "direction": "client",
-                        "hex": self.format_signature(payload),
-                    }
-                )
+                first, second = _capture_dtls_client_packets(target, iface, timeout)
+                entry = {
+                    "protocol": self.protocol_name,
+                    "target": target,
+                    "direction": "client",
+                    "hex": self.format_signature(first),
+                }
+                if second:
+                    entry["i2"] = self.format_signature(second)
+                signatures.append(entry)
             except (CaptureError, OSError) as e:
                 raise RuntimeError(f"DTLS capture failed for {target}: {e}") from e
 

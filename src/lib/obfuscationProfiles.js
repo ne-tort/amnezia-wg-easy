@@ -1,6 +1,6 @@
 'use strict';
 
-const { getI1ForProfile } = require('./signatures');
+const { getI1ForProfile, getProfileSignatures } = require('./signatures');
 
 // * Profile ids in display order (must match Python run_all registry).
 const PROFILE_IDS = ['dns', 'quic', 'stun', 'sip', 'webrtc', 'dtls'];
@@ -22,6 +22,7 @@ module.exports = {
   PROFILE_IDS,
   DEFAULT_PROFILE_ID,
   getProfileI1,
+  getProfileSignatures,
   getProfileIds,
   isKnownProfile,
 };

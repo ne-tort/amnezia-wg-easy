@@ -5,18 +5,51 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const debug = require('debug')('signatures');
 
-const { WG_PATH } = require('../config');
+const { WG_PATH, OBFS_R_BYTES } = require('../config');
 
 const SIGNATURES_PATH = path.join(WG_PATH, 'signatures.json');
 const DEFAULT_SIGNATURES_PATH = path.join(process.cwd(), 'python_signatures', 'config', 'signatures.default.json');
 const RUN_ALL_TIMEOUT_MS = 150000;
 
+const DEFAULT_PROFILE_ID = 'dns';
+
 let cache = null;
 let regenerationInProgress = false;
 
 /**
+ * Normalize one profile entry from JSON: either legacy string (I1 only) or { i1..i5 }.
+ */
+function normalizeProfileEntry(raw) {
+  if (raw == null) return {};
+  let v = raw;
+  if (typeof v === 'string') {
+    const t = v.trim();
+    if (t.startsWith('{')) {
+      try {
+        v = JSON.parse(t);
+      } catch (_) {
+        /* keep as string */
+      }
+    }
+  }
+  if (typeof v === 'string') {
+    const s = v.trim();
+    if (s.startsWith('<b 0x')) return { i1: s };
+    return {};
+  }
+  if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
+    const out = {};
+    for (const k of ['i1', 'i2', 'i3', 'i4', 'i5']) {
+      if (typeof v[k] === 'string' && v[k].trim()) out[k] = v[k].trim();
+    }
+    return out;
+  }
+  return {};
+}
+
+/**
  * Load signatures from SIGNATURES_PATH. If file is missing, copy from bundled default
- * and retry. Caches result in memory. Returns object { profileId: "<b 0x...>", ... }.
+ * and retry. Caches result in memory.
  */
 async function loadSignatures() {
   if (cache) return cache;
@@ -64,12 +97,48 @@ function tryGetSignaturesFromDb() {
 
 function getHardcodedFallback() {
   return {
-    dns: '<b 0x084481800001000300000000077469636b65747306776964676574096b696e6f706f69736b0272750000010001c00c0005000100000039001806776964676574077469636b6574730679616e646578c025c0390005000100000039002b1765787465726e616c2d7469636b6574732d776964676574066166697368610679616e646578036e657400c05d000100010000001c000457fafe25>',
-    quic: '<b 0x68747470733a2f2f6578616d706c652e636f6d2f>',
-    sip: '<b 0x4f5054494f4e53207369703a7369702e6578616d706c652e636f6d205349502f322e30>',
-    stun: '<b 0x000100002112a442544553545445535454455354>',
-    webrtc: '<b 0x000100002112a442000000000000000000000000>',
-    dtls: '<b 0x16fefd00000000000000000000001801000014000000000000000000>',
+    dns: {
+      i1: '<b 0x084481800001000300000000077469636b65747306776964676574096b696e6f706f69736b0272750000010001c00c0005000100000039001806776964676574077469636b6574730679616e646578c025c0390005000100000039002b1765787465726e616c2d7469636b6574732d776964676574066166697368610679616e646578036e657400c05d000100010000001c000457fafe25>',
+      i2: '<rc 32><r 72>',
+      i3: '<t>',
+      i4: '<r 48>',
+      i5: '<r 48>',
+    },
+    quic: {
+      i1: '<b 0x68747470733a2f2f6578616d706c652e636f6d2f>',
+      i2: '<b 0xf6ab3267fa><t><rc 20><r 80>',
+      i3: '<t>',
+      i4: '<r 48>',
+      i5: '<r 48>',
+    },
+    sip: {
+      i1: '<b 0x4f5054494f4e53207369703a7369702e6578616d706c652e636f6d205349502f322e30>',
+      i2: '<rc 40><r 80>',
+      i3: '<t>',
+      i4: '<r 48>',
+      i5: '<r 48>',
+    },
+    stun: {
+      i1: '<b 0x000100002112a442544553545445535454455354>',
+      i2: '<b 0x010100002112a442><rc 12><r 64>',
+      i3: '<t>',
+      i4: '<r 48>',
+      i5: '<r 48>',
+    },
+    webrtc: {
+      i1: '<b 0x000100002112a442000000000000000000000000>',
+      i2: '<b 0x010100002112a442><rc 12><r 64>',
+      i3: '<t>',
+      i4: '<r 48>',
+      i5: '<r 48>',
+    },
+    dtls: {
+      i1: '<b 0x16fefd00000000000000000000001801000014000000000000000000>',
+      i2: '<b 0x14feff0000000000000000000000><r 96>',
+      i3: '<t>',
+      i4: '<r 48>',
+      i5: '<r 48>',
+    },
   };
 }
 
@@ -78,24 +147,53 @@ function invalidateCache() {
 }
 
 /**
- * Return I1 hex string for profileId. Uses cached signatures; falls back to default profile
- * if profileId unknown or missing. Call loadSignatures() once before (e.g. at startup or first use).
+ * Resolved CPS per profile (i1–i5). Uses only tags supported by amneziawg-go (<b>, <t>, <r>, <rc>, <rd>).
+ * Never use <c> — not implemented in userspace core (see amneziawg-go #120).
+ */
+function getProfileSignatures(profileId, signaturesObj) {
+  const sigs = signaturesObj || cache;
+  const fallback = getHardcodedFallback();
+  const rN = Number.isFinite(OBFS_R_BYTES) && OBFS_R_BYTES > 0 ? OBFS_R_BYTES : 48;
+  const defaults = {
+    i2: '<rc 24><r 80>',
+    i3: '<t>',
+    i4: `<r ${rN}>`,
+    i5: `<r ${rN}>`,
+  };
+
+  let raw = sigs?.[profileId];
+  if (raw == null) raw = sigs?.[DEFAULT_PROFILE_ID];
+  let norm = normalizeProfileEntry(raw);
+
+  if (!norm.i1) {
+    const fb = fallback[profileId] || fallback[DEFAULT_PROFILE_ID];
+    const fbNorm = normalizeProfileEntry(fb);
+    norm = { ...fbNorm, ...norm };
+  }
+  if (!norm.i1) {
+    const fb = fallback[DEFAULT_PROFILE_ID];
+    const fbNorm = normalizeProfileEntry(fb);
+    norm = { ...fbNorm, ...norm };
+  }
+
+  return {
+    i1: norm.i1,
+    i2: norm.i2 || defaults.i2,
+    i3: norm.i3 || defaults.i3,
+    i4: norm.i4 != null && norm.i4 !== '' ? norm.i4 : defaults.i4,
+    i5: norm.i5 != null && norm.i5 !== '' ? norm.i5 : defaults.i5,
+  };
+}
+
+/**
+ * Return I1 CPS string for profileId (legacy).
  */
 function getI1ForProfile(profileId, signaturesObj) {
-  const sigs = signaturesObj || cache;
-  const DEFAULT_PROFILE_ID = 'dns';
-  const fallback = getHardcodedFallback();
-  if (!sigs) return fallback[DEFAULT_PROFILE_ID] || fallback.dns;
-  const hex = sigs[profileId];
-  if (typeof hex === 'string' && hex.startsWith('<b 0x')) return hex;
-  return sigs[DEFAULT_PROFILE_ID] || fallback[DEFAULT_PROFILE_ID] || fallback.dns;
+  return getProfileSignatures(profileId, signaturesObj).i1;
 }
 
 /**
  * Run Python run_all to regenerate signatures. On success overwrites file and refreshes cache.
- * On failure does not overwrite; returns { success: false, message }.
- * Uses explicit setTimeout + child.kill for timeout (spawn options.timeout not reliable across Node versions).
- * If a run is already in progress, does not spawn again (resolves with { success: true, message: 'Already running' }).
  */
 function runSignatureGeneration() {
   return new Promise((resolve) => {
@@ -155,8 +253,11 @@ function runSignatureGeneration() {
 
 module.exports = {
   SIGNATURES_PATH,
+  DEFAULT_PROFILE_ID,
   loadSignatures,
   invalidateCache,
   getI1ForProfile,
+  getProfileSignatures,
+  normalizeProfileEntry,
   runSignatureGeneration,
 };

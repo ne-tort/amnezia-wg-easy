@@ -48,8 +48,10 @@ def _get_local_ip_for_target(host: str, port: int) -> str:
         sock.close()
 
 
-def _capture_quic_initial(url: str, iface: str | None, timeout: int) -> bytes:
-    """Trigger HTTP/3 request to url and return first outgoing QUIC UDP payload."""
+def _capture_quic_packets(
+    url: str, iface: str | None, timeout: int
+) -> tuple[bytes, bytes | None]:
+    """Return first and optional second outgoing QUIC UDP payload (same flow)."""
     parsed = urlparse(url)
     host = parsed.hostname or "localhost"
     port = parsed.port or 443
@@ -69,10 +71,14 @@ def _capture_quic_initial(url: str, iface: str | None, timeout: int) -> bytes:
         )
 
     packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
+    outgoing: List[bytes] = []
     for payload, src_ip, _sport, _dst_ip, _dport in packets:
         if src_ip == local_ip and len(payload) >= 4:
-            return payload
-    raise CaptureError("No outgoing QUIC packet found in capture (is curl built with HTTP/3?).")
+            outgoing.append(payload)
+    if not outgoing:
+        raise CaptureError("No outgoing QUIC packet found in capture (is curl built with HTTP/3?).")
+    second = outgoing[1] if len(outgoing) > 1 else None
+    return outgoing[0], second
 
 
 class QuicSignatureCollector(SignatureCollector):
@@ -105,14 +111,18 @@ class QuicSignatureCollector(SignatureCollector):
                 payload = url.encode("utf-8")
                 if len(payload) > 200:
                     payload = payload[:200]
-                signatures.append(
-                    {
-                        "protocol": self.protocol_name,
-                        "target": url,
-                        "direction": "client",
-                        "hex": self.format_signature(payload),
-                    }
-                )
+                alt = (url + "/").encode("utf-8")
+                if len(alt) > 200:
+                    alt = alt[:200]
+                entry: Dict[str, Any] = {
+                    "protocol": self.protocol_name,
+                    "target": url,
+                    "direction": "client",
+                    "hex": self.format_signature(payload),
+                }
+                if alt != payload:
+                    entry["i2"] = self.format_signature(alt)
+                signatures.append(entry)
             return signatures
 
         if capture_udp_payloads_with_trigger is None:
@@ -122,15 +132,16 @@ class QuicSignatureCollector(SignatureCollector):
             if len(signatures) >= limit:
                 break
             try:
-                payload = _capture_quic_initial(url, iface, timeout)
-                signatures.append(
-                    {
-                        "protocol": self.protocol_name,
-                        "target": url,
-                        "direction": "client",
-                        "hex": self.format_signature(payload),
-                    }
-                )
+                first, second = _capture_quic_packets(url, iface, timeout)
+                entry = {
+                    "protocol": self.protocol_name,
+                    "target": url,
+                    "direction": "client",
+                    "hex": self.format_signature(first),
+                }
+                if second:
+                    entry["i2"] = self.format_signature(second)
+                signatures.append(entry)
             except (CaptureError, ValueError, OSError) as e:
                 raise RuntimeError(f"QUIC capture failed for {url}: {e}") from e
 

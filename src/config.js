@@ -92,9 +92,9 @@ module.exports.TRAFFIC_BUFFER_MAX = Math.max(100, parseInt(process.env.TRAFFIC_B
 const getRandomInt = (min, max) => min + Math.floor(Math.random() * (max - min));
 const getRandomJunkSize = () => getRandomInt(15, 150);
 
-// H1–H4: AmneziaWG accepts single value ("1234") or range ("x-y"). Wide range = high entropy but
-// not QUIC-realistic (QUIC headers have structure, not random int32). For "QUIC-realistic" profile
-// set via env: H1=1-4096 H2=1-4096 H3=1-4096 H4=1-4096 (per Amnezia protocol).
+// H1–H4: AmneziaWG accepts single value ("1234") or range ("x-y"). If you use ranges on the client
+// (not this panel’s default path), they must not overlap between H1–H4 or packet types are ambiguous
+// (AmneziaWG 2.0 / Habr guide). This app often stores a single random int per header after save.
 const WG_HEADER_RANGE_DEFAULT = '1-2147483647';
 
 // Jc: amneziawg-go README recommends 4–12. Jmin/Jmax: docs.amnezia suggest 64–1024 bytes for junk.
@@ -104,13 +104,14 @@ module.exports.JMAX = process.env.JMAX || 1000;
 module.exports.S1 = process.env.S1 || getRandomJunkSize();
 module.exports.S2 = process.env.S2 || getRandomJunkSize();
 module.exports.S3 = process.env.S3 || getRandomJunkSize();
+// S4: padding on every transport data packet — higher values help DPI resistance but reduce throughput.
 module.exports.S4 = process.env.S4 || getRandomJunkSize();
 module.exports.H1 = process.env.H1 || WG_HEADER_RANGE_DEFAULT;
 module.exports.H2 = process.env.H2 || WG_HEADER_RANGE_DEFAULT;
 module.exports.H3 = process.env.H3 || WG_HEADER_RANGE_DEFAULT;
 module.exports.H4 = process.env.H4 || WG_HEADER_RANGE_DEFAULT;
 
-// * Size in bytes for <r N> in level-based chain (I4, I5). Levels I2–I5 use I2=<c>, I3=<t>, I4/I5=<r N>.
+// * Default size for <r N> in I4/I5 when signatures.json omits those keys (must match OBFS_R_BYTES in Python run_all).
 module.exports.OBFS_R_BYTES = parseInt(process.env.OBFS_R_BYTES || '48', 10);
 
 // I2–I5: when level is not used, optional server-stored values (legacy). Empty = skip.

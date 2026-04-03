@@ -75,14 +75,27 @@ class DnsSignatureCollector(SignatureCollector):
         wire = response.to_wire()
 
       sig = self.format_signature(wire)
-      signatures.append(
-        {
+      entry: Dict[str, Any] = {
           "protocol": self.protocol_name,
           "target": domain,
           "direction": "client",  # I1 usually mimics client -> server.
           "hex": sig,
-        }
-      )
+      }
+      # Second wire (another QNAME) for I2 signature packet (AmneziaWG 2.0 chain).
+      alt_name = "google.com"
+      if domain.rstrip(".").lower() == alt_name:
+        alt_name = "cloudflare.com"
+      msg2 = dns.message.make_query(alt_name, rdtype=rtype, rdclass=dns.rdataclass.IN)
+      if mode == "query":
+        wire2 = msg2.to_wire()
+      else:
+        try:
+          response2 = dns.query.udp(msg2, resolver, port=port, timeout=self.options.timeout or 3.0)
+        except Exception as exc:  # noqa: BLE001
+          raise RuntimeError(f"DNS second query to {resolver}:{port} for {alt_name} failed: {exc}") from exc
+        wire2 = response2.to_wire()
+      entry["i2"] = self.format_signature(wire2)
+      signatures.append(entry)
 
     return signatures
 

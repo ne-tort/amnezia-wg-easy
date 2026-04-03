@@ -78,12 +78,44 @@ def _send_sip_options(host: str, port: int) -> None:
         sock.close()
 
 
+def _capture_sip_request_response(
+    server: str,
+    iface: str | None,
+    timeout: int,
+) -> tuple[bytes, bytes | None]:
+    """First outgoing OPTIONS and optional first incoming datagram (for I2)."""
+    host, port = _parse_server(server)
+    host_ip = _resolve_host(host, port)
+    local_ip = _get_local_ip_for_target(host_ip, port)
+    bpf = f"udp and host {host_ip} and port {port}"
+
+    def trigger() -> None:
+        _send_sip_options(host_ip, port)
+
+    packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
+    req: bytes | None = None
+    resp: bytes | None = None
+    for payload, src_ip, _sport, _dst_ip, _dport in packets:
+        if src_ip == local_ip and len(payload) >= 4:
+            if req is None:
+                req = payload
+        elif src_ip != local_ip and len(payload) >= 4:
+            if resp is None:
+                resp = payload
+    if req is None:
+        raise CaptureError("No outgoing SIP packet found in capture.")
+    return req, resp
+
+
 def _capture_sip_packet(
     server: str,
     use_response: bool,
     iface: str | None,
     timeout: int,
 ) -> bytes:
+    if not use_response:
+        req, _resp = _capture_sip_request_response(server, iface, timeout)
+        return req
     host, port = _parse_server(server)
     host_ip = _resolve_host(host, port)
     local_ip = _get_local_ip_for_target(host_ip, port)
@@ -94,17 +126,9 @@ def _capture_sip_packet(
 
     packets = capture_udp_payloads_with_trigger(bpf, trigger, iface=iface, timeout=timeout)
     for payload, src_ip, _sport, _dst_ip, _dport in packets:
-        if use_response:
-            if src_ip != local_ip and len(payload) >= 4:
-                return payload
-        else:
-            if src_ip == local_ip and len(payload) >= 4:
-                return payload
-    raise CaptureError(
-        "No SIP packet found in capture (expected "
-        + ("response" if use_response else "request")
-        + ")."
-    )
+        if src_ip != local_ip and len(payload) >= 4:
+            return payload
+    raise CaptureError("No SIP response packet found in capture.")
 
 
 class SipSignatureCollector(SignatureCollector):
@@ -140,29 +164,46 @@ class SipSignatureCollector(SignatureCollector):
                     break
                 host, port = _parse_server(server)
                 payload = _minimal_sip_options(host, port)
-                signatures.append(
-                    {
-                        "protocol": self.protocol_name,
-                        "target": server,
-                        "direction": "client",
-                        "hex": self.format_signature(payload),
-                    }
+                resp_like = (
+                    b"SIP/2.0 200 OK\r\n"
+                    b"Via: SIP/2.0/UDP 127.0.0.1:5060\r\n"
+                    b"Content-Length: 0\r\n\r\n"
                 )
+                entry: Dict[str, Any] = {
+                    "protocol": self.protocol_name,
+                    "target": server,
+                    "direction": "client",
+                    "hex": self.format_signature(payload),
+                    "i2": self.format_signature(resp_like),
+                }
+                signatures.append(entry)
             return signatures
 
         for server in servers:
             if len(signatures) >= limit:
                 break
             try:
-                payload = _capture_sip_packet(server, use_response, iface, timeout)
-                signatures.append(
-                    {
+                if use_response:
+                    payload = _capture_sip_packet(server, True, iface, timeout)
+                    signatures.append(
+                        {
+                            "protocol": self.protocol_name,
+                            "target": server,
+                            "direction": direction,
+                            "hex": self.format_signature(payload),
+                        }
+                    )
+                else:
+                    req_b, resp_b = _capture_sip_request_response(server, iface, timeout)
+                    entry = {
                         "protocol": self.protocol_name,
                         "target": server,
                         "direction": direction,
-                        "hex": self.format_signature(payload),
+                        "hex": self.format_signature(req_b),
                     }
-                )
+                    if resp_b:
+                        entry["i2"] = self.format_signature(resp_b)
+                    signatures.append(entry)
             except (CaptureError, OSError) as e:
                 raise RuntimeError(f"SIP capture failed for {server}: {e}") from e
 
