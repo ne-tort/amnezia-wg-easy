@@ -1,20 +1,18 @@
 """
 DTLS signature collector.
 
-- With `--dry-run`: emits a minimal synthetic DTLS ClientHello-like placeholder.
-- Without `--dry-run`: runs openssl s_client with DTLS to each target and
-  captures the first outgoing UDP packet (ClientHello) as l1. Requires
-  openssl with DTLS support.
+- With `--dry-run`: loads tests/fixtures/signatures/dtls.json (CI only).
+- Without `--dry-run`: runs openssl s_client with DTLS and captures outgoing UDP (ClientHello).
 """
 
 from __future__ import annotations
 
-import os
 import socket
 import subprocess
 from typing import Any, Dict, List
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
+from python_signatures.dry_run_fixtures import build_dry_run_signatures
 
 try:
     from python_signatures.capture import (
@@ -24,11 +22,6 @@ try:
 except ImportError:
     CaptureError = RuntimeError  # type: ignore[misc, assignment]
     capture_udp_payloads_with_trigger = None  # type: ignore[misc, assignment]
-
-# * DTLS 1.2 record layer (RFC 6347): Handshake 0x16, version 0xfe 0xfd — not DTLS 1.0 0xfe 0xff.
-# * Minimal placeholder (not a full ClientHello); live capture uses full openssl flight.
-DTLS_PLACEHOLDER = bytes.fromhex("16fefd0000000000000000000000")
-
 
 def _parse_target(target: str) -> tuple[str, int]:
     if ":" in target:
@@ -120,21 +113,19 @@ class DtlsSignatureCollector(SignatureCollector):
         iface = self.options.iface
         signatures: List[Dict[str, Any]] = []
 
-        if self.options.dry_run or capture_udp_payloads_with_trigger is None:
-            for target in targets:
-                if len(signatures) >= limit:
-                    break
-                # Second outgoing fragment: same record type (handshake), extra entropy (not CCS 0x14).
-                tail = DTLS_PLACEHOLDER + os.urandom(48)
-                entry: Dict[str, Any] = {
-                    "protocol": self.protocol_name,
-                    "target": target,
-                    "direction": "client",
-                    "hex": self.format_signature(DTLS_PLACEHOLDER),
-                    "i2": self.format_signature(tail),
-                }
-                signatures.append(entry)
-            return signatures
+        if self.options.dry_run:
+            return build_dry_run_signatures(
+                "dtls",
+                self.protocol_name,
+                targets,
+                limit=limit,
+                direction="client",
+            )
+
+        if capture_udp_payloads_with_trigger is None:
+            raise RuntimeError(
+                "Capture module not available. Use --dry-run (fixture CPS) or install capture support."
+            )
 
         for target in targets:
             if len(signatures) >= limit:
@@ -158,7 +149,7 @@ class DtlsSignatureCollector(SignatureCollector):
 
 def main(argv: List[str] | None = None) -> int:
     parser = build_arg_parser(
-        "DTLS ClientHello signature collector (use --dry-run for placeholders)"
+        "DTLS ClientHello signature collector (--dry-run loads tests/fixtures/signatures/dtls.json)"
     )
     args = parser.parse_args(argv)
     opts = options_from_args(args)

@@ -95,6 +95,7 @@ function tryGetSignaturesFromDb() {
   return null;
 }
 
+/** Bundled CPS when no signatures.json: template until `run_all` without --dry-run (real capture). */
 function getHardcodedFallback() {
   return {
     dns: {

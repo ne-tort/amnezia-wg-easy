@@ -1,9 +1,7 @@
 """
-Dry-run and format tests for QUIC, STUN, SIP, WebRTC, DTLS collectors.
+Dry-run tests: collectors load committed CPS from tests/fixtures/signatures/*.json.
 
-Each collector is run with --dry-run (or equivalent) so no real traffic or
-capture is required. We assert the output format matches AmneziaWG (<b 0x...>)
-and that payload is non-empty.
+No live capture; asserts output format matches AmneziaWG (<b 0x...>).
 """
 
 import json

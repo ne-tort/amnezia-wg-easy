@@ -1,0 +1,5 @@
+{
+  "hex": "<b 0xc700000001><rc 8><t><r 100>",
+  "i2": "<b 0xf6ab3267fa><t><rc 20><r 80>",
+  "note": "CI dry-run only. Production: run collectors without --dry-run (curl+tcpdump capture)."
+}

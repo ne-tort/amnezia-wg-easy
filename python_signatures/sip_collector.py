@@ -1,9 +1,8 @@
 """
 SIP signature collector.
 
-- With `--dry-run`: synthetic SIP requests (OPTIONS / REGISTER / INVITE) + minimal 200 OK for I2.
-- Without `--dry-run`: sends UDP SIP to each server, captures first outgoing (I1) and first
-  incoming (I2) datagram in one flow.
+- With `--dry-run`: loads tests/fixtures/signatures/sip.json (CI only).
+- Without `--dry-run`: sends UDP SIP, captures first outgoing (I1) and first incoming (I2).
 
 Config:
   - method: OPTIONS (default), REGISTER, or INVITE (RFC 3261-shaped text).
@@ -17,6 +16,7 @@ import socket
 from typing import Any, Dict, List
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
+from python_signatures.dry_run_fixtures import build_dry_run_signatures
 
 try:
     from python_signatures.capture import (
@@ -191,26 +191,19 @@ class SipSignatureCollector(SignatureCollector):
         iface = self.options.iface
         signatures: List[Dict[str, Any]] = []
 
-        if self.options.dry_run or capture_udp_payloads_with_trigger is None:
-            for server in servers:
-                if len(signatures) >= limit:
-                    break
-                host, port = _parse_server(server)
-                payload = _build_sip_message(host, port, method)
-                resp_like = (
-                    b"SIP/2.0 200 OK\r\n"
-                    b"Via: SIP/2.0/UDP 127.0.0.1:5060\r\n"
-                    b"Content-Length: 0\r\n\r\n"
-                )
-                entry: Dict[str, Any] = {
-                    "protocol": self.protocol_name,
-                    "target": server,
-                    "direction": "client",
-                    "hex": self.format_signature(payload),
-                    "i2": self.format_signature(resp_like),
-                }
-                signatures.append(entry)
-            return signatures
+        if self.options.dry_run:
+            return build_dry_run_signatures(
+                "sip",
+                self.protocol_name,
+                servers,
+                limit=limit,
+                direction=direction,
+            )
+
+        if capture_udp_payloads_with_trigger is None:
+            raise RuntimeError(
+                "Capture module not available. Use --dry-run (fixture CPS) or install capture support."
+            )
 
         for server in servers:
             if len(signatures) >= limit:
@@ -236,7 +229,7 @@ class SipSignatureCollector(SignatureCollector):
 
 def main(argv: List[str] | None = None) -> int:
     parser = build_arg_parser(
-        "SIP signature collector (OPTIONS/REGISTER/INVITE; use --dry-run for synthetic)"
+        "SIP signature collector (--dry-run loads tests/fixtures/signatures/sip.json)"
     )
     args = parser.parse_args(argv)
     opts = options_from_args(args)

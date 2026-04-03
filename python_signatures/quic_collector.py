@@ -1,10 +1,11 @@
 """
 QUIC / HTTP3 signature collector.
 
-- With `--dry-run`: emits placeholder signatures from target URLs (no real traffic).
+- With `--dry-run`: loads pre-recorded CPS from tests/fixtures/signatures/quic.json
+  (CI only; no network capture).
 - Without `--dry-run`: runs tcpdump and triggers HTTP/3 via curl, then uses the
-  first outgoing UDP packet (QUIC Initial) as the l1 signature. Requires tcpdump
-  and curl with HTTP/3 support (e.g. curl 7.66+ with libcurl built for HTTP/3).
+  first outgoing UDP packet (QUIC Initial) as I1. Requires tcpdump and curl with
+  HTTP/3 support (e.g. curl 7.66+ with libcurl built for HTTP/3).
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import Any, Dict, List
 from urllib.parse import urlparse
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
-from python_signatures.profile_cps import QUIC_CPS_I1_HABR, QUIC_CPS_I2_HABR
+from python_signatures.dry_run_fixtures import build_dry_run_signatures
 
 try:
     from python_signatures.capture import (
@@ -83,7 +84,7 @@ def _capture_quic_packets(
 
 
 class QuicSignatureCollector(SignatureCollector):
-    """Collects QUIC Initial packet signatures via curl + tcpdump, or placeholders in dry-run."""
+    """Collects QUIC Initial via curl + tcpdump; dry-run uses committed fixture CPS only."""
 
     def __init__(self, options):
         super().__init__("quic", options)
@@ -106,22 +107,18 @@ class QuicSignatureCollector(SignatureCollector):
         signatures: List[Dict[str, Any]] = []
 
         if self.options.dry_run:
-            # CPS from Habr / AmneziaWG 2.0 (QUIC-like), not URL bytes — those are not QUIC Initial.
-            for url in urls:
-                if len(signatures) >= limit:
-                    break
-                entry: Dict[str, Any] = {
-                    "protocol": self.protocol_name,
-                    "target": url,
-                    "direction": "client",
-                    "hex": QUIC_CPS_I1_HABR,
-                    "i2": QUIC_CPS_I2_HABR,
-                }
-                signatures.append(entry)
-            return signatures
+            return build_dry_run_signatures(
+                "quic",
+                self.protocol_name,
+                urls,
+                limit=limit,
+                direction="client",
+            )
 
         if capture_udp_payloads_with_trigger is None:
-            raise RuntimeError("Capture module not available; run with --dry-run for placeholders.")
+            raise RuntimeError(
+                "Capture module not available. Install capture deps or use --dry-run (fixture CPS only)."
+            )
 
         for url in urls:
             if len(signatures) >= limit:
@@ -144,7 +141,9 @@ class QuicSignatureCollector(SignatureCollector):
 
 
 def main(argv: List[str] | None = None) -> int:
-    parser = build_arg_parser("QUIC/HTTP3 signature collector (use --dry-run for placeholders)")
+    parser = build_arg_parser(
+        "QUIC/HTTP3 signature collector (--dry-run loads tests/fixtures/signatures/quic.json)"
+    )
     args = parser.parse_args(argv)
     opts = options_from_args(args)
 

@@ -1,0 +1,5 @@
+{
+  "hex": "<b 0x000100002112a442000000000000000000000000>",
+  "i2": "<b 0x0101000c2112a442000000000000000000000000002000080001000000000000>",
+  "note": "CI dry-run snapshot (deterministic Binding req/resp). Production: real STUN capture."
+}

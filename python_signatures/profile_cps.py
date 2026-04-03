@@ -1,6 +1,11 @@
 """
 Per-profile CPS defaults for I2–I5 when collectors do not supply packets.
 
+Priority:
+  1. Values returned by the collector (from real capture): ``hex`` (I1), optional ``i2``…``i5``.
+  2. If a key is missing (e.g. no second UDP packet captured), ``merge_collector_output``
+     fills from PROFILE_DEFAULTS below (curated CPS / wire-shaped fallbacks, not live traffic).
+
 Uses only tags supported by amneziawg-go CPS: <b>, <t>, <r>, <rc>, <rd>.
 Do not use <c> (packet counter): not implemented in userspace go core — see amneziawg-go #120.
 """
@@ -10,8 +15,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-# * Habr / AmneziaWG 2.0: QUIC v1 Initial-like CPS + second fragment (blog example).
-QUIC_CPS_I1_HABR = "<b 0xc700000001><rc 8><t><r 100>"
+# * Second QUIC fragment when capture did not yield a second outgoing packet (Habr-style example).
 QUIC_CPS_I2_HABR = "<b 0xf6ab3267fa><t><rc 20><r 80>"
 
 # * Second DNS wire when collector did not run: A query for example.com with EDNS0 (40 B), realistic client.
@@ -55,8 +59,11 @@ def obfs_r_bytes() -> int:
 
 def merge_collector_output(profile_id: str, sig: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Build signatures.json entry with i1–i5. Collector sets "hex" (I1); optional i2–i5
-    override per-profile defaults (PROFILE_DEFAULTS + <r N> for I4/I5).
+    Build signatures.json entry with i1–i5.
+
+    Collector sets ``hex`` (I1) from capture; optional ``i2``…``i5`` when present.
+    Any missing slot uses PROFILE_DEFAULTS for that profile (fallback when capture
+    did not provide a second packet, etc.).
     """
     hex_val = sig.get("hex")
     if not isinstance(hex_val, str) or not hex_val.strip().startswith("<b 0x"):

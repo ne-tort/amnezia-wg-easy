@@ -1,5 +1,6 @@
 """profile_cps.merge_collector_output builds full i1–i5 CPS maps."""
 
+from python_signatures.base import split_r_tags
 from python_signatures.profile_cps import merge_collector_output
 
 
@@ -26,3 +27,9 @@ def test_merge_respects_overrides() -> None:
     )
     assert out["i2"] == "<rc 10><r 20>"
     assert out["i4"] == "<r 99>"
+
+
+def test_split_r_tags_chunks() -> None:
+    assert split_r_tags(0) == ""
+    assert split_r_tags(100) == "<r 100>"
+    assert split_r_tags(1500, max_chunk=1000) == "<r 1000><r 500>"

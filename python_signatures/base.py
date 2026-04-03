@@ -85,6 +85,22 @@ class SignatureCollector(abc.ABC):
         out_path.write_text(json.dumps(signatures, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def split_r_tags(total_bytes: int, max_chunk: int = 1000) -> str:
+    """
+    Express *total_bytes* of random payload as a chain of ``<r n>`` tags.
+    Some CPS parsers cap a single ``<r N>`` size; splitting avoids oversized tags.
+    """
+    n = max(0, int(total_bytes))
+    mc = max(1, int(max_chunk))
+    parts: list[str] = []
+    while n > mc:
+        parts.append(f"<r {mc}>")
+        n -= mc
+    if n > 0:
+        parts.append(f"<r {n}>")
+    return "".join(parts)
+
+
 def build_arg_parser(description: str) -> argparse.ArgumentParser:
     """Create a standard argument parser for collectors."""
     parser = argparse.ArgumentParser(description=description)
@@ -114,7 +130,7 @@ def build_arg_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Do not send or capture real traffic where applicable; just build payloads.",
+        help="Load tests/fixtures/signatures/<protocol>.json instead of live capture.",
     )
     return parser
 

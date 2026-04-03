@@ -1,8 +1,7 @@
 """
 STUN signature collector.
 
-- With `--dry-run` or when capture is unavailable: emits minimal STUN Binding
-  Request payloads (synthetic) as used in Node obfuscation profiles.
+- With `--dry-run`: loads committed CPS from tests/fixtures/signatures/stun.json (CI only).
 - Without `--dry-run`: sends a Binding Request and captures outgoing (I1) and
   first server reply (I2). Config \"use_response\" only affects the stored
   direction label on the entry.
@@ -12,10 +11,10 @@ from __future__ import annotations
 
 import os
 import socket
-import struct
 from typing import Any, Dict, List
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
+from python_signatures.dry_run_fixtures import build_dry_run_signatures
 
 try:
     from python_signatures.capture import (
@@ -28,14 +27,6 @@ except ImportError:
 
 # * Minimal STUN Binding Request (type 0x0001, length 0, magic 0x2112A442 + 12-byte tid).
 STUN_BINDING_REQUEST = bytes.fromhex("000100002112a442") + os.urandom(12)
-
-
-def _binding_success_xor_mapped(tid: bytes) -> bytes:
-    """RFC 5389 Binding Success with XOR-MAPPED-ADDRESS (IPv4-shaped 8-byte value)."""
-    xval = bytes([0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-    attr = struct.pack(">HH", 0x0020, 8) + xval
-    mlen = len(attr)
-    return struct.pack(">HHI", 0x0101, mlen, 0x2112A442) + tid + attr
 
 
 def _parse_server(server: str) -> tuple[str, int]:
@@ -131,22 +122,19 @@ class StunSignatureCollector(SignatureCollector):
         iface = self.options.iface
         signatures: List[Dict[str, Any]] = []
 
-        if self.options.dry_run or capture_udp_payloads_with_trigger is None:
-            for server in servers:
-                if len(signatures) >= limit:
-                    break
-                tid = os.urandom(12)
-                req = bytes.fromhex("000100002112a442") + tid
-                resp = _binding_success_xor_mapped(tid)
-                entry: Dict[str, Any] = {
-                    "protocol": self.protocol_name,
-                    "target": server,
-                    "direction": "client",
-                    "hex": self.format_signature(req),
-                    "i2": self.format_signature(resp),
-                }
-                signatures.append(entry)
-            return signatures
+        if self.options.dry_run:
+            return build_dry_run_signatures(
+                "stun",
+                self.protocol_name,
+                servers,
+                limit=limit,
+                direction=direction,
+            )
+
+        if capture_udp_payloads_with_trigger is None:
+            raise RuntimeError(
+                "Capture module not available. Use --dry-run (fixture CPS) or install capture support."
+            )
 
         for server in servers:
             if len(signatures) >= limit:
@@ -171,7 +159,7 @@ class StunSignatureCollector(SignatureCollector):
 
 def main(argv: List[str] | None = None) -> int:
     parser = build_arg_parser(
-        "STUN signature collector (use --dry-run for synthetic request payloads)"
+        "STUN signature collector (--dry-run loads tests/fixtures/signatures/stun.json)"
     )
     args = parser.parse_args(argv)
     opts = options_from_args(args)

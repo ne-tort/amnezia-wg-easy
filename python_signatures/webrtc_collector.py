@@ -1,22 +1,16 @@
 """
 WebRTC (ICE/STUN) signature collector.
 
-Uses the same approach as the STUN collector: ICE typically starts with STUN
-Binding requests. With `--dry-run` emits minimal STUN request; without,
-sends real STUN and captures first client or server packet per config
-\"use_response\": true|false.
+Same capture path as STUN. `--dry-run` loads tests/fixtures/signatures/webrtc.json.
 """
 
 from __future__ import annotations
 
-import os
 from typing import Any, Dict, List
 
 from python_signatures.base import SignatureCollector, build_arg_parser, options_from_args
-from python_signatures.stun_collector import (
-    _binding_success_xor_mapped,
-    _capture_stun_request_response,
-)
+from python_signatures.dry_run_fixtures import build_dry_run_signatures
+from python_signatures.stun_collector import _capture_stun_request_response
 
 try:
     from python_signatures.capture import CaptureError
@@ -56,22 +50,19 @@ class WebrtcSignatureCollector(SignatureCollector):
         except ImportError:
             capture_udp_payloads_with_trigger = None
 
-        if self.options.dry_run or capture_udp_payloads_with_trigger is None:
-            for server in servers:
-                if len(signatures) >= limit:
-                    break
-                tid = os.urandom(12)
-                req = bytes.fromhex("000100002112a442") + tid
-                resp = _binding_success_xor_mapped(tid)
-                entry: Dict[str, Any] = {
-                    "protocol": self.protocol_name,
-                    "target": server,
-                    "direction": "client",
-                    "hex": self.format_signature(req),
-                    "i2": self.format_signature(resp),
-                }
-                signatures.append(entry)
-            return signatures
+        if self.options.dry_run:
+            return build_dry_run_signatures(
+                "webrtc",
+                self.protocol_name,
+                servers,
+                limit=limit,
+                direction=direction,
+            )
+
+        if capture_udp_payloads_with_trigger is None:
+            raise RuntimeError(
+                "Capture module not available. Use --dry-run (fixture CPS) or install capture support."
+            )
 
         for server in servers:
             if len(signatures) >= limit:
@@ -95,7 +86,7 @@ class WebrtcSignatureCollector(SignatureCollector):
 
 def main(argv: List[str] | None = None) -> int:
     parser = build_arg_parser(
-        "WebRTC (ICE/STUN) signature collector (use --dry-run for synthetic payloads)"
+        "WebRTC (ICE/STUN) signature collector (--dry-run loads webrtc.json fixture)"
     )
     args = parser.parse_args(argv)
     opts = options_from_args(args)

@@ -89,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Use dry-run mode for collectors that support it (no real capture).",
+        help="Load committed CPS from tests/fixtures/signatures/*.json (CI; no live capture).",
     )
     args = parser.parse_args(argv)
     out_path = Path(args.out).resolve()
