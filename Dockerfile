@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir poetry poetry-plugin-export
 WORKDIR /build
 COPY pyproject.toml poetry.lock* ./
 COPY python_signatures ./python_signatures
+COPY browser_capture ./browser_capture
 RUN poetry config virtualenvs.create false && \
     poetry export -f requirements.txt --without-hashes --only main -o requirements.txt
 
@@ -66,7 +67,10 @@ RUN for i in 1 2 3 4 5; do \
     sleep 2; \
 done
 
+# * Path deps in requirements.txt point at /build/browser_capture (same layout as pybuilder).
+RUN mkdir -p /build
 COPY --from=pybuilder /build/requirements.txt /app/requirements.txt
+COPY browser_capture /build/browser_capture
 RUN pip install --no-cache-dir --break-system-packages -r /app/requirements.txt
 
 COPY python_signatures /app/python_signatures

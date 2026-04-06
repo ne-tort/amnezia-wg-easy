@@ -8,7 +8,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10"
+python = ">=3.10,<4"
 pyyaml = "^6.0"
 scapy = { version = "^2.7.0", python = ">=3.10,<4" }
 browser-capture = { path = "browser_capture", develop = true }
