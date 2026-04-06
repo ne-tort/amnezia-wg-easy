@@ -6,7 +6,7 @@ version = "0.1.0"
 description = "Browser-driven UDP capture (Chromium + tcpdump) for QUIC-like signatures"
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["capture"]
 files = []
 develop = true
 
@@ -202,7 +202,7 @@ version = "3.3.2"
 description = "Lightweight in-process concurrent programming"
 optional = false
 python-versions = ">=3.10"
-groups = ["main"]
+groups = ["capture"]
 files = [
     {file = "greenlet-3.3.2-cp310-cp310-macosx_11_0_universal2.whl", hash = "sha256:9bc885b89709d901859cf95179ec9f6bb67a3d2bb1f0e88456461bd4b7f8fd0d"},
     {file = "greenlet-3.3.2-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:b568183cf65b94919be4438dc28416b234b678c608cafac8874dfeeb2a9bbe13"},
@@ -293,7 +293,7 @@ version = "1.58.0"
 description = "A high-level API to automate web browsers"
 optional = false
 python-versions = ">=3.9"
-groups = ["main"]
+groups = ["capture"]
 files = [
     {file = "playwright-1.58.0-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:96e3204aac292ee639edbfdef6298b4be2ea0a55a16b7068df91adac077cc606"},
     {file = "playwright-1.58.0-py3-none-macosx_11_0_arm64.whl", hash = "sha256:70c763694739d28df71ed578b9c8202bb83e8fe8fb9268c04dd13afe36301f71"},
@@ -331,7 +331,7 @@ version = "13.0.1"
 description = "A rough port of Node.js's EventEmitter to Python with a few tricks of its own"
 optional = false
 python-versions = ">=3.8"
-groups = ["main"]
+groups = ["capture"]
 files = [
     {file = "pyee-13.0.1-py3-none-any.whl", hash = "sha256:af2f8fede4171ef667dfded53f96e2ed0d6e6bd7ee3bb46437f77e3b57689228"},
     {file = "pyee-13.0.1.tar.gz", hash = "sha256:0b931f7c14535667ed4c7e0d531716368715e860b988770fc7eb8578d1f67fc8"},
@@ -490,7 +490,7 @@ version = "2.7.0"
 description = "Scapy: interactive packet manipulation tool"
 optional = false
 python-versions = "<4,>=3.7"
-groups = ["main"]
+groups = ["main", "capture"]
 files = [
     {file = "scapy-2.7.0-py3-none-any.whl", hash = "sha256:eb22786da92be6fd8e5c694ae5595e4f5b9ac1f4364c9c45986844f3e3063561"},
     {file = "scapy-2.7.0.tar.gz", hash = "sha256:bfc1ef1b93280aea1ddee53be7f74232aa28ac3d891244d41ee85200d24aa446"},
@@ -565,7 +565,7 @@ version = "4.15.0"
 description = "Backported and Experimental Type Hints for Python 3.9+"
 optional = false
 python-versions = ">=3.9"
-groups = ["main", "dev"]
+groups = ["capture", "dev"]
 files = [
     {file = "typing_extensions-4.15.0-py3-none-any.whl", hash = "sha256:f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548"},
     {file = "typing_extensions-4.15.0.tar.gz", hash = "sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466"},
@@ -575,4 +575,4 @@ markers = {dev = "python_version == \"3.10\""}
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<4"
-content-hash = "67286733b5a6098988ea5e57403a753c4ab1d8d0b32eeb4eefc57be94f4969e8"
+content-hash = "8ed7b77870698c3697b3d7c4c0bb1eacb3fc2ae978303947721a46dc0f7f3fe0"
