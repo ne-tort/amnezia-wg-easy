@@ -14,25 +14,24 @@ import sys
 from pathlib import Path
 
 from python_signatures.base import CollectorOptions
-from python_signatures.dns_collector import DnsSignatureCollector
+from python_signatures.browser_quic_collector import BrowserQuicSignatureCollector
+from python_signatures.browser_stun_collector import BrowserStunSignatureCollector
+from python_signatures.library_template_collector import LibraryTemplateProfileCollector
 from python_signatures.profile_cps import merge_collector_output
-from python_signatures.quic_collector import QuicSignatureCollector
-from python_signatures.stun_collector import StunSignatureCollector
-from python_signatures.sip_collector import SipSignatureCollector
-from python_signatures.webrtc_collector import WebrtcSignatureCollector
-from python_signatures.dtls_collector import DtlsSignatureCollector
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# * Registry: profile_id -> (CollectorClass, config filename under config_dir).
+# * Registry: profile_id -> (CollectorClass, config path relative to config_dir).
 PROTOCOL_REGISTRY = [
-    ("dns", DnsSignatureCollector, "dns_targets.json"),
-    ("quic", QuicSignatureCollector, "quic_targets.json"),
-    ("stun", StunSignatureCollector, "stun_targets.json"),
-    ("sip", SipSignatureCollector, "sip_targets.json"),
-    ("webrtc", WebrtcSignatureCollector, "webrtc_targets.json"),
-    ("dtls", DtlsSignatureCollector, "dtls_targets.json"),
+    ("dns", LibraryTemplateProfileCollector, "profile_templates/dns.json"),
+    ("sip", LibraryTemplateProfileCollector, "profile_templates/sip.json"),
+    ("dtls", LibraryTemplateProfileCollector, "profile_templates/dtls.json"),
+    ("quic", BrowserQuicSignatureCollector, "quic_targets.json"),
+    ("quic_browser", BrowserQuicSignatureCollector, "quic_browser_targets.json"),
+    ("stun", BrowserStunSignatureCollector, "stun_targets.json"),
+    ("webrtc", BrowserStunSignatureCollector, "webrtc_targets.json"),
+    ("stun_browser", BrowserStunSignatureCollector, "stun_browser_targets.json"),
 ]
 
 
@@ -40,10 +39,13 @@ def run_all(config_dir: Path, out_path: Path, timeout: int, dry_run: bool) -> di
     """
     Run each collector and build profile_id -> { i1, i2, i3, i4, i5 } (CPS strings).
     Raises on first collector failure; does not write to disk.
+
+    If ``dry_run`` is True, browser collectors load
+    ``tests/fixtures/signatures/<profile_id>.json`` — for tests only, not objective traffic.
     """
     result: dict[str, dict] = {}
-    for profile_id, collector_cls, config_name in PROTOCOL_REGISTRY:
-        config_path = config_dir / config_name
+    for profile_id, collector_cls, config_rel in PROTOCOL_REGISTRY:
+        config_path = config_dir / config_rel
         if not config_path.exists():
             raise FileNotFoundError(f"Config not found: {config_path}")
         opts = CollectorOptions(
@@ -52,6 +54,7 @@ def run_all(config_dir: Path, out_path: Path, timeout: int, dry_run: bool) -> di
             count=1,
             timeout=timeout,
             dry_run=dry_run,
+            registry_profile_id=profile_id,
         )
         collector = collector_cls(opts)
         try:
@@ -89,7 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Load committed CPS from tests/fixtures/signatures/*.json (CI; no live capture).",
+        help=(
+            "TEST ONLY: templates from profile_templates/; browser collectors read "
+            "tests/fixtures/signatures/<profile_id>.json. No real packets. "
+            "Omit this flag for objective capture."
+        ),
     )
     args = parser.parse_args(argv)
     out_path = Path(args.out).resolve()
@@ -97,6 +104,15 @@ def main(argv: list[str] | None = None) -> int:
     if config_dir is None:
         config_dir = Path(__file__).resolve().parent / "config"
     config_dir = config_dir.resolve()
+    if args.dry_run:
+        print(
+            "run_all: DRY-RUN — шаблоны из profile_templates/; для браузерных профилей — "
+            "tests/fixtures/signatures/. Реальный трафик не снимается. "
+            "Для объективного I1–I5 запускайте без --dry-run "
+            "(tcpdump; quic_browser/stun_browser — browser_capture + Chromium).\n",
+            file=sys.stderr,
+        )
+        logger.warning("dry-run mode: fixtures/templates only, not live capture")
     try:
         data = run_all(config_dir, out_path, timeout=args.timeout, dry_run=args.dry_run)
     except Exception:

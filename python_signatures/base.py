@@ -28,6 +28,8 @@ class CollectorOptions:
     iface: Optional[str] = None
     timeout: Optional[int] = None
     dry_run: bool = False
+    # * Set by run_all: merge_collector_output(profile_id, sig) uses this registry id.
+    registry_profile_id: Optional[str] = None
 
 
 class SignatureCollector(abc.ABC):

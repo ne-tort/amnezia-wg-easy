@@ -9,17 +9,23 @@ packages = [
 
 [tool.poetry.dependencies]
 python = ">=3.10"
-dnspython = "^2.7.0"
+pyyaml = "^6.0"
 scapy = { version = "^2.7.0", python = ">=3.10,<4" }
+browser-capture = { path = "browser_capture", develop = true }
+playwright = { version = "^1.40.0", optional = true }
 # aioquic = "^1.0.0"  # for real QUIC capture (future)
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 pytest-cov = "^5.0.0"
+dnspython = "^2.7.0"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "browser_capture/tests"]
 pythonpath = ["."]
+markers = [
+    "integration: live network or tcpdump (skipped in default CI)",
+]
 addopts = "-ra"
 
 [build-system]

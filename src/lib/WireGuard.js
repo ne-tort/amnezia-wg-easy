@@ -39,10 +39,6 @@ const {
   H2,
   H3,
   H4,
-  I2,
-  I3,
-  I4,
-  I5,
   WG_QR_COMPACT,
 } = require('../config');
 
@@ -199,10 +195,10 @@ const WireGuard = class {
       h2: String(H2),
       h3: String(H3),
       h4: String(H4),
-      i2: I2 || null,
-      i3: I3 || null,
-      i4: I4 || null,
-      i5: I5 || null,
+      i2: null,
+      i3: null,
+      i4: null,
+      i5: null,
       updated_at: now,
     });
     debug('Server config generated and saved to DB.');
@@ -429,10 +425,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     const profileId = (profile != null && isKnownProfile(profile)) ? profile : DEFAULT_PROFILE_ID;
     const prof = getProfileSignatures(profileId);
 
+    const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
+
     let iLines = [];
     if (level !== undefined && level !== null) {
-      // * Level-based: I0 = none; I1 = CPS from profile; I2–I5 from signatures.json (Python CPS)
-      // or per-profile defaults. Never use <c> — not implemented in amneziawg-go CPS parser.
       const l = Number(level);
       if (l === 0) {
         iLines = [];
@@ -445,22 +441,12 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
         if (l >= 4) iLines.push(`I4 = ${prof.i4}`);
         if (l >= 5) iLines.push(`I5 = ${prof.i5}`);
       } else {
-        // Invalid level: fall back to legacy behavior.
-        const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
         if (!omitI1 && prof.i1) iLines.push(`I1 = ${prof.i1}`);
-        if (config.server.i2) iLines.push(`I2 = ${config.server.i2}`);
-        if (config.server.i3) iLines.push(`I3 = ${config.server.i3}`);
-        if (config.server.i4) iLines.push(`I4 = ${config.server.i4}`);
-        if (config.server.i5) iLines.push(`I5 = ${config.server.i5}`);
+        iLines.push(`I2 = ${prof.i2}`, `I3 = ${prof.i3}`, `I4 = ${prof.i4}`, `I5 = ${prof.i5}`);
       }
     } else {
-      // Legacy: no level — use omitI1 and server i2–i5.
-      const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
       if (!omitI1 && prof.i1) iLines.push(`I1 = ${prof.i1}`);
-      if (config.server.i2) iLines.push(`I2 = ${config.server.i2}`);
-      if (config.server.i3) iLines.push(`I3 = ${config.server.i3}`);
-      if (config.server.i4) iLines.push(`I4 = ${config.server.i4}`);
-      if (config.server.i5) iLines.push(`I5 = ${config.server.i5}`);
+      iLines.push(`I2 = ${prof.i2}`, `I3 = ${prof.i3}`, `I4 = ${prof.i4}`, `I5 = ${prof.i5}`);
     }
     const iBlock = iLines.length ? iLines.join('\n') + '\n\n' : '';
 

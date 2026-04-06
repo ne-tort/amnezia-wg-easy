@@ -1,0 +1,25 @@
+# Машиночитаемая политика слотов I1–I5: что может дать live capture, что добирается merge.
+# Подробности: BROWSER_PROFILES.md
+schema_version: 1
+description: >-
+  Which collector slots can be filled from live capture vs merge fallbacks.
+
+profiles:
+  quic_browser:
+    capture_slots: [hex, i2, i3, i4, i5]
+    source: >-
+      browser_capture.quic_packet_chain (up to 5 QUIC UDP payloads);
+      optional hex from TLS ClientHello if tls_clienthello_as_i1 + https_quic_tcp.
+    merge_fallback: ARCHITECT_DEFAULTS for any missing i2–i5 keys
+    notes: >-
+      Five distinct packets are not guaranteed per navigation; empty keys use Architect.
+
+  stun_browser:
+    capture_slots: [hex, i2]
+    source: STUN Binding request / response UDP payloads
+    merge_fallback: i3–i5 from ARCHITECT_DEFAULTS when not in capture
+
+  quic_rfc:
+    capture_slots: [hex]
+    source: external collector or manual
+    merge_fallback: i2–i5 from ARCHITECT_DEFAULTS

@@ -1,13 +1,13 @@
 """
-Per-profile CPS defaults for I2–I5 when collectors do not supply packets.
+Per-profile CPS merge for I1–I5.
 
 Priority:
-  1. Values returned by the collector (from real capture): ``hex`` (I1), optional ``i2``…``i5``.
-  2. If a key is missing (e.g. no second UDP packet captured), ``merge_collector_output``
-     fills from PROFILE_DEFAULTS below (curated CPS / wire-shaped fallbacks, not live traffic).
+  1. Collector ``hex`` (I1) and any non-empty ``i2``…``i5`` from live capture.
+  2. Every missing slot is filled from ``ARCHITECT_DEFAULTS[profile_id]`` in
+     ``architect_fallbacks.py`` (versioned bundle — single objective fallback).
 
-Uses only tags supported by amneziawg-go CPS: <b>, <t>, <r>, <rc>, <rd>.
-Do not use <c> (packet counter): not implemented in userspace go core — see amneziawg-go #120.
+There is no separate PROFILE layer: Architect holds the full I2–I5 chain for
+each ``profile_id`` so merge always emits a complete five-slot CPS map.
 """
 
 from __future__ import annotations
@@ -15,73 +15,48 @@ from __future__ import annotations
 import os
 from typing import Any, Dict
 
-# * Second QUIC fragment when capture did not yield a second outgoing packet (Habr-style example).
-QUIC_CPS_I2_HABR = "<b 0xf6ab3267fa><t><rc 20><r 80>"
-
-# * Second DNS wire when collector did not run: A query for example.com with EDNS0 (40 B), realistic client.
-_DNS_FALLBACK_I2_WIRE = (
-    "ad3801000001000000000001076578616d706c6503636f6d000001000100002904d0000000000000"
-)
-
-# * Profile-specific fallbacks (I1 comes from collector "hex").
-PROFILE_DEFAULTS: Dict[str, Dict[str, str]] = {
-    "dns": {
-        "i2": f"<b 0x{_DNS_FALLBACK_I2_WIRE}>",
-        "i3": "<t>",
-    },
-    "quic": {
-        "i2": QUIC_CPS_I2_HABR,
-        "i3": "<t>",
-    },
-    "stun": {
-        "i2": "<b 0x010100002112a442><rc 12><r 64>",
-        "i3": "<t>",
-    },
-    "sip": {
-        "i2": "<rc 40><r 80>",
-        "i3": "<t>",
-    },
-    "webrtc": {
-        "i2": "<b 0x010100002112a442><rc 12><r 64>",
-        "i3": "<t>",
-    },
-    "dtls": {
-        # Handshake record (0x16), DTLS 1.2 (0xfefd), not ChangeCipherSpec (0x14).
-        "i2": "<b 0x16fefd0000000000000000000000><r 96>",
-        "i3": "<t>",
-    },
-}
+from python_signatures.architect_fallbacks import ARCHITECT_DEFAULTS
 
 
 def obfs_r_bytes() -> int:
+    """Legacy helper for tooling that still reads ``OBFS_R_BYTES`` from the environment."""
     return int(os.environ.get("OBFS_R_BYTES", "48"), 10)
 
 
 def merge_collector_output(profile_id: str, sig: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Build signatures.json entry with i1–i5.
+    Build ``{ i1, i2, i3, i4, i5 }`` CPS strings.
 
-    Collector sets ``hex`` (I1) from capture; optional ``i2``…``i5`` when present.
-    Any missing slot uses PROFILE_DEFAULTS for that profile (fallback when capture
-    did not provide a second packet, etc.).
+    I1 is always ``sig``'s ``hex``. I2–I5: capture values win; otherwise Architect
+    constants for this ``profile_id`` (every profile must define all four keys).
     """
     hex_val = sig.get("hex")
     if not isinstance(hex_val, str) or not hex_val.strip().startswith("<b 0x"):
         raise ValueError("signature must have hex (I1) starting with <b 0x")
 
-    out: Dict[str, Any] = {"i1": hex_val.strip()}
-    prof = PROFILE_DEFAULTS.get(profile_id, PROFILE_DEFAULTS["dns"])
-    r_n = obfs_r_bytes()
+    arch = ARCHITECT_DEFAULTS.get(profile_id)
+    if arch is None:
+        raise ValueError(
+            f"merge_collector_output: unknown profile_id={profile_id!r}; "
+            f"add full i2–i5 to ARCHITECT_DEFAULTS in architect_fallbacks.py"
+        )
+    for key in ("i2", "i3", "i4", "i5"):
+        if key not in arch:
+            raise ValueError(
+                f"ARCHITECT_DEFAULTS[{profile_id!r}] must define {key!r} (full I2–I5 bundle)"
+            )
 
-    def pick(key: str, fallback: str) -> str:
+    out: Dict[str, Any] = {"i1": hex_val.strip()}
+
+    def pick(key: str) -> str:
         v = sig.get(key)
         if isinstance(v, str) and v.strip():
             return v.strip()
-        return fallback
+        return arch[key]
 
-    out["i2"] = pick("i2", prof.get("i2", "<rc 24><r 80>"))
-    out["i3"] = pick("i3", prof.get("i3", "<t>"))
-    out["i4"] = pick("i4", f"<r {r_n}>")
-    out["i5"] = pick("i5", f"<r {r_n}>")
+    out["i2"] = pick("i2")
+    out["i3"] = pick("i3")
+    out["i4"] = pick("i4")
+    out["i5"] = pick("i5")
 
     return out

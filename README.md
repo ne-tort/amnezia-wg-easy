@@ -55,9 +55,36 @@ HTTP-трафик на панель перенаправляется в HTTPS в
 
 - **H1–H4:** в конфиге можно задать число или диапазон. Если используете **диапазоны** на клиенте вручную, они не должны **пересекаться** между типами пакетов (см. [статью Amnezia про AWG 2.0](https://habr.com/ru/companies/amnezia/articles/1014636/)). Панель при сохранении серверного конфига часто схлопывает диапазон в одно значение на заголовок.
 - **S4:** дополнительные байты к каждому data-пакету; больше значение — тяжелее для DPI, ниже скорость. Настраивается через `S4` в окружении.
-- **I1–I5:** цепочка CPS подставляется из `signatures.json` (пересборка через Python `run_all`). Размер `<r N>` для I4/I5 по умолчанию задаётся `OBFS_R_BYTES` (и тем же именем в Python при генерации).
+- **I1–I5:** полная пятёрка CPS в `signatures.json` собирается `run_all`: **I1** и при наличии **I2–I5** из реального захвата, любые пропуски заполняются **только** из зафиксированного бандла [`architect_fallbacks.py`](python_signatures/architect_fallbacks.py) (`ARCHITECT_DEFAULTS` по `profile_id`, версия `ARCHITECT_BUNDLE_VERSION`). Переменная `OBFS_R_BYTES` относится к другим слоям обфускации на сервере, не к автоподстановке I4/I5 в merge.
 
-**Сигнатуры и capture:** в продакшене коллекторы должны получать **I1 (и по возможности I2) из реального UDP-трафика** (curl/openssl + tcpdump и т.д.). Режим `run_all --dry-run` и файлы в `tests/fixtures/signatures/*.json` нужны только для CI: это **зафиксированные** CPS-строки, а не подстановка живого capture. Бандл [`python_signatures/config/signatures.default.json`](python_signatures/config/signatures.default.json) — стартовый шаблон до первой успешной перегенерации на сервере; для качества DPI лучше сразу выполнить `run_all` **без** `--dry-run` на хосте с рабочим захватом. Если коллектор не вернул второй пакет, недостающие поля добираются из [`profile_cps.py`](python_signatures/profile_cps.py) (готовые fallback-цепочки, без тега `<c>`).
+**Сигнатуры и capture:** список `profile_id` и реестр коллекторов — единственный источник в [`python_signatures/run_all.py`](python_signatures/run_all.py) (`known_profile_ids()` в [`library_api.py`](python_signatures/library_api.py)); панель читает тот же список через Python при старте. Шаблоны `dns` / `sip` / `dtls` — из [`python_signatures/config/profile_templates/`](python_signatures/config/profile_templates/); `quic` и `quic_browser` — [`browser_quic_collector.py`](python_signatures/browser_quic_collector.py); `stun`, `webrtc`, `stun_browser` — [`browser_stun_collector.py`](python_signatures/browser_stun_collector.py). См. [`capture_policy.yaml`](python_signatures/capture_policy.yaml) и [`BROWSER_PROFILES.md`](python_signatures/BROWSER_PROFILES.md). `run_all --dry-run` использует шаблоны и фикстуры `tests/fixtures/signatures/<profile_id>.json` для CI. Бандл [`python_signatures/config/signatures.default.json`](python_signatures/config/signatures.default.json) — стартовый шаблон; в продакшене выполняйте `run_all` **без** `--dry-run` (нужны pcap и при браузерных профилях — `browser_capture` + Chromium). Цепочки **I1–I5** для клиента берутся только из `signatures.json`, не из переменных окружения. Тег `<c>` в CPS не используется.
+
+### Библиотечный API для веб-панели
+
+Python-слой теперь можно вызывать как библиотеку (без парсинга CLI-stdout):
+
+```python
+from pathlib import Path
+from python_signatures.library_api import get_profile, regenerate_signatures
+
+signatures_path = Path("/opt/amnezia/awg/signatures.json")
+config_dir = Path("python_signatures/config")
+
+# 1) Асинхронная в панели операция регенерации (обычно по кнопке / cron)
+regenerate_signatures(
+    out_path=signatures_path,
+    config_dir=config_dir,
+    timeout=45,
+    dry_run=False,  # только real capture
+)
+
+# 2) Быстрый запрос конкретного профиля для выдачи конфига клиенту
+payload = get_profile("quic", signatures_path=signatures_path)
+# payload: {profile_id, i1..i5, source_meta}
+```
+
+Node helper [`src/lib/signatures.js`](src/lib/signatures.js) использует тот же контракт:
+`getProfilePayload(profileId)` возвращает `{ profile_id, i1, i2, i3, i4, i5, source_meta }`.
 
 **S1–S4 (Jc) и H1–H4 — глобально на сервере:** они общие для всех клиентов одного инстанса и не привязаны к выбранному профилю маскировки (`dns`, `quic`, `stun`, …). Смена профиля меняет только цепочку **I1–I5** (видимость UDP). Сервер и клиент должны совпадать по Jc/S/H; разные пресеты S/H под разные «протоколы» в смысле одной панели не поддерживаются — для этого нужны отдельные серверы/контейнеры или расширение модели хранения.
 

@@ -65,14 +65,15 @@ const UI_CHART_TYPES = [
 
 // * Profile id -> label and qrFriendly (order comes from API /signatures/profiles).
 const PROFILE_META = {
-  quic: { label: 'QUIC', qrFriendly: false },
   dns: { label: 'DNS', qrFriendly: true },
   sip: { label: 'SIP', qrFriendly: true },
+  dtls: { label: 'DTLS', qrFriendly: true },
+  quic: { label: 'QUIC', qrFriendly: false },
+  quic_browser: { label: 'QUIC (browser)', qrFriendly: false },
   stun: { label: 'STUN', qrFriendly: true },
   webrtc: { label: 'WebRTC', qrFriendly: true },
-  dtls: { label: 'DTLS', qrFriendly: true },
+  stun_browser: { label: 'STUN (browser)', qrFriendly: true },
 };
-const FALLBACK_PROFILE_IDS = ['dns', 'quic', 'stun', 'sip', 'webrtc', 'dtls'];
 
 const CHART_COLORS = {
   rx: { light: 'rgba(128,128,128,0.3)', dark: 'rgba(255,255,255,0.3)' },
@@ -277,7 +278,7 @@ new Vue({
       return meta ? meta.qrFriendly === true : false;
     },
     cycleClientProfile(client) {
-      const list = this.profileIds.length ? this.profileIds : ['dns', 'quic', 'stun', 'sip', 'webrtc', 'dtls'];
+      const list = this.profileIds.length ? this.profileIds : [this.defaultProfile || 'dns'];
       const current = this.getClientProfile(client);
       let idx = list.indexOf(current);
       if (idx < 0) idx = 0;
@@ -994,11 +995,11 @@ new Vue({
         this.syncPanelUserFromSession(session);
         this.api.getSignaturesProfiles()
           .then((r) => {
-            this.profileIds = r && r.profileIds ? r.profileIds : FALLBACK_PROFILE_IDS;
+            this.profileIds = r && Array.isArray(r.profileIds) ? r.profileIds : [];
             this.defaultProfile = (r && r.defaultProfile) || 'dns';
           })
           .catch(() => {
-            this.profileIds = FALLBACK_PROFILE_IDS;
+            this.profileIds = [];
             this.defaultProfile = 'dns';
           });
         this.loadGlobalFirewallRules();

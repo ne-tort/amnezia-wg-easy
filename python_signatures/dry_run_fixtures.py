@@ -1,9 +1,12 @@
 """
-Pre-recorded CPS snapshots for `collectors --dry-run` (CI / tests only).
+Pre-recorded CPS snapshots for `run_all --dry-run` and unit tests only.
 
-Production regeneration uses real capture (`run_all` without `--dry-run`).
-These files are not generated at runtime — they are committed under
-tests/fixtures/signatures/.
+They are **not** the objective output of the library: they are static JSON
+committed under ``tests/fixtures/signatures/`` so CI can run without tcpdump,
+curl targets, or browser_capture.
+
+Objective I1–I5: run ``python -m python_signatures.run_all --out …`` **without**
+``--dry-run`` so each collector executes real capture, then merge runs as usual.
 """
 
 from __future__ import annotations

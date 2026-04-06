@@ -5,7 +5,7 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const debug = require('debug')('signatures');
 
-const { WG_PATH, OBFS_R_BYTES } = require('../config');
+const { WG_PATH } = require('../config');
 
 const SIGNATURES_PATH = path.join(WG_PATH, 'signatures.json');
 const DEFAULT_SIGNATURES_PATH = path.join(process.cwd(), 'python_signatures', 'config', 'signatures.default.json');
@@ -17,39 +17,36 @@ let cache = null;
 let regenerationInProgress = false;
 
 /**
- * Normalize one profile entry from JSON: either legacy string (I1 only) or { i1..i5 }.
+ * Normalize one profile entry from JSON: object with i1..i5 CPS strings.
  */
 function normalizeProfileEntry(raw) {
-  if (raw == null) return {};
-  let v = raw;
-  if (typeof v === 'string') {
-    const t = v.trim();
-    if (t.startsWith('{')) {
-      try {
-        v = JSON.parse(t);
-      } catch (_) {
-        /* keep as string */
-      }
-    }
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const k of ['i1', 'i2', 'i3', 'i4', 'i5']) {
+    if (typeof raw[k] === 'string' && raw[k].trim()) out[k] = raw[k].trim();
   }
-  if (typeof v === 'string') {
-    const s = v.trim();
-    if (s.startsWith('<b 0x')) return { i1: s };
-    return {};
-  }
-  if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
-    const out = {};
-    for (const k of ['i1', 'i2', 'i3', 'i4', 'i5']) {
-      if (typeof v[k] === 'string' && v[k].trim()) out[k] = v[k].trim();
-    }
-    return out;
-  }
-  return {};
+  return out;
+}
+
+function validateSignaturesObject(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  return true;
+}
+
+function isCompleteProfile(profile) {
+  return Boolean(
+    profile &&
+    typeof profile.i1 === 'string' && profile.i1.trim() &&
+    typeof profile.i2 === 'string' && profile.i2.trim() &&
+    typeof profile.i3 === 'string' && profile.i3.trim() &&
+    typeof profile.i4 === 'string' && profile.i4.trim() &&
+    typeof profile.i5 === 'string' && profile.i5.trim()
+  );
 }
 
 /**
  * Load signatures from SIGNATURES_PATH. If file is missing, copy from bundled default
- * and retry. Caches result in memory.
+ * and retry. Caches result in memory. No legacy hardcoded profile fallback.
  */
 async function loadSignatures() {
   if (cache) return cache;
@@ -64,83 +61,23 @@ async function loadSignatures() {
         debug('Copied default signatures to %s', SIGNATURES_PATH);
         raw = await fs.readFile(SIGNATURES_PATH, 'utf8');
       } catch (copyErr) {
-        debug('Default copy failed: %s', copyErr.message);
-        const fromDb = tryGetSignaturesFromDb();
-        cache = fromDb || getHardcodedFallback();
-        return cache;
+        throw new Error(`Failed to initialize signatures.json from default bundle: ${copyErr.message}`);
       }
     } else {
-      debug('Read failed: %s', err.message);
-      const fromDb = tryGetSignaturesFromDb();
-      cache = fromDb || getHardcodedFallback();
-      return cache;
+      throw new Error(`Failed to read signatures.json: ${err.message}`);
     }
   }
+  let data;
   try {
-    const data = JSON.parse(raw);
-    if (data && typeof data === 'object') cache = data;
-    else cache = tryGetSignaturesFromDb() || getHardcodedFallback();
-  } catch (_) {
-    cache = tryGetSignaturesFromDb() || getHardcodedFallback();
+    data = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Invalid JSON in signatures file ${SIGNATURES_PATH}: ${err.message}`);
   }
+  if (!validateSignaturesObject(data)) {
+    throw new Error(`signatures file must be an object map: ${SIGNATURES_PATH}`);
+  }
+  cache = data;
   return cache;
-}
-
-function tryGetSignaturesFromDb() {
-  try {
-    const db = require('./db');
-    const fromDb = db.protocolTemplates.getAll();
-    if (fromDb && typeof fromDb === 'object' && Object.keys(fromDb).length > 0) return fromDb;
-  } catch (_) {}
-  return null;
-}
-
-/** Bundled CPS when no signatures.json: template until `run_all` without --dry-run (real capture). */
-function getHardcodedFallback() {
-  return {
-    dns: {
-      i1: '<b 0x084481800001000300000000077469636b65747306776964676574096b696e6f706f69736b0272750000010001c00c0005000100000039001806776964676574077469636b6574730679616e646578c025c0390005000100000039002b1765787465726e616c2d7469636b6574732d776964676574066166697368610679616e646578036e657400c05d000100010000001c000457fafe25>',
-      i2: '<b 0xad3801000001000000000001076578616d706c6503636f6d000001000100002904d0000000000000>',
-      i3: '<t>',
-      i4: '<r 48>',
-      i5: '<r 48>',
-    },
-    quic: {
-      i1: '<b 0xc700000001><rc 8><t><r 100>',
-      i2: '<b 0xf6ab3267fa><t><rc 20><r 80>',
-      i3: '<t>',
-      i4: '<r 48>',
-      i5: '<r 48>',
-    },
-    sip: {
-      i1: '<b 0x4f5054494f4e53207369703a7369702e6578616d706c652e636f6d205349502f322e30>',
-      i2: '<rc 40><r 80>',
-      i3: '<t>',
-      i4: '<r 48>',
-      i5: '<r 48>',
-    },
-    stun: {
-      i1: '<b 0x000100002112a442544553545445535454455354>',
-      i2: '<b 0x010100002112a442><rc 12><r 64>',
-      i3: '<t>',
-      i4: '<r 48>',
-      i5: '<r 48>',
-    },
-    webrtc: {
-      i1: '<b 0x000100002112a442000000000000000000000000>',
-      i2: '<b 0x010100002112a442><rc 12><r 64>',
-      i3: '<t>',
-      i4: '<r 48>',
-      i5: '<r 48>',
-    },
-    dtls: {
-      i1: '<b 0x16fefd00000000000000000000001801000014000000000000000000>',
-      i2: '<b 0x16fefd0000000000000000000000><r 96>',
-      i3: '<t>',
-      i4: '<r 48>',
-      i5: '<r 48>',
-    },
-  };
 }
 
 function invalidateCache() {
@@ -153,37 +90,20 @@ function invalidateCache() {
  */
 function getProfileSignatures(profileId, signaturesObj) {
   const sigs = signaturesObj || cache;
-  const fallback = getHardcodedFallback();
-  const rN = Number.isFinite(OBFS_R_BYTES) && OBFS_R_BYTES > 0 ? OBFS_R_BYTES : 48;
-  const defaults = {
-    i2: '<rc 24><r 80>',
-    i3: '<t>',
-    i4: `<r ${rN}>`,
-    i5: `<r ${rN}>`,
-  };
-
-  let raw = sigs?.[profileId];
-  if (raw == null) raw = sigs?.[DEFAULT_PROFILE_ID];
-  let norm = normalizeProfileEntry(raw);
-
-  if (!norm.i1) {
-    const fb = fallback[profileId] || fallback[DEFAULT_PROFILE_ID];
-    const fbNorm = normalizeProfileEntry(fb);
-    norm = { ...fbNorm, ...norm };
-  }
-  if (!norm.i1) {
-    const fb = fallback[DEFAULT_PROFILE_ID];
-    const fbNorm = normalizeProfileEntry(fb);
-    norm = { ...fbNorm, ...norm };
+  if (!sigs || typeof sigs !== 'object') {
+    throw new Error('signatures are not loaded; call loadSignatures() first');
   }
 
-  return {
-    i1: norm.i1,
-    i2: norm.i2 || defaults.i2,
-    i3: norm.i3 || defaults.i3,
-    i4: norm.i4 != null && norm.i4 !== '' ? norm.i4 : defaults.i4,
-    i5: norm.i5 != null && norm.i5 !== '' ? norm.i5 : defaults.i5,
-  };
+  const pid = typeof profileId === 'string' && profileId.trim() ? profileId.trim() : DEFAULT_PROFILE_ID;
+  const raw = sigs?.[pid];
+  if (raw == null) {
+    throw new Error(`profile not found in signatures: ${pid}`);
+  }
+  const norm = normalizeProfileEntry(raw);
+  if (!isCompleteProfile(norm)) {
+    throw new Error(`profile is incomplete (i1..i5 required): ${pid}`);
+  }
+  return norm;
 }
 
 /**
@@ -191,6 +111,26 @@ function getProfileSignatures(profileId, signaturesObj) {
  */
 function getI1ForProfile(profileId, signaturesObj) {
   return getProfileSignatures(profileId, signaturesObj).i1;
+}
+
+/**
+ * Web-panel friendly payload for one profile.
+ */
+function getProfilePayload(profileId, signaturesObj) {
+  const profile = getProfileSignatures(profileId, signaturesObj);
+  const pid = typeof profileId === 'string' && profileId.trim() ? profileId.trim() : DEFAULT_PROFILE_ID;
+  return {
+    profile_id: pid,
+    i1: profile.i1,
+    i2: profile.i2,
+    i3: profile.i3,
+    i4: profile.i4,
+    i5: profile.i5,
+    source_meta: {
+      source: 'signatures_json_cache',
+      signatures_path: SIGNATURES_PATH,
+    },
+  };
 }
 
 /**
@@ -259,6 +199,7 @@ module.exports = {
   invalidateCache,
   getI1ForProfile,
   getProfileSignatures,
+  getProfilePayload,
   normalizeProfileEntry,
   runSignatureGeneration,
 };

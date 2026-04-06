@@ -1,35 +1,20 @@
-import json
+"""Library template profile for ``dns`` (no live resolver)."""
+
 from pathlib import Path
 
 from python_signatures.base import CollectorOptions
-from python_signatures.dns_collector import DnsSignatureCollector
+from python_signatures.library_template_collector import LibraryTemplateProfileCollector
 
 
-def test_dns_collector_basic(tmp_path: Path) -> None:
-    """Smoke test: collector produces at least one valid signature."""
-    cfg_path = tmp_path / "dns_targets.json"
-    cfg_path.write_text(
-        json.dumps(
-            {
-                "resolver": "8.8.8.8",
-                "port": 53,
-                "record_type": "A",
-                "domains": ["example.com"],
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    opts = CollectorOptions(config_path=cfg_path, out_path=None, count=1)
-    collector = DnsSignatureCollector(opts)
+def test_dns_template_collector_basic() -> None:
+    repo = Path(__file__).resolve().parent.parent
+    cfg_path = repo / "python_signatures" / "config" / "profile_templates" / "dns.json"
+    opts = CollectorOptions(config_path=cfg_path, registry_profile_id="dns", dry_run=False)
+    collector = LibraryTemplateProfileCollector(opts)
     sigs = collector.collect()
-
     assert len(sigs) == 1
     sig = sigs[0]["hex"]
     assert isinstance(sig, str)
     assert sig.startswith("<b 0x")
     assert sig.endswith(">")
-    # payload must not be empty
     assert len(sig) > len("<b 0x>")
-    i2 = sigs[0].get("i2")
-    assert isinstance(i2, str) and i2.startswith("<b 0x")

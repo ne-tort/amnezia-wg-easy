@@ -1,0 +1,5 @@
+{
+  "hex": "<b 0xca0000000108e9ac8011><rc 8><t><r 100>",
+  "i2": "<b 0xc40000000108e9ac8011><rc 8><t><r 80>",
+  "note": "CI dry-run only. Production: Chromium + tcpdump (browser_quic_collector)."
+}
