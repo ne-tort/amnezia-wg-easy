@@ -4,7 +4,8 @@
 
 1. деплой `exit`-узла,
 2. деплой `entry`-узла,
-3. применение сетевых hook'ов каскада:
+3. автоматическое поднятие межсерверного `wg-cascade` (host namespace),
+4. применение сетевых hook'ов каскада:
    - policy routing на `entry`,
    - NAT/forward на `exit`.
 
@@ -51,16 +52,18 @@ python install.py --dry-run --phase full
 ## Важные ограничения
 
 - Межсерверные интерфейсы (`entry.network.exit_uplink_interface`, `exit.network.entry_uplink_interface`) должны существовать заранее.
-- Скрипт не создаёт второй туннель автоматически, он применяет маршрутизацию/NAT к указанным интерфейсам.
+- Скрипт создаёт/обновляет host-level интерфейс `wg-cascade` и ключи в `/etc/wireguard`.
 - При занятии портов другим ПО deployment завершится ошибкой (fail-fast).
 - Для полного сброса состояния панели используйте `--wipe-db`.
 
 ## Проверка после запуска
 
 - На `entry`:
+  - `ip -o link show | grep wg-cascade`
   - `ip rule show | rg 166`
   - `ip route show table 166`
   - `nft list table inet amnezia_cascade_entry`
 - На `exit`:
+  - `ip -o link show | grep wg-cascade`
   - `nft list table ip amnezia_cascade_exit_nat`
   - `nft list table inet amnezia_cascade_exit_fwd`

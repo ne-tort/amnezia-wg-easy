@@ -58,10 +58,11 @@ class API {
     return json;
   }
 
-  async getConfiguration(clientId, level, profile) {
+  async getConfiguration(clientId, level, profile, format) {
     const params = [];
     if (level !== undefined && level !== null) params.push(`level=${Number(level)}`);
     if (profile !== undefined && profile !== null && profile !== '') params.push(`profile=${encodeURIComponent(profile)}`);
+    if (format === 'amnezia' || format === 'vpn') params.push('format=amnezia');
     const qs = params.length ? `?${params.join('&')}` : '';
     const res = await fetch(`./api/wireguard/client/${clientId}/configuration${qs}`, {
       credentials: 'include',
@@ -91,6 +92,7 @@ class API {
     if (encoding === 'amnezia') {
       const data = await res.json();
       if (!data.svgs || !Array.isArray(data.svgs)) throw new Error('Invalid QR response');
+      // data.chunkCount === data.svgs.length (for UI / diagnostics)
       return data.svgs;
     }
     return res.text();

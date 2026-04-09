@@ -33,8 +33,15 @@ entry:
     PANEL_HTTP_PORT: 80
     PANEL_HTTPS_PORT: 443
   network:
-    # Interface carrying traffic from entry to exit (must already exist, e.g. awg-exit/wg-exit).
-    exit_uplink_interface: "awg-exit"
+    # Optional: client ingress interface on entry host.
+    # Leave unset to mark by source CIDR regardless of ingress interface.
+    # vpn_ingress_interface: "amn0"
+    # Dedicated inter-server WireGuard tunnel params (host namespace).
+    cascade_interface: "wg-cascade"
+    cascade_entry_ip: "172.31.255.1"
+    cascade_exit_ip: "172.31.255.2"
+    cascade_prefix_len: 30
+    cascade_listen_port: 51830
     # Client subnets behind entry panel.
     client_cidrs:
       - "10.8.0.0/24"
@@ -65,8 +72,12 @@ exit:
     PANEL_HTTP_PORT: 80
     PANEL_HTTPS_PORT: 443
   network:
-    # Interface receiving routed traffic from entry (paired with entry.exit_uplink_interface).
-    entry_uplink_interface: "awg-entry"
+    # Same tunnel params as entry.network (can be omitted if identical).
+    cascade_interface: "wg-cascade"
+    cascade_entry_ip: "172.31.255.1"
+    cascade_exit_ip: "172.31.255.2"
+    cascade_prefix_len: 30
+    cascade_listen_port: 51830
     # Public/WAN interface on exit node for Internet egress.
     wan_interface: "eth0"
     # Must include all client subnets from entry.

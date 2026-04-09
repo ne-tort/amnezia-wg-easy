@@ -117,6 +117,8 @@ new Vue({
 
     clientLevels: {},
     clientProfiles: {},
+    /** Per-client download format for configuration link: 'conf' | 'amnezia' */
+    clientDownloadFormat: {},
     clientUseServerDns: {},
     profileIds: [],
     defaultProfile: 'dns',
@@ -306,6 +308,28 @@ new Vue({
           this.$set(client, 'useServerDns', prev);
           alert(err.message || err.toString());
         });
+    },
+    setClientDownloadFormat(clientId, value) {
+      this.$set(this.clientDownloadFormat, clientId, value);
+    },
+    clientConfigurationDownloadHref(client) {
+      const level = this.getClientLevel(client);
+      const profile = this.getClientProfile(client);
+      const fmt = this.clientDownloadFormat[client.id] || 'conf';
+      const params = [`level=${Number(level)}`];
+      if (profile) params.push(`profile=${encodeURIComponent(profile)}`);
+      if (fmt === 'amnezia') params.push('format=amnezia');
+      return `./api/wireguard/client/${client.id}/configuration?${params.join('&')}`;
+    },
+    clientDownloadFilename(client) {
+      const safe = String(client.name || client.id || 'configuration')
+        .replace(/[^a-zA-Z0-9_=+.-]/g, '-')
+        .replace(/(-{2,}|-$)/g, '-')
+        .replace(/-$/, '')
+        .substring(0, 32);
+      const fmt = this.clientDownloadFormat[client.id] || 'conf';
+      const base = safe || 'configuration';
+      return fmt === 'amnezia' ? `${base}.vpn` : `${base}.conf`;
     },
     onObfuscationProfileChange(client, ev) {
       const profile = ev.target.value;

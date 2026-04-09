@@ -100,9 +100,10 @@ function generateChunkPayloads(compressed) {
  * Mirror ImportController::extractWireGuardConfig for AmneziaWG .ini text.
  * @param {string} iniText
  * @param {string} description
+ * @param {{ includeAmneziaDns?: boolean }} [options] - when true, append amnezia-dns container so Amnezia client treats AmneziaDNS as installed (ServersModel::isAmneziaDnsContainerInstalled).
  * @returns {Record<string, unknown>}
  */
-function buildAmneziaRoot(iniText, description) {
+function buildAmneziaRoot(iniText, description, options = {}) {
   const m = parseIniWireguardStyle(iniText);
   const requiredKeys = ['PrivateKey', 'Address', 'PublicKey', 'Endpoint'];
   const missing = requiredKeys.filter((k) => !m[k]);
@@ -162,9 +163,15 @@ function buildAmneziaRoot(iniText, description) {
 
   const containerEl = { container: 'amnezia-awg', awg: awgBlock };
 
+  /** @type {Record<string, unknown>[]} */
+  const containers = [containerEl];
+  if (options.includeAmneziaDns) {
+    containers.push({ container: 'amnezia-dns' });
+  }
+
   /** @type {Record<string, unknown>} */
   const root = {
-    containers: [containerEl],
+    containers,
     defaultContainer: 'amnezia-awg',
     description,
     hostName,
@@ -186,12 +193,28 @@ const QR_OPTS = {
 };
 
 /**
+ * Same binary as ExportController: qCompress(JSON) → Base64URL with vpn:// prefix (ImportController::extractConfigFromData).
  * @param {string} iniText
  * @param {string} description
+ * @param {{ includeAmneziaDns?: boolean }} [options]
+ * @returns {string}
+ */
+function buildAmneziaVpnExport(iniText, description, options = {}) {
+  const root = buildAmneziaRoot(iniText, description, options);
+  const jsonBytes = Buffer.from(compactJson(root), 'utf8');
+  const compressed = qCompress(jsonBytes, 8);
+  const b64 = b64url(compressed);
+  return `vpn://${b64}`;
+}
+
+/**
+ * @param {string} iniText
+ * @param {string} description
+ * @param {{ includeAmneziaDns?: boolean }} [options]
  * @returns {Promise<string[]>} One SVG string per QR chunk
  */
-async function generateAmneziaClientQrSvgs(iniText, description) {
-  const root = buildAmneziaRoot(iniText, description);
+async function generateAmneziaClientQrSvgs(iniText, description, options = {}) {
+  const root = buildAmneziaRoot(iniText, description, options);
   const jsonBytes = Buffer.from(compactJson(root), 'utf8');
   const compressed = qCompress(jsonBytes, 8);
   const payloads = generateChunkPayloads(compressed);
@@ -208,6 +231,7 @@ module.exports = {
   QR_MAGIC,
   CHUNK_PAYLOAD,
   buildAmneziaRoot,
+  buildAmneziaVpnExport,
   generateAmneziaClientQrSvgs,
   qCompress,
   packQdatastreamChunk,

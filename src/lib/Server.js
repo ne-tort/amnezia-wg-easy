@@ -233,7 +233,7 @@ module.exports = class Server {
         if (query.encoding === 'amnezia') {
           const svgs = await WireGuard.getClientAmneziaQRCodeSvgs({ clientId, level, profile });
           setHeader(event, 'Content-Type', 'application/json');
-          return JSON.stringify({ svgs });
+          return JSON.stringify({ svgs, chunkCount: svgs.length });
         }
         const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile });
         setHeader(event, 'Content-Type', 'image/svg+xml');
@@ -249,6 +249,8 @@ module.exports = class Server {
         }
         let profile;
         if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
+        const amneziaExport =
+          query.format === 'amnezia' || query.format === 'vpn';
         const client = await WireGuard.getClient({ clientId });
         const config = await WireGuard.getClientConfiguration({ clientId, level, profile });
         const serverRow = db.serverConfig.get();
@@ -275,6 +277,16 @@ module.exports = class Server {
           .replace(/(-{2,}|-$)/g, '-')
           .replace(/-$/, '')
           .substring(0, 32);
+        if (amneziaExport) {
+          const vpnText = await WireGuard.getClientAmneziaVpnExport({ clientId, level, profile });
+          setHeader(
+            event,
+            'Content-Disposition',
+            `attachment; filename="${configName || clientId}.vpn"`,
+          );
+          setHeader(event, 'Content-Type', 'text/plain; charset=utf-8');
+          return vpnText;
+        }
         setHeader(event, 'Content-Disposition', `attachment; filename="${configName || clientId}.conf"`);
         setHeader(event, 'Content-Type', 'text/plain');
         return config;
@@ -296,12 +308,25 @@ module.exports = class Server {
           config_raw: v.config_raw,
         };
       }))
-      .get('/api/wireguard/client/:clientId/config-versions/:versionId/download', defineEventHandler((event) => {
+      .get('/api/wireguard/client/:clientId/config-versions/:versionId/download', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
         const versionId = getRouterParam(event, 'versionId');
+        const query = getQuery(event);
+        const amneziaExport =
+          query.format === 'amnezia' || query.format === 'vpn';
         const v = db.clientConfigVersions.getById(parseInt(versionId, 10));
         if (!v || v.client_id !== clientId) throw createError({ status: 404, message: 'Version not found' });
         const name = (db.clients.getById(clientId)?.name || clientId).replace(/[^a-zA-Z0-9_=+.-]/g, '-').substring(0, 32);
+        if (amneziaExport) {
+          const vpnText = await WireGuard.buildAmneziaVpnFromIni(v.config_raw || '', clientId);
+          setHeader(
+            event,
+            'Content-Disposition',
+            `attachment; filename="${name}-v${v.version}.vpn"`,
+          );
+          setHeader(event, 'Content-Type', 'text/plain; charset=utf-8');
+          return vpnText;
+        }
         setHeader(event, 'Content-Disposition', `attachment; filename="${name}-v${v.version}.conf"`);
         setHeader(event, 'Content-Type', 'text/plain');
         return v.config_raw || '';

@@ -34,6 +34,7 @@ REMOTE_TIMEOUT_DEPLOY = 7200
 REMOTE_TIMEOUT_ADMIN_SCRIPT = 120
 REMOTE_TIMEOUT_DOCKER_CHECK = 60
 REMOTE_TIMEOUT_HOOKS = 180
+REMOTE_TIMEOUT_TUNNEL = 240
 
 ENV_SUBST_PATTERN = re.compile(r"\$\{ENV:([^}]+)\}")
 TAR_EXCLUDE_NAMES = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".cursor"}
@@ -342,12 +343,31 @@ def parse_host_spec(
     env_overrides = section.get("env") or {}
     if not isinstance(env_overrides, dict):
         raise SystemExit(f"Invalid {name}.env: mapping expected")
-    merged = merge_env(order, defaults, env_overrides)
-    env_body = render_env_file(order, merged, tag=name)
-    wg, http, https = parse_target_ports(merged)
     network = section.get("network") or {}
     if not isinstance(network, dict):
         raise SystemExit(f"Invalid {name}.network: mapping expected")
+    merged = merge_env(order, defaults, env_overrides)
+
+    # Cascade mode: disable entry-side default masquerade in awg PostUp.
+    # Otherwise client traffic is NATed inside container before host policy routing.
+    if name == "entry":
+        client_cidrs = _cidr_list(network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
+        client_cidr = client_cidrs[0]
+        wg_port = str(merged.get("WG_PORT", "51820")).strip() or "51820"
+        merged["WG_POST_UP"] = (
+            "nft delete table inet amnezia_wg_base 2>/dev/null || true ; "
+            "nft add table inet amnezia_wg_base ; "
+            "nft add chain inet amnezia_wg_base input_awg0 '{ type filter hook input priority -100; policy accept; }' ; "
+            f"nft add rule inet amnezia_wg_base input_awg0 udp dport {wg_port} accept ; "
+            "nft add chain inet amnezia_wg_base forward_awg0_base '{ type filter hook forward priority 0; policy accept; }' ; "
+            "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" accept ; "
+            "nft add rule inet amnezia_wg_base forward_awg0_base oifname \"awg0\" accept ; "
+            f"nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" ip saddr {client_cidr} accept"
+        )
+        merged["WG_POST_DOWN"] = "nft delete table inet amnezia_wg_base 2>/dev/null || true"
+
+    env_body = render_env_file(order, merged, tag=name)
+    wg, http, https = parse_target_ports(merged)
 
     return HostSpec(
         name=name,
@@ -587,17 +607,139 @@ def _cidr_list(values: Any, *, required: bool, ctx: str) -> list[str]:
     return out
 
 
-def build_entry_hook_script(entry: HostSpec) -> str:
-    uplink_if = str(entry.network.get("exit_uplink_interface") or "").strip()
-    if not uplink_if:
-        raise SystemExit("entry.network.exit_uplink_interface is required")
+def _str_cfg(d: dict[str, Any], key: str, default: str = "") -> str:
+    v = d.get(key)
+    if v is None:
+        return default
+    return str(v).strip()
+
+
+def _parse_tunnel_settings(entry: HostSpec, exit_spec: HostSpec) -> dict[str, Any]:
+    # Shared tunnel parameters (same defaults for both sides).
+    ecfg = entry.network
+    xcfg = exit_spec.network
+    iface = _str_cfg(ecfg, "cascade_interface", _str_cfg(xcfg, "cascade_interface", "wg-cascade"))
+    entry_ip = _str_cfg(ecfg, "cascade_entry_ip", _str_cfg(xcfg, "cascade_entry_ip", "172.31.255.1"))
+    exit_ip = _str_cfg(ecfg, "cascade_exit_ip", _str_cfg(xcfg, "cascade_exit_ip", "172.31.255.2"))
+    prefix = _str_cfg(ecfg, "cascade_prefix_len", _str_cfg(xcfg, "cascade_prefix_len", "30"))
+    listen_port = _str_cfg(xcfg, "cascade_listen_port", _str_cfg(ecfg, "cascade_listen_port", "51830"))
+    vpn_ingress_if = _str_cfg(ecfg, "vpn_ingress_interface", "")
+    return {
+        "iface": iface,
+        "entry_ip": entry_ip,
+        "exit_ip": exit_ip,
+        "prefix": prefix,
+        "listen_port": listen_port,
+        "vpn_ingress_if": vpn_ingress_if,
+    }
+
+
+def setup_cascade_tunnel(entry: HostSpec, exit_spec: HostSpec, *, dry_run: bool) -> dict[str, Any]:
+    """
+    Build real host-level WireGuard tunnel S1<->S2 for cascade routing.
+    Returns tunnel params consumed by routing hooks.
+    """
+    p = _parse_tunnel_settings(entry, exit_spec)
+    iface = shlex.quote(p["iface"])
+    entry_ip = shlex.quote(p["entry_ip"])
+    exit_ip = shlex.quote(p["exit_ip"])
+    prefix = shlex.quote(p["prefix"])
+    listen_port = shlex.quote(p["listen_port"])
+    exit_endpoint = shlex.quote(f"{exit_spec.merged_env.get('WG_HOST', exit_spec.ssh['host'])}:{p['listen_port']}")
+    client_cidrs = _cidr_list(entry.network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
+    client_join = ",".join(client_cidrs)
+
+    if dry_run:
+        print("[dry-run] setup real wg-cascade tunnel on entry+exit")
+        print(f"[dry-run] tunnel iface={p['iface']} entry_ip={p['entry_ip']}/{p['prefix']} exit_ip={p['exit_ip']}/{p['prefix']}")
+        return p
+
+    def run_required(client: paramiko.SSHClient, cmd: str, who: str) -> tuple[str, str]:
+        code, out, err = run_remote(client, cmd, dry_run=False, timeout_sec=REMOTE_TIMEOUT_TUNNEL)
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code == 124:
+            raise SystemExit(f"{who}: tunnel setup timeout")
+        if code != 0:
+            raise SystemExit(f"{who}: tunnel setup failed (exit {code})")
+        return out, err
+
+    entry_client = connect_ssh(entry.ssh)
+    exit_client = connect_ssh(exit_spec.ssh)
+    try:
+        # Ensure wireguard-tools and keys on both hosts.
+        prep = """set -e
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v wg >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y wireguard-tools
+fi
+mkdir -p /etc/wireguard
+chmod 700 /etc/wireguard
+if [ ! -s /etc/wireguard/wg-cascade.private ]; then
+  umask 077
+  wg genkey > /etc/wireguard/wg-cascade.private
+fi
+wg pubkey < /etc/wireguard/wg-cascade.private > /etc/wireguard/wg-cascade.public
+cat /etc/wireguard/wg-cascade.public
+"""
+        out_entry, _ = run_required(entry_client, prep, "entry")
+        out_exit, _ = run_required(exit_client, prep, "exit")
+        entry_pub = out_entry.strip().splitlines()[-1].strip()
+        exit_pub = out_exit.strip().splitlines()[-1].strip()
+        if not entry_pub or not exit_pub:
+            raise SystemExit("Failed to derive wg-cascade public keys")
+
+        # Configure exit side (server/listener).
+        cfg_exit = f"""set -e
+IF={iface}
+ip link del "$IF" 2>/dev/null || true
+ip link add "$IF" type wireguard
+ip address add {exit_ip}/{prefix} dev "$IF"
+wg set "$IF" listen-port {listen_port} private-key /etc/wireguard/wg-cascade.private
+wg set "$IF" peer {shlex.quote(entry_pub)} allowed-ips {shlex.quote(p['entry_ip'] + '/32')},{shlex.quote(client_join)}
+ip link set mtu 1380 dev "$IF"
+ip link set up dev "$IF"
+echo "exit wg-cascade up"
+"""
+        run_required(exit_client, cfg_exit, "exit")
+
+        # Configure entry side (client).
+        cfg_entry = f"""set -e
+IF={iface}
+ip link del "$IF" 2>/dev/null || true
+ip link add "$IF" type wireguard
+ip address add {entry_ip}/{prefix} dev "$IF"
+wg set "$IF" private-key /etc/wireguard/wg-cascade.private
+wg set "$IF" peer {shlex.quote(exit_pub)} endpoint {exit_endpoint} persistent-keepalive 25 allowed-ips 0.0.0.0/0
+ip link set mtu 1380 dev "$IF"
+ip link set up dev "$IF"
+echo "entry wg-cascade up"
+"""
+        run_required(entry_client, cfg_entry, "entry")
+    finally:
+        entry_client.close()
+        exit_client.close()
+    return p
+
+
+def build_entry_hook_script(entry: HostSpec, tunnel: dict[str, Any]) -> str:
+    uplink_if = str(tunnel["iface"]).strip()
+    exit_tunnel_ip = str(tunnel["exit_ip"]).strip()
+    vpn_ingress_if = str(tunnel["vpn_ingress_if"]).strip()
     client_cidrs = _cidr_list(entry.network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
     local_cidrs = _cidr_list(entry.network.get("local_cidrs"), required=False, ctx="entry.network.local_cidrs")
     clients_join = " ".join(shlex.quote(c) for c in client_cidrs)
     local_join = " ".join(shlex.quote(c) for c in local_cidrs)
     uplink_q = shlex.quote(uplink_if)
+    exit_ip_q = shlex.quote(exit_tunnel_ip)
+    ingress_q = shlex.quote(vpn_ingress_if) if vpn_ingress_if else "''"
     return f"""set -e
 UPLINK_IF={uplink_q}
+EXIT_TUNNEL_IP={exit_ip_q}
+VPN_INGRESS_IF={ingress_q}
 CLIENT_CIDRS="{clients_join}"
 LOCAL_CIDRS="{local_join}"
 
@@ -617,24 +759,26 @@ if [ -n "$LOCAL_CIDRS" ]; then
   done
 fi
 
-ip route replace default dev "$UPLINK_IF" table 166
+ip route replace default via "$EXIT_TUNNEL_IP" dev "$UPLINK_IF" table 166
 
 nft add table inet amnezia_cascade_entry 2>/dev/null || true
 nft 'add chain inet amnezia_cascade_entry prerouting_mangle {{ type filter hook prerouting priority mangle; policy accept; }}' 2>/dev/null || true
 nft flush chain inet amnezia_cascade_entry prerouting_mangle
 for c in $CLIENT_CIDRS; do
-  nft add rule inet amnezia_cascade_entry prerouting_mangle iifname "awg0" ip saddr "$c" meta mark set 0x66
+  if [ -n "$VPN_INGRESS_IF" ]; then
+    nft add rule inet amnezia_cascade_entry prerouting_mangle iifname "$VPN_INGRESS_IF" ip saddr "$c" meta mark set 0x66
+  else
+    nft add rule inet amnezia_cascade_entry prerouting_mangle ip saddr "$c" meta mark set 0x66
+  fi
 done
 
-echo "entry cascade hook applied (uplink=$UPLINK_IF)."
+echo "entry cascade hook applied (uplink=$UPLINK_IF exit=$EXIT_TUNNEL_IP ingress=$VPN_INGRESS_IF)."
 """
 
 
-def build_exit_hook_script(exit_spec: HostSpec) -> str:
-    uplink_if = str(exit_spec.network.get("entry_uplink_interface") or "").strip()
+def build_exit_hook_script(exit_spec: HostSpec, tunnel: dict[str, Any]) -> str:
+    uplink_if = str(tunnel["iface"]).strip()
     wan_if = str(exit_spec.network.get("wan_interface") or "").strip()
-    if not uplink_if:
-        raise SystemExit("exit.network.entry_uplink_interface is required")
     if not wan_if:
         raise SystemExit("exit.network.wan_interface is required")
     client_cidrs = _cidr_list(exit_spec.network.get("client_cidrs"), required=True, ctx="exit.network.client_cidrs")
@@ -696,10 +840,10 @@ echo "exit cascade state cleaned."
 """
 
 
-def apply_cascade_hooks(entry: HostSpec, exit_spec: HostSpec, *, dry_run: bool) -> None:
+def apply_cascade_hooks(entry: HostSpec, exit_spec: HostSpec, *, dry_run: bool, tunnel: dict[str, Any]) -> None:
     print("\n=== Apply cascade hooks ===", flush=True)
-    entry_script = build_entry_hook_script(entry)
-    exit_script = build_exit_hook_script(exit_spec)
+    entry_script = build_entry_hook_script(entry, tunnel)
+    exit_script = build_exit_hook_script(exit_spec, tunnel)
     if dry_run:
         print("[dry-run] would apply entry hook script")
         print("[dry-run] would apply exit hook script")
@@ -810,7 +954,8 @@ def main() -> None:
             role="entry",
         )
     if args.phase == "full":
-        apply_cascade_hooks(entry, exit_spec, dry_run=args.dry_run)
+        tunnel = setup_cascade_tunnel(entry, exit_spec, dry_run=args.dry_run)
+        apply_cascade_hooks(entry, exit_spec, dry_run=args.dry_run, tunnel=tunnel)
 
     if args.dry_run:
         print("\n[dry-run] done.")

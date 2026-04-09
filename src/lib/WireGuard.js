@@ -13,7 +13,7 @@ const { migrateAwgToDb } = require('./migrateAwgToDb');
 const { isKnownProfile, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
 const { loadSignatures, runSignatureGeneration, getProfileSignatures } = require('./signatures');
 const { isAmneziaDnsAvailable } = require('./amneziaDns');
-const { generateAmneziaClientQrSvgs } = require('./amneziaClientQr');
+const { generateAmneziaClientQrSvgs, buildAmneziaVpnExport } = require('./amneziaClientQr');
 
 const {
   WG_PATH,
@@ -516,7 +516,45 @@ Endpoint = ${this.__getEndpoint()}`;
     });
     const client = await this.getClient({ clientId });
     const description = client.name && String(client.name).trim() ? client.name : 'AmneziaWG';
-    return generateAmneziaClientQrSvgs(config, description);
+    const dnsAvailable = isAmneziaDnsAvailable();
+    const useServerDns = dnsAvailable && client.useServerDns !== false;
+    return generateAmneziaClientQrSvgs(config, description, {
+      includeAmneziaDns: dnsAvailable && useServerDns,
+    });
+  }
+
+  /**
+   * Builds vpn:// import string from any AmneziaWG .ini text (live config, history row, etc.).
+   * @param {string} iniText
+   * @param {string} clientId
+   * @returns {Promise<string>}
+   */
+  async buildAmneziaVpnFromIni(iniText, clientId) {
+    if (typeof iniText !== 'string' || !iniText.trim()) {
+      throw new ServerError('Config text is empty', 400);
+    }
+    const client = await this.getClient({ clientId });
+    const description = client.name && String(client.name).trim() ? client.name : 'AmneziaWG';
+    const dnsAvailable = isAmneziaDnsAvailable();
+    const useServerDns = dnsAvailable && client.useServerDns !== false;
+    return buildAmneziaVpnExport(iniText, description, {
+      includeAmneziaDns: dnsAvailable && useServerDns,
+    });
+  }
+
+  /**
+   * AmneziaVPN import string (vpn:// + Base64URL(qCompress(JSON))), same as official ExportController.
+   * @returns {Promise<string>}
+   */
+  async getClientAmneziaVpnExport({ clientId, level, profile }) {
+    const config = await this.getClientConfiguration({
+      clientId,
+      forQR: level === undefined || level === null,
+      forceOmitI1ForCapacity: level === undefined || level === null,
+      level,
+      profile,
+    });
+    return this.buildAmneziaVpnFromIni(config, clientId);
   }
 
   async createClient({ name }) {
