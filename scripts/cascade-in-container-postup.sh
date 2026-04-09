@@ -3,9 +3,8 @@
 # Args: $1 = tunnel peer IP (exit side, e.g. 172.31.255.2), $2 = client VPN CIDR (e.g. 10.8.0.0/24)
 #
 # Policy routing: from client subnet -> table 166 (default via awg-cascade).
-# awg-quick adds fwmark + suppress_prefixlength at preference 0 (after "local"). Those run before
-# any rule with pref 1+, so client forwarding must: (1) remove pref-0 copies of those rules
-# (copies at 3276x remain for wg), (2) add cascade rules at pref 1 and 2.
+# Do NOT delete awg-quick pref-0 fwmark/suppress rules: that breaks awg0 handshakes/replies.
+# Cascade rules at pref 1–2 apply after pref 0; internet via cascade may need separate work (nft mark).
 set -e
 CASCADE_GW="${1:?missing tunnel gw}"
 CLIENT_CIDR="${2:?missing client cidr}"
@@ -33,14 +32,6 @@ done
 while ip rule show 2>/dev/null | grep -q "to ${CLIENT_CIDR} lookup main"; do
   p=$(ip rule show | awk -v c="$CLIENT_CIDR" '$0 ~ ("to " c " lookup main") {gsub(":","",$1); print $1; exit}')
   [ -n "$p" ] && ip rule del pref "$p" 2>/dev/null || break
-done
-
-# Strip awg-quick pref-0 policy rules (first match per delete); leaves 3276x duplicates for wg internals.
-while ip -4 rule show 2>/dev/null | grep -q '^0:.*not from all fwmark 0xca6c lookup 51820'; do
-  ip -4 rule del not fwmark 0xca6c lookup 51820 2>/dev/null || break
-done
-while ip -4 rule show 2>/dev/null | grep -q '^0:.*from all lookup main suppress_prefixlength 0'; do
-  ip -4 rule del from all lookup main suppress_prefixlength 0 2>/dev/null || break
 done
 
 # VPN-internal (DNS 10.8..1, same-subnet): main table — evaluated before from->166
