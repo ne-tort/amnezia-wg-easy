@@ -12,8 +12,9 @@ UPLINK_IF=awg-cascade
 INGRESS_IF=awg0
 # Must run BEFORE awg0/awg-cascade fwmark + suppress_prefixlength rules (often ~28+ in container).
 # Lower number = higher precedence in "ip rule".
-PRI_TO_MAIN=10
-PRI_FROM_CASCADE=11
+# Amnezia wg-quick inserts suppress_prefixlength/fwmark at ~8–9; must be lower than that.
+PRI_TO_MAIN=5
+PRI_FROM_CASCADE=6
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 for i in "$INGRESS_IF" "$UPLINK_IF" all; do
