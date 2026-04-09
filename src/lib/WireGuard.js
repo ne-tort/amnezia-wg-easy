@@ -218,29 +218,49 @@ const WireGuard = class {
     debug('Server config generated and saved to DB.');
   }
 
+  /**
+   * Serializes getConfig (wg-quick / awg-cascade). Concurrent saves caused races:
+   * second wg-quick up awg-cascade while the first amneziawg-go was not ready → "Protocol not supported", link deleted, no internet.
+   */
+  async __withConfigLock(fn) {
+    const prev = this.__configLockPromise ?? Promise.resolve();
+    let release;
+    this.__configLockPromise = new Promise((res) => {
+      release = res;
+    });
+    await prev.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   async getConfig() {
     if (!WG_HOST) {
       throw new Error('WG_HOST Environment Variable Not Set!');
     }
-    if (this.__config) return this.__config;
-    await this.__ensureServerConfig();
-    const config = this.__buildConfigFromDb();
-    if (!config) throw new Error('Failed to build config from DB');
-    await this.__saveConfig(config);
-    const awgConfPath = path.join(WG_PATH, AWG_CONF);
-    await Util.exec(`wg-quick down ${awgConfPath}`).catch(() => {});
-    const upErr = await Util.exec(`wg-quick up ${awgConfPath}`).catch((e) => e);
-    if (upErr && upErr.message && upErr.message.includes(`Cannot find device "${AWG_IFACE}"`)) {
-      throw new Error(`WireGuard exited with the error: Cannot find device "${AWG_IFACE}"\nThis usually means that your host's kernel does not support WireGuard!`);
-    }
-    // * If interface already exists (e.g. userspace amneziawg-go left it), apply config via syncconf only.
-    if (upErr && !(upErr.message || '').includes('already exists')) {
-      throw upErr;
-    }
-    await this.__syncConfig();
-    await this.__syncCascadeInterface();
-    this.__config = config;
-    return config;
+    return this.__withConfigLock(async () => {
+      if (this.__config) return this.__config;
+      await this.__ensureServerConfig();
+      const config = this.__buildConfigFromDb();
+      if (!config) throw new Error('Failed to build config from DB');
+      await this.__saveConfig(config);
+      const awgConfPath = path.join(WG_PATH, AWG_CONF);
+      await Util.exec(`wg-quick down ${awgConfPath}`).catch(() => {});
+      const upErr = await Util.exec(`wg-quick up ${awgConfPath}`).catch((e) => e);
+      if (upErr && upErr.message && upErr.message.includes(`Cannot find device "${AWG_IFACE}"`)) {
+        throw new Error(`WireGuard exited with the error: Cannot find device "${AWG_IFACE}"\nThis usually means that your host's kernel does not support WireGuard!`);
+      }
+      // * If interface already exists (e.g. userspace amneziawg-go left it), apply config via syncconf only.
+      if (upErr && !(upErr.message || '').includes('already exists')) {
+        throw upErr;
+      }
+      await this.__syncConfig();
+      await this.__syncCascadeInterface();
+      this.__config = config;
+      return config;
+    });
   }
 
   async saveConfig() {
@@ -371,15 +391,34 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
     }
     const exitPub = await this.__readCascadeExitPublicKey();
     if (!exitPub) return;
-    await Util.exec(`wg-quick down "${cascadePath}"`).catch(() => {});
-    await Util.exec(
-      `/bin/sh -c 'ip link set dev ${AWG_CASCADE_IFACE} down 2>/dev/null; ip link del dev ${AWG_CASCADE_IFACE} 2>/dev/null; true'`,
-    ).catch(() => {});
-    const upErr = await Util.exec(`wg-quick up "${cascadePath}"`).catch((e) => e);
-    if (upErr && upErr.message && !String(upErr.message).includes('already exists')) {
-      debug('Cascade wg-quick up:', upErr.message);
+
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    const maxAttempts = 5;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) {
+        debug(`Cascade wg-quick up retry ${attempt + 1}/${maxAttempts}`);
+        await sleep(900);
+      }
+      await Util.exec(`wg-quick down "${cascadePath}"`).catch(() => {});
+      await Util.exec(
+        `/bin/sh -c 'ip link set dev ${AWG_CASCADE_IFACE} down 2>/dev/null; ip link del dev ${AWG_CASCADE_IFACE} 2>/dev/null; true'`,
+      ).catch(() => {});
+      await sleep(250);
+      const upErr = await Util.exec(`wg-quick up "${cascadePath}"`).catch((e) => e);
+      if (upErr && upErr.message && !String(upErr.message).includes('already exists')) {
+        debug('Cascade wg-quick up:', upErr.message);
+      }
+      await Util.exec(`wg syncconf ${AWG_CASCADE_IFACE} <(wg-quick strip "${cascadePath}")`).catch(() => {});
+      const ifaceOk = await Util.exec(`ip link show dev ${AWG_CASCADE_IFACE}`).catch(() => '');
+      if (ifaceOk && String(ifaceOk).includes(AWG_CASCADE_IFACE)) {
+        break;
+      }
+      if (attempt === maxAttempts - 1) {
+        debug('Cascade: awg-cascade interface still missing after retries');
+      }
     }
-    await Util.exec(`wg syncconf ${AWG_CASCADE_IFACE} <(wg-quick strip "${cascadePath}")`).catch(() => {});
+
     await this.__applyCascadePostUp();
   }
 

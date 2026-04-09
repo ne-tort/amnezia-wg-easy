@@ -10,9 +10,10 @@ CASCADE_GW="${1:?missing tunnel gw}"
 CLIENT_CIDR="${2:?missing client cidr}"
 UPLINK_IF=awg-cascade
 INGRESS_IF=awg0
-# Below ~998 (Amnezia), above local (0)
-PRI_TO_MAIN=80
-PRI_FROM_CASCADE=81
+# Must run BEFORE awg0/awg-cascade fwmark + suppress_prefixlength rules (~76–79 in container).
+# Lower number = higher precedence in "ip rule".
+PRI_TO_MAIN=30
+PRI_FROM_CASCADE=31
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 for i in "$INGRESS_IF" "$UPLINK_IF" all; do
