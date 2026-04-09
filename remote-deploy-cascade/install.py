@@ -1161,14 +1161,6 @@ docker exec amnezia-exit-cascade sh -c 'wg pubkey < /config/exit_link.private > 
         )
         if code != 0:
             raise SystemExit("entry: second saveConfig after peer files failed")
-        code, out, err = run_remote(
-            en,
-            f"cd {wd} && docker compose restart amnezia-wg-easy",
-            dry_run=False,
-            timeout_sec=REMOTE_TIMEOUT_DEPLOY,
-        )
-        if out:
-            _safe_write(sys.stdout, out)
     finally:
         en.close()
 

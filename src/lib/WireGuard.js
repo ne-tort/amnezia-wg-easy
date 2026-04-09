@@ -360,6 +360,9 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
     const exitPub = await this.__readCascadeExitPublicKey();
     if (!exitPub) return;
     await Util.exec(`wg-quick down "${cascadePath}"`).catch(() => {});
+    await Util.exec(
+      `/bin/sh -c 'ip link set dev ${AWG_CASCADE_IFACE} down 2>/dev/null; ip link del dev ${AWG_CASCADE_IFACE} 2>/dev/null; true'`,
+    ).catch(() => {});
     const upErr = await Util.exec(`wg-quick up "${cascadePath}"`).catch((e) => e);
     if (upErr && upErr.message && !String(upErr.message).includes('already exists')) {
       debug('Cascade wg-quick up:', upErr.message);
