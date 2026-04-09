@@ -27,6 +27,19 @@ python install.py --phase full
 
 В `config.yaml` для каскада нужны **`entry.network.cascade_enabled: true`** и **`exit.core: true`** (или `exit.mode: core`).
 
+## Порты (важно)
+
+- **Не используйте стандартный WG UDP 51820/51821** для продакшена: в примере `WG_PORT: 5443` на entry и **`cascade_listen_port: 8443`** на S2 (UDP, слушает exit-core). Значения должны совпадать в `entry.network` и `exit.network` для каскада.
+- На S2 панели нет: **8443/UDP** — только туннель каскада; **443/TCP** на entry не пересекается с этим.
+
+## Интернет у клиента не работает — что проверить
+
+1. **`exit.network.wan_interface`** — имя реального выхода в Интернет на S2 (`ip -4 route get 1.1.1.1` → `dev …`). Неверный интерфейс ломает SNAT и forward.
+2. **Старый `wg-cascade` на хосте S2** — если UDP порт занят, снимите интерфейс: `wg-quick down wg-cascade` / `ip link del wg-cascade`.
+3. **Пиры** — `docker exec amnezia-awg awg show awg-cascade` на S1 и `awg show exit-cascade` на S2: должен быть `latest handshake`, растут `transfer`.
+4. **В контейнере entry** — `ip rule` / `ip route show table 166`: для помеченного трафика default через IP exit по `awg-cascade`.
+5. **На S2** — `nft list table ip amnezia_cascade_exit_nat` и `inet amnezia_cascade_exit_fwd`: masquerade для `client_cidrs` и forward WAN↔`exit-cascade`. При необходимости повторите деплой с фазой, где вызываются хуки (`full` / `entry-only` / `exit-only`).
+
 ## Фазы
 
 - `--phase exit-only` — только exit-core на S2 (+ хуки NAT, если включён каскад в конфиге).

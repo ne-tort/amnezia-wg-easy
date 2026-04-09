@@ -8,6 +8,9 @@ UPLINK_IF=awg-cascade
 INGRESS_IF=awg0
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
+for i in "$INGRESS_IF" "$UPLINK_IF"; do
+  sysctl -w "net.ipv4.conf.${i}.rp_filter=0" >/dev/null 2>&1 || true
+done
 
 # Policy routing: marked client traffic uses table 166 via cascade uplink
 while ip rule show 2>/dev/null | grep -q "fwmark 0x66 .* lookup 166"; do
@@ -26,5 +29,11 @@ nft add table inet amnezia_cascade_entry 2>/dev/null || true
 nft 'add chain inet amnezia_cascade_entry prerouting_mangle { type filter hook prerouting priority mangle; policy accept; }' 2>/dev/null || true
 nft flush chain inet amnezia_cascade_entry prerouting_mangle
 nft add rule inet amnezia_cascade_entry prerouting_mangle iifname "$INGRESS_IF" ip saddr "$CLIENT_CIDR" meta mark set 0x66
+
+# Explicit forward between VPN and cascade (priority after amnezia_wg_base if any)
+nft 'add chain inet amnezia_cascade_entry forward_cascade { type filter hook forward priority 50; policy accept; }' 2>/dev/null || true
+nft flush chain inet amnezia_cascade_entry forward_cascade
+nft add rule inet amnezia_cascade_entry forward_cascade iifname "$INGRESS_IF" oifname "$UPLINK_IF" accept
+nft add rule inet amnezia_cascade_entry forward_cascade iifname "$UPLINK_IF" oifname "$INGRESS_IF" accept
 
 exit 0

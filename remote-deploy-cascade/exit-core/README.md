@@ -38,3 +38,5 @@ docker exec amnezia-exit-cascade awg show exit-cascade
 ```
 
 NAT/forward на хосте задаётся хуками оркестратора (`nft`), интерфейс в правилах — `exit-cascade`.
+
+Порт **UDP** для `ListenPort` в `exit-cascade.conf` задаётся в YAML как `cascade_listen_port` (по умолчанию в оркестраторе **8443**, не 51820).

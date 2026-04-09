@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import ipaddress
 import io
 import os
 import re
@@ -41,6 +42,9 @@ REMOTE_TIMEOUT_SYNC = 300
 ENV_SUBST_PATTERN = re.compile(r"\$\{ENV:([^}]+)\}")
 TAR_EXCLUDE_NAMES = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".cursor"}
 TAR_EXCLUDE_GLOBS = ("*.pyc", "*.pyo", ".env")
+
+# S2 exit-core AmneziaWG UDP — avoid default WireGuard 51820/51821.
+CASCADE_DEFAULT_LISTEN_PORT = 8443
 
 
 def _safe_write(stream: Any, text: str) -> None:
@@ -411,7 +415,7 @@ def parse_host_spec(
     if is_exit_core:
         rpath = str(remote.get("path") or "/opt/amnezia-cascade-exit").rstrip("/")
         try:
-            listen = int(str(network.get("cascade_listen_port", 51830)))
+            listen = int(str(network.get("cascade_listen_port", CASCADE_DEFAULT_LISTEN_PORT)))
         except ValueError as e:
             raise SystemExit("exit.network.cascade_listen_port must be an integer") from e
         if listen < 1 or listen > 65535:
@@ -437,6 +441,14 @@ def parse_host_spec(
         client_cidrs = _cidr_list(network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
         client_cidr = client_cidrs[0]
         wg_port = str(merged.get("WG_PORT", "51820")).strip() or "51820"
+        cascade_fwd = ""
+        if _truthy(network.get("cascade_enabled")):
+            cascade_fwd = (
+                "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg-cascade\" accept ; "
+                "nft add rule inet amnezia_wg_base forward_awg0_base oifname \"awg-cascade\" accept ; "
+                "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" oifname \"awg-cascade\" accept ; "
+                "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg-cascade\" oifname \"awg0\" accept"
+            )
         merged["WG_POST_UP"] = (
             "nft delete table inet amnezia_wg_base 2>/dev/null || true ; "
             "nft add table inet amnezia_wg_base ; "
@@ -446,6 +458,7 @@ def parse_host_spec(
             "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" accept ; "
             "nft add rule inet amnezia_wg_base forward_awg0_base oifname \"awg0\" accept ; "
             f"nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" ip saddr {client_cidr} accept"
+            + (f" ; {cascade_fwd}" if cascade_fwd else "")
         )
         merged["WG_POST_DOWN"] = "nft delete table inet amnezia_wg_base 2>/dev/null || true"
 
@@ -453,7 +466,7 @@ def parse_host_spec(
             ei = str(network.get("cascade_entry_ip", "172.31.255.1")).strip()
             xip = str(network.get("cascade_exit_ip", "172.31.255.2")).strip()
             plen = str(network.get("cascade_prefix_len", "30")).strip()
-            listen = str(network.get("cascade_listen_port", "51830")).strip()
+            listen = str(network.get("cascade_listen_port", str(CASCADE_DEFAULT_LISTEN_PORT))).strip()
             ex_host = str(((cfg.get("exit") or {}).get("ssh") or {}).get("host", "")).strip()
             endpoint = str(network.get("cascade_exit_endpoint", "")).strip()
             if not endpoint and ex_host:
@@ -844,13 +857,24 @@ def _parse_tunnel_settings(entry: HostSpec, exit_spec: HostSpec) -> dict[str, An
     entry_ip = _str_cfg(ecfg, "cascade_entry_ip", _str_cfg(xcfg, "cascade_entry_ip", "172.31.255.1"))
     exit_ip = _str_cfg(ecfg, "cascade_exit_ip", _str_cfg(xcfg, "cascade_exit_ip", "172.31.255.2"))
     prefix = _str_cfg(ecfg, "cascade_prefix_len", _str_cfg(xcfg, "cascade_prefix_len", "30"))
-    listen_port = _str_cfg(xcfg, "cascade_listen_port", _str_cfg(ecfg, "cascade_listen_port", "51830"))
+    listen_port = _str_cfg(
+        xcfg, "cascade_listen_port", _str_cfg(ecfg, "cascade_listen_port", str(CASCADE_DEFAULT_LISTEN_PORT))
+    )
     return {
         "entry_ip": entry_ip,
         "exit_ip": exit_ip,
         "prefix": prefix,
         "listen_port": listen_port,
     }
+
+
+def _cascade_tunnel_network_cidr(entry: HostSpec, exit_spec: HostSpec) -> str | None:
+    p = _parse_tunnel_settings(entry, exit_spec)
+    try:
+        iface = ipaddress.ip_interface(f"{p['entry_ip']}/{p['prefix']}")
+        return str(iface.network)
+    except ValueError:
+        return None
 
 
 def _parse_awg0_interface_fields(awg0_conf: str) -> dict[str, str]:
@@ -906,14 +930,18 @@ def _build_exit_cascade_conf_text(
     return "\n".join(lines)
 
 
-def tunnel_params_for_exit_hooks(exit_spec: HostSpec) -> dict[str, Any]:
+def tunnel_params_for_exit_hooks(exit_spec: HostSpec, entry: HostSpec | None = None) -> dict[str, Any]:
     wan = str(exit_spec.network.get("wan_interface") or "").strip()
     if not wan:
         raise SystemExit("exit.network.wan_interface is required")
+    tunnel_cidr = ""
+    if entry is not None:
+        tunnel_cidr = _cascade_tunnel_network_cidr(entry, exit_spec) or ""
     return {
         "iface": "exit-cascade",
         "wan_if": wan,
         "client_cidrs": _cidr_list(exit_spec.network.get("client_cidrs"), required=True, ctx="exit.network.client_cidrs"),
+        "tunnel_cidr": tunnel_cidr,
     }
 
 
@@ -924,12 +952,30 @@ def build_exit_hook_script(tunnel: dict[str, Any]) -> str:
     cidrs = " ".join(shlex.quote(c) for c in client_cidrs)
     uplink_q = shlex.quote(uplink_if)
     wan_q = shlex.quote(wan_if)
+    tun = str(tunnel.get("tunnel_cidr") or "").strip()
+    tun_q = shlex.quote(tun) if tun else ""
+    tunnel_fwd = ""
+    if tun:
+        tunnel_fwd = (
+            f'nft add rule inet amnezia_cascade_exit_fwd forward iifname "$WAN_IF" '
+            f'oifname "$UPLINK_IF" ip daddr {tun_q} accept\n'
+        )
+    daddr_clients = ""
+    for c in client_cidrs:
+        daddr_clients += (
+            f'nft add rule inet amnezia_cascade_exit_fwd forward iifname "$WAN_IF" '
+            f'oifname "$UPLINK_IF" ip daddr {shlex.quote(c)} accept\n'
+        )
+    snat_tunnel = ""
+    if tun:
+        snat_tunnel = f"  nft add rule ip amnezia_cascade_exit_nat postrouting oifname \"$WAN_IF\" ip saddr {tun_q} masquerade 2>/dev/null || true\n"
     return f"""set -e
 UPLINK_IF={uplink_q}
 WAN_IF={wan_q}
 CLIENT_CIDRS="{cidrs}"
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
+sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
 
 nft add table ip amnezia_cascade_exit_nat 2>/dev/null || true
 nft 'add chain ip amnezia_cascade_exit_nat postrouting {{ type nat hook postrouting priority 100; policy accept; }}' 2>/dev/null || true
@@ -937,12 +983,12 @@ nft flush chain ip amnezia_cascade_exit_nat postrouting
 for c in $CLIENT_CIDRS; do
   nft add rule ip amnezia_cascade_exit_nat postrouting oifname "$WAN_IF" ip saddr "$c" masquerade
 done
-
+{snat_tunnel}
 nft add table inet amnezia_cascade_exit_fwd 2>/dev/null || true
 nft 'add chain inet amnezia_cascade_exit_fwd forward {{ type filter hook forward priority 1; policy accept; }}' 2>/dev/null || true
 nft flush chain inet amnezia_cascade_exit_fwd forward
 nft add rule inet amnezia_cascade_exit_fwd forward iifname "$UPLINK_IF" oifname "$WAN_IF" accept
-nft add rule inet amnezia_cascade_exit_fwd forward iifname "$WAN_IF" oifname "$UPLINK_IF" ct state related,established accept
+{tunnel_fwd}{daddr_clients}nft add rule inet amnezia_cascade_exit_fwd forward iifname "$WAN_IF" oifname "$UPLINK_IF" ct state established,related accept
 
 echo "exit cascade hook applied (uplink=$UPLINK_IF wan=$WAN_IF)."
 """
@@ -1175,10 +1221,12 @@ echo "exit cascade state cleaned."
 """
 
 
-def apply_cascade_hooks(exit_spec: HostSpec, *, dry_run: bool) -> None:
+def apply_cascade_hooks(
+    exit_spec: HostSpec, *, entry: HostSpec | None = None, dry_run: bool
+) -> None:
     """Host nft NAT/forward on exit only (interface exit-cascade, network_mode host)."""
     print("\n=== Apply exit cascade hooks (host) ===", flush=True)
-    tunnel = tunnel_params_for_exit_hooks(exit_spec)
+    tunnel = tunnel_params_for_exit_hooks(exit_spec, entry=entry)
     exit_script = build_exit_hook_script(tunnel)
     if dry_run:
         print("[dry-run] would apply exit host nft hooks")
@@ -1302,7 +1350,11 @@ def main() -> None:
                 wipe_cascade=args.wipe_cascade,
             )
         if args.phase in ("full", "entry-only", "exit-only"):
-            apply_cascade_hooks(exit_spec, dry_run=args.dry_run)
+            apply_cascade_hooks(
+                exit_spec,
+                entry=entry if cascade_on else None,
+                dry_run=args.dry_run,
+            )
 
     if args.dry_run:
         print("\n[dry-run] done.")
