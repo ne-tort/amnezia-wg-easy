@@ -1,29 +1,20 @@
 # Удалённая установка каскада (entry + exit) по SSH
 
-`remote-deploy-cascade/install.py` запускает единый orchestrator:
+`remote-deploy-cascade/install.py` поднимает:
 
-1. деплой `exit`-узла,
-2. деплой `entry`-узла,
-3. автоматическое поднятие межсерверного `wg-cascade` (host namespace),
-4. применение сетевых hook'ов каскада:
-   - policy routing на `entry`,
-   - NAT/forward на `exit`.
+1. **S2 (exit)** — только [exit-core](exit-core/README.md): контейнер `amneziavpn/amneziawg-go`, интерфейс **`exit-cascade`**, `network_mode: host`. Полная панель на S2 **не ставится**.
+2. **S1 (entry)** — полный стек `amnezia-wg-easy` (панель + awg0). При `entry.network.cascade_enabled` панель дополнительно синхронизирует **`awg-cascade.conf`** внутри контейнера `amnezia-awg` (те же параметры обфускации Amnezia, что у `awg0`).
+3. **Синхронизация ключей** — скрипт вытягивает `awg0.conf`, пишет `exit-cascade.conf` на S2, публикует публичные ключи пира на S1 и перезапускает контейнеры.
+4. **Хост на S2** — только NAT/forward (`nft`) для трафика с `exit-cascade` в WAN; отдельного `wg-cascade` в netns хоста больше нет.
 
-Скрипт **не останавливает чужие контейнеры**: только compose-проект в `remote.path` каждого узла.
+Старый стек панели на S2 оркестратор **не останавливает** — см. однократную процедуру в [exit-core/README.md](exit-core/README.md).
 
-## Как работает переустановка
+## Переустановка и тома
 
-Каждый запуск (`exit-only`, `entry-only`, `full`) выполняет согласованный clean reinstall шага узла:
+Для каждого шага узла: sync исходников → `docker compose down` **только своего проекта** → очистка устаревших nft/ip правил каскада на хосте → preflight → `.env` → `deploy.sh` и т.д.
 
-1. sync исходников (`git`/`local`),
-2. `docker compose down` только своего проекта,
-3. очистка старых каскадных правил (маршрутизация + nft таблицы каскада),
-4. preflight портов,
-5. запись нового `.env`,
-6. `deploy.sh`,
-7. `applyAdminPasswordFromEnv.js`.
-
-По умолчанию БД **сохраняется**. Для удаления БД при переустановке используйте `--wipe-db`.
+- **`--wipe-db`** — удалить volume БД панели (`amnezia-wg-data`) при переустановке entry/exit с полным стеком (на exit-core не применяется).
+- **`--wipe-cascade`** — сбросить состояние каскада: volume exit-core с конфигом/ключами; файлы каскада в volume панели на entry. Без флага ключи и конфиги каскада **сохраняются** между прогонами.
 
 ## Быстрый старт
 
@@ -34,12 +25,13 @@ cp config.example.yaml config.yaml
 python install.py --phase full
 ```
 
+В `config.yaml` для каскада нужны **`entry.network.cascade_enabled: true`** и **`exit.core: true`** (или `exit.mode: core`).
+
 ## Фазы
 
-- `--phase exit-only` — только exit.
-- `--phase entry-only` — только entry.
-- `--phase full` — exit -> entry -> cascade hooks (по умолчанию).
-- `--wipe-db` — дополнительно удалить DB volume (`amnezia-wg-data`) на переустанавливаемых узлах.
+- `--phase exit-only` — только exit-core на S2 (+ хуки NAT, если включён каскад в конфиге).
+- `--phase entry-only` — только entry; при включённом каскаде затем **sync** и хуки на exit.
+- `--phase full` — exit → entry → sync → хуки на exit (по умолчанию).
 
 ## Dry-run
 
@@ -47,23 +39,15 @@ python install.py --phase full
 python install.py --dry-run --phase full
 ```
 
-Показывает план действий без SSH/изменений.
-
-## Важные ограничения
-
-- Межсерверные интерфейсы (`entry.network.exit_uplink_interface`, `exit.network.entry_uplink_interface`) должны существовать заранее.
-- Скрипт создаёт/обновляет host-level интерфейс `wg-cascade` и ключи в `/etc/wireguard`.
-- При занятии портов другим ПО deployment завершится ошибкой (fail-fast).
-- Для полного сброса состояния панели используйте `--wipe-db`.
-
 ## Проверка после запуска
 
-- На `entry`:
-  - `ip -o link show | grep wg-cascade`
-  - `ip rule show | rg 166`
-  - `ip route show table 166`
-  - `nft list table inet amnezia_cascade_entry`
-- На `exit`:
-  - `ip -o link show | grep wg-cascade`
-  - `nft list table ip amnezia_cascade_exit_nat`
-  - `nft list table inet amnezia_cascade_exit_fwd`
+- **S1 (в контейнере панели)**  
+  `docker exec amnezia-awg awg show awg0`  
+  `docker exec amnezia-awg awg show awg-cascade`
+- **S2**  
+  `docker logs amnezia-exit-cascade --tail 50`  
+  `docker exec amnezia-exit-cascade awg show exit-cascade`  
+  `nft list table ip amnezia_cascade_exit_nat`  
+  `nft list table inet amnezia_cascade_exit_fwd`
+
+На entry хосте при необходимости смотрите очистку policy routing из `install.py` (`build_entry_cleanup_script`) после миграции со старой схемы.

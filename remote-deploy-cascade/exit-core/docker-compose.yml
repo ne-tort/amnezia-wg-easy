@@ -1,0 +1,39 @@
+# Cascade exit node: AmneziaWG only (no panel). Project name fixes volume prefix.
+# Manual once: remove old full panel stack on this host (see README.md).
+name: amnezia-cascade-exit
+
+services:
+  amnezia-exit-cascade:
+    image: amneziavpn/amneziawg-go:latest
+    container_name: amnezia-exit-cascade
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    privileged: true
+    volumes:
+      - exit-cascade-config:/config
+      - /lib/modules:/lib/modules:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for i in $$(seq 1 60); do
+          if [ -s /config/exit-cascade.conf ]; then break; fi
+          echo "[exit-cascade] waiting for exit-cascade.conf ($$i)..."
+          sleep 2
+        done
+        if ! [ -s /config/exit-cascade.conf ]; then
+          echo "[exit-cascade] missing /config/exit-cascade.conf" >&2
+          sleep infinity
+          exit 0
+        fi
+        awg-quick down /config/exit-cascade.conf 2>/dev/null || true
+        awg-quick up /config/exit-cascade.conf
+        exec sleep infinity
+
+volumes:
+  exit-cascade-config:

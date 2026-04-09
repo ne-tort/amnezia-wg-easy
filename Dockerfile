@@ -83,6 +83,9 @@ COPY config/dnsmasq-amnezia.conf /etc/dnsmasq-amnezia.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
+COPY scripts/cascade-in-container-postup.sh scripts/cascade-in-container-predown.sh /app/scripts/
+RUN chmod +x /app/scripts/cascade-in-container-postup.sh /app/scripts/cascade-in-container-predown.sh
+
 # * Migrations path in runtime: path.join(__dirname, '..','..','migrations') from /app/lib => /migrations
 COPY migrations /migrations
 

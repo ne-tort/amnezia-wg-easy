@@ -119,3 +119,16 @@ module.exports.OBFS_R_BYTES = parseInt(process.env.OBFS_R_BYTES || '48', 10);
 module.exports.WG_QR_COMPACT = process.env.WG_QR_COMPACT
   ? process.env.WG_QR_COMPACT.toLowerCase() === 'true'
   : false;
+
+// * Cascade uplink (S1→S2): second AmneziaWG iface awg-cascade in same container as awg0 (see WireGuard.js).
+const _wc = process.env.WG_CASCADE_ENABLED;
+module.exports.WG_CASCADE_ENABLED = _wc && ['1', 'true', 'yes'].includes(String(_wc).toLowerCase().trim());
+module.exports.WG_CASCADE_CONF_FILE = process.env.WG_CASCADE_CONF_FILE || 'awg-cascade.conf';
+module.exports.WG_CASCADE_ADDRESS = (process.env.WG_CASCADE_ADDRESS || '172.31.255.1/30').trim();
+module.exports.WG_CASCADE_EXIT_TUNNEL_IP = (process.env.WG_CASCADE_EXIT_TUNNEL_IP || '172.31.255.2').trim();
+module.exports.WG_CASCADE_EXIT_PUBLIC_KEY = (process.env.WG_CASCADE_EXIT_PUBLIC_KEY || '').trim();
+module.exports.WG_CASCADE_EXIT_ENDPOINT = (process.env.WG_CASCADE_EXIT_ENDPOINT || '').trim();
+const _wccs = typeof process.env.WG_CASCADE_CLIENT_SUBNET === 'string' && process.env.WG_CASCADE_CLIENT_SUBNET.trim();
+module.exports.WG_CASCADE_CLIENT_SUBNET = _wccs
+  ? process.env.WG_CASCADE_CLIENT_SUBNET.trim()
+  : (module.exports.WG_DEFAULT_ADDRESS.replace('x', '0') + '/24');

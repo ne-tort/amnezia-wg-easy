@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Cascade remote deploy orchestrator:
-- deploy exit node,
-- deploy entry node,
-- apply cascade routing hooks (entry policy routing + exit NAT/forward).
+- S2: exit-core only (amneziavpn/amneziawg-go, no panel) — see exit-core/README.md.
+- S1: full panel + awg-cascade inside the panel container (AmneziaWG, same obfuscation as awg0).
+- Host hooks: NAT/forward on exit only (interface exit-cascade).
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORK_DIR = Path(__file__).resolve().parent
+EXIT_CORE_DIR = WORK_DIR / "exit-core"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 SSH_CONNECT_TIMEOUT_SEC = 5
 
@@ -35,6 +36,7 @@ REMOTE_TIMEOUT_ADMIN_SCRIPT = 120
 REMOTE_TIMEOUT_DOCKER_CHECK = 60
 REMOTE_TIMEOUT_HOOKS = 180
 REMOTE_TIMEOUT_TUNNEL = 240
+REMOTE_TIMEOUT_SYNC = 300
 
 ENV_SUBST_PATTERN = re.compile(r"\$\{ENV:([^}]+)\}")
 TAR_EXCLUDE_NAMES = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".cursor"}
@@ -155,6 +157,26 @@ def pack_local_repo(repo_root: Path) -> bytes:
                 if should_exclude_tar(p, repo_root):
                     continue
                 tar.add(p, arcname=str(p.relative_to(repo_root)).replace("\\", "/"))
+    return buf.getvalue()
+
+
+def _truthy(v: Any) -> bool:
+    if v is True:
+        return True
+    if v is False or v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def pack_exit_core() -> bytes:
+    if not EXIT_CORE_DIR.is_dir():
+        raise SystemExit(f"exit-core bundle missing: {EXIT_CORE_DIR}")
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for name in ("docker-compose.yml", "README.md"):
+            p = EXIT_CORE_DIR / name
+            if p.is_file():
+                tar.add(p, arcname=name)
     return buf.getvalue()
 
 
@@ -304,6 +326,41 @@ echo "Port preflight OK (UDP $WG, TCP $HTTP/$HTTPS)."
 """
 
 
+def build_compose_down_exit_core_script(remote_path: str, *, wipe_cascade: bool) -> str:
+    rq = shlex.quote(remote_path)
+    wipe = "1" if wipe_cascade else "0"
+    return f"""set -e
+R={rq}
+WIPE={wipe}
+if [ -d "$R" ] && [ -f "$R/docker-compose.yml" ]; then
+  cd "$R"
+  docker compose -f docker-compose.yml down --remove-orphans || true
+fi
+if [ "$WIPE" = "1" ]; then
+  docker volume rm amnezia-cascade-exit_exit-cascade-config 2>/dev/null || true
+  echo "[install] exit-cascade Docker volume removed (--wipe-cascade)."
+fi
+echo "[install] exit-core stack stopped."
+"""
+
+
+def build_udp_port_preflight_script(udp_port: int) -> str:
+    return f"""set -e
+WG={int(udp_port)}
+check_udp() {{
+  local p="$1"
+  if ss -uln 2>/dev/null | awk '{{print $4}}' | grep -qE ":${{p}}$|\\[::\\]:${{p}}$"; then
+    echo "ERROR: UDP $p already in use." >&2
+    ss -ulnp 2>/dev/null | grep -E ":${{p}}\\s" || true
+    return 1
+  fi
+  return 0
+}}
+check_udp "$WG"
+echo "Port preflight OK (UDP $WG)."
+"""
+
+
 @dataclass
 class HostSpec:
     name: str
@@ -316,6 +373,7 @@ class HostSpec:
     http_port: int
     https_port: int
     network: dict[str, Any]
+    is_exit_core: bool = False
 
 
 def parse_host_spec(
@@ -346,10 +404,35 @@ def parse_host_spec(
     network = section.get("network") or {}
     if not isinstance(network, dict):
         raise SystemExit(f"Invalid {name}.network: mapping expected")
+
+    is_exit_core = name == "exit" and (
+        _truthy(section.get("core")) or str(section.get("mode", "")).strip().lower() == "core"
+    )
+    if is_exit_core:
+        rpath = str(remote.get("path") or "/opt/amnezia-cascade-exit").rstrip("/")
+        try:
+            listen = int(str(network.get("cascade_listen_port", 51830)))
+        except ValueError as e:
+            raise SystemExit("exit.network.cascade_listen_port must be an integer") from e
+        if listen < 1 or listen > 65535:
+            raise SystemExit("exit.network.cascade_listen_port out of range")
+        return HostSpec(
+            name=name,
+            ssh=ssh_cfg,
+            source={},
+            remote_path=rpath,
+            merged_env={},
+            env_body="# exit-core (AmneziaWG only — no panel .env)\n\n",
+            wg_port=listen,
+            http_port=80,
+            https_port=443,
+            network=network,
+            is_exit_core=True,
+        )
+
     merged = merge_env(order, defaults, env_overrides)
 
     # Cascade mode: disable entry-side default masquerade in awg PostUp.
-    # Otherwise client traffic is NATed inside container before host policy routing.
     if name == "entry":
         client_cidrs = _cidr_list(network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
         client_cidr = client_cidrs[0]
@@ -366,6 +449,25 @@ def parse_host_spec(
         )
         merged["WG_POST_DOWN"] = "nft delete table inet amnezia_wg_base 2>/dev/null || true"
 
+        if _truthy(network.get("cascade_enabled")):
+            ei = str(network.get("cascade_entry_ip", "172.31.255.1")).strip()
+            xip = str(network.get("cascade_exit_ip", "172.31.255.2")).strip()
+            plen = str(network.get("cascade_prefix_len", "30")).strip()
+            listen = str(network.get("cascade_listen_port", "51830")).strip()
+            ex_host = str(((cfg.get("exit") or {}).get("ssh") or {}).get("host", "")).strip()
+            endpoint = str(network.get("cascade_exit_endpoint", "")).strip()
+            if not endpoint and ex_host:
+                endpoint = f"{ex_host}:{listen}"
+            merged["WG_CASCADE_ENABLED"] = "true"
+            merged["WG_CASCADE_ADDRESS"] = f"{ei}/{plen}"
+            merged["WG_CASCADE_EXIT_TUNNEL_IP"] = xip
+            if endpoint:
+                merged["WG_CASCADE_EXIT_ENDPOINT"] = endpoint
+            pub = str(network.get("cascade_exit_public_key", "")).strip()
+            if pub:
+                merged["WG_CASCADE_EXIT_PUBLIC_KEY"] = pub
+            merged["WG_CASCADE_CLIENT_SUBNET"] = client_cidr
+
     env_body = render_env_file(order, merged, tag=name)
     wg, http, https = parse_target_ports(merged)
 
@@ -380,6 +482,7 @@ def parse_host_spec(
         http_port=http,
         https_port=https,
         network=network,
+        is_exit_core=False,
     )
 
 
@@ -456,14 +559,133 @@ rm -f {tq}
     raise SystemExit(f"{spec.name}: unknown source.mode={mode!r}")
 
 
+def deploy_exit_core_stack(
+    spec: HostSpec,
+    *,
+    dry_run: bool,
+    skip_port_check: bool,
+    wipe_cascade: bool,
+) -> None:
+    """S2: minimal amneziawg-go stack only (no panel). Does not touch old panel paths."""
+    print(f"\n=== Deploy EXIT-CORE ({spec.ssh['host']}) ===", flush=True)
+    print(f"UDP cascade listen: {spec.wg_port}. Remote path: {spec.remote_path}", flush=True)
+
+    if dry_run:
+        print(
+            "[dry-run] exit-core: upload bundle, compose down (exit-core only)"
+            + (" + wipe cascade volume" if wipe_cascade else "")
+            + ", nft cleanup, UDP preflight, compose up"
+        )
+        return
+
+    client = connect_ssh(spec.ssh)
+    try:
+        code, out, err = run_remote(
+            client,
+            "docker compose version 2>/dev/null || docker compose version",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_DOCKER_CHECK,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code != 0:
+            raise SystemExit("exit-core: docker compose unavailable")
+
+        tarball = pack_exit_core()
+        tmp_tar = "/tmp/amnezia-exit-core.tgz"
+        sftp = client.open_sftp()
+        try:
+            with sftp.open(tmp_tar, "wb") as f:
+                f.write(tarball)
+        finally:
+            sftp.close()
+
+        r = shlex.quote(spec.remote_path)
+        tq = shlex.quote(tmp_tar)
+        code, out, err = run_remote(
+            client,
+            f"""set -e
+mkdir -p {r}
+tar -xzf {tq} -C {r}
+rm -f {tq}
+""",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_GIT,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code != 0:
+            raise SystemExit("exit-core: extract bundle failed")
+
+        code, out, err = run_remote(
+            client,
+            build_compose_down_exit_core_script(spec.remote_path, wipe_cascade=wipe_cascade),
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_COMPOSE_DOWN,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+
+        cleanup_script = build_exit_cleanup_script()
+        code, out, err = run_remote(client, cleanup_script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+
+        if not skip_port_check:
+            code, out, err = run_remote(
+                client,
+                build_udp_port_preflight_script(spec.wg_port),
+                dry_run=False,
+                timeout_sec=REMOTE_TIMEOUT_PREFLIGHT,
+            )
+            if out:
+                _safe_write(sys.stdout, out)
+            if err:
+                _safe_write(sys.stderr, err)
+            if code != 0:
+                raise SystemExit("exit-core: UDP port preflight failed")
+
+        wd = shlex.quote(spec.remote_path)
+        code, out, err = run_remote(
+            client,
+            f"cd {wd} && docker compose -f docker-compose.yml pull && docker compose -f docker-compose.yml up -d",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_DEPLOY,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code == 124:
+            raise SystemExit("exit-core: compose up timeout")
+        if code != 0:
+            raise SystemExit(f"exit-core: compose up failed (exit {code})")
+    finally:
+        client.close()
+
+
 def deploy_one(
     spec: HostSpec,
     *,
     dry_run: bool,
     skip_port_check: bool,
     wipe_db: bool,
+    wipe_cascade: bool,
     role: str,
 ) -> None:
+    if spec.is_exit_core:
+        return deploy_exit_core_stack(
+            spec, dry_run=dry_run, skip_port_check=skip_port_check, wipe_cascade=wipe_cascade
+        )
+
     print(f"\n=== Deploy {spec.name.upper()} ({spec.ssh['host']}) ===", flush=True)
     print(
         f"Target ports: UDP {spec.wg_port}, TCP {spec.http_port}/{spec.https_port}. "
@@ -476,6 +698,8 @@ def deploy_one(
         print(f"[dry-run] {spec.name}: docker compose version")
         print(f"[dry-run] {spec.name}: sync source")
         print(f"[dry-run] {spec.name}: compose down (own project){' + wipe DB volume' if wipe_db else ''}")
+        if wipe_cascade and role == "entry":
+            print(f"[dry-run] {spec.name}: (cascade files wiped later in sync step if cascade_enabled)")
         print(f"[dry-run] {spec.name}: cleanup old cascade routing/firewall state ({role})")
         if not skip_port_check:
             print(f"[dry-run] {spec.name}: port preflight")
@@ -615,173 +839,88 @@ def _str_cfg(d: dict[str, Any], key: str, default: str = "") -> str:
 
 
 def _parse_tunnel_settings(entry: HostSpec, exit_spec: HostSpec) -> dict[str, Any]:
-    # Shared tunnel parameters (same defaults for both sides).
     ecfg = entry.network
     xcfg = exit_spec.network
-    iface = _str_cfg(ecfg, "cascade_interface", _str_cfg(xcfg, "cascade_interface", "wg-cascade"))
     entry_ip = _str_cfg(ecfg, "cascade_entry_ip", _str_cfg(xcfg, "cascade_entry_ip", "172.31.255.1"))
     exit_ip = _str_cfg(ecfg, "cascade_exit_ip", _str_cfg(xcfg, "cascade_exit_ip", "172.31.255.2"))
     prefix = _str_cfg(ecfg, "cascade_prefix_len", _str_cfg(xcfg, "cascade_prefix_len", "30"))
     listen_port = _str_cfg(xcfg, "cascade_listen_port", _str_cfg(ecfg, "cascade_listen_port", "51830"))
-    vpn_ingress_if = _str_cfg(ecfg, "vpn_ingress_interface", "")
     return {
-        "iface": iface,
         "entry_ip": entry_ip,
         "exit_ip": exit_ip,
         "prefix": prefix,
         "listen_port": listen_port,
-        "vpn_ingress_if": vpn_ingress_if,
     }
 
 
-def setup_cascade_tunnel(entry: HostSpec, exit_spec: HostSpec, *, dry_run: bool) -> dict[str, Any]:
-    """
-    Build real host-level WireGuard tunnel S1<->S2 for cascade routing.
-    Returns tunnel params consumed by routing hooks.
-    """
-    p = _parse_tunnel_settings(entry, exit_spec)
-    iface = shlex.quote(p["iface"])
-    entry_ip = shlex.quote(p["entry_ip"])
-    exit_ip = shlex.quote(p["exit_ip"])
-    prefix = shlex.quote(p["prefix"])
-    listen_port = shlex.quote(p["listen_port"])
-    exit_endpoint = shlex.quote(f"{exit_spec.merged_env.get('WG_HOST', exit_spec.ssh['host'])}:{p['listen_port']}")
-    client_cidrs = _cidr_list(entry.network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
-    client_join = ",".join(client_cidrs)
-
-    if dry_run:
-        print("[dry-run] setup real wg-cascade tunnel on entry+exit")
-        print(f"[dry-run] tunnel iface={p['iface']} entry_ip={p['entry_ip']}/{p['prefix']} exit_ip={p['exit_ip']}/{p['prefix']}")
-        return p
-
-    def run_required(client: paramiko.SSHClient, cmd: str, who: str) -> tuple[str, str]:
-        code, out, err = run_remote(client, cmd, dry_run=False, timeout_sec=REMOTE_TIMEOUT_TUNNEL)
-        if out:
-            _safe_write(sys.stdout, out)
-        if err:
-            _safe_write(sys.stderr, err)
-        if code == 124:
-            raise SystemExit(f"{who}: tunnel setup timeout")
-        if code != 0:
-            raise SystemExit(f"{who}: tunnel setup failed (exit {code})")
-        return out, err
-
-    entry_client = connect_ssh(entry.ssh)
-    exit_client = connect_ssh(exit_spec.ssh)
-    try:
-        # Ensure wireguard-tools and keys on both hosts.
-        prep = """set -e
-export DEBIAN_FRONTEND=noninteractive
-if ! command -v wg >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y wireguard-tools
-fi
-mkdir -p /etc/wireguard
-chmod 700 /etc/wireguard
-if [ ! -s /etc/wireguard/wg-cascade.private ]; then
-  umask 077
-  wg genkey > /etc/wireguard/wg-cascade.private
-fi
-wg pubkey < /etc/wireguard/wg-cascade.private > /etc/wireguard/wg-cascade.public
-cat /etc/wireguard/wg-cascade.public
-"""
-        out_entry, _ = run_required(entry_client, prep, "entry")
-        out_exit, _ = run_required(exit_client, prep, "exit")
-        entry_pub = out_entry.strip().splitlines()[-1].strip()
-        exit_pub = out_exit.strip().splitlines()[-1].strip()
-        if not entry_pub or not exit_pub:
-            raise SystemExit("Failed to derive wg-cascade public keys")
-
-        # Configure exit side (server/listener).
-        cfg_exit = f"""set -e
-IF={iface}
-ip link del "$IF" 2>/dev/null || true
-ip link add "$IF" type wireguard
-ip address add {exit_ip}/{prefix} dev "$IF"
-wg set "$IF" listen-port {listen_port} private-key /etc/wireguard/wg-cascade.private
-wg set "$IF" peer {shlex.quote(entry_pub)} allowed-ips {shlex.quote(p['entry_ip'] + '/32')},{shlex.quote(client_join)}
-ip link set mtu 1380 dev "$IF"
-ip link set up dev "$IF"
-echo "exit wg-cascade up"
-"""
-        run_required(exit_client, cfg_exit, "exit")
-
-        # Configure entry side (client).
-        cfg_entry = f"""set -e
-IF={iface}
-ip link del "$IF" 2>/dev/null || true
-ip link add "$IF" type wireguard
-ip address add {entry_ip}/{prefix} dev "$IF"
-wg set "$IF" private-key /etc/wireguard/wg-cascade.private
-wg set "$IF" peer {shlex.quote(exit_pub)} endpoint {exit_endpoint} persistent-keepalive 25 allowed-ips 0.0.0.0/0
-ip link set mtu 1380 dev "$IF"
-ip link set up dev "$IF"
-echo "entry wg-cascade up"
-"""
-        run_required(entry_client, cfg_entry, "entry")
-    finally:
-        entry_client.close()
-        exit_client.close()
-    return p
+def _parse_awg0_interface_fields(awg0_conf: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    in_iface = False
+    for line in awg0_conf.splitlines():
+        s = line.strip()
+        if s == "[Interface]":
+            in_iface = True
+            continue
+        if s.startswith("[") and s != "[Interface]":
+            in_iface = False
+            continue
+        if in_iface and "=" in s:
+            k, _, v = s.partition("=")
+            key = k.strip()
+            if key in ("PrivateKey", "Address", "ListenPort", "PreUp", "PostUp", "PreDown", "PostDown"):
+                continue
+            fields[key] = v.strip()
+    for req in ("Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4"):
+        if req not in fields:
+            raise SystemExit(f"awg0.conf [Interface] missing {req} (need full server block for cascade)")
+    return fields
 
 
-def build_entry_hook_script(entry: HostSpec, tunnel: dict[str, Any]) -> str:
-    uplink_if = str(tunnel["iface"]).strip()
-    exit_tunnel_ip = str(tunnel["exit_ip"]).strip()
-    vpn_ingress_if = str(tunnel["vpn_ingress_if"]).strip()
-    client_cidrs = _cidr_list(entry.network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
-    local_cidrs = _cidr_list(entry.network.get("local_cidrs"), required=False, ctx="entry.network.local_cidrs")
-    clients_join = " ".join(shlex.quote(c) for c in client_cidrs)
-    local_join = " ".join(shlex.quote(c) for c in local_cidrs)
-    uplink_q = shlex.quote(uplink_if)
-    exit_ip_q = shlex.quote(exit_tunnel_ip)
-    ingress_q = shlex.quote(vpn_ingress_if) if vpn_ingress_if else "''"
-    return f"""set -e
-UPLINK_IF={uplink_q}
-EXIT_TUNNEL_IP={exit_ip_q}
-VPN_INGRESS_IF={ingress_q}
-CLIENT_CIDRS="{clients_join}"
-LOCAL_CIDRS="{local_join}"
-
-sysctl -w net.ipv4.ip_forward=1 >/dev/null
-
-for c in $CLIENT_CIDRS; do
-  ip rule del fwmark 0x66 table 166 2>/dev/null || true
-  ip rule add fwmark 0x66 table 166 priority 1100 2>/dev/null || true
-done
-
-if [ -n "$LOCAL_CIDRS" ]; then
-  pr=1000
-  for c in $LOCAL_CIDRS; do
-    ip rule del to "$c" lookup main 2>/dev/null || true
-    ip rule add to "$c" lookup main priority "$pr" 2>/dev/null || true
-    pr=$((pr+1))
-  done
-fi
-
-ip route replace default via "$EXIT_TUNNEL_IP" dev "$UPLINK_IF" table 166
-
-nft add table inet amnezia_cascade_entry 2>/dev/null || true
-nft 'add chain inet amnezia_cascade_entry prerouting_mangle {{ type filter hook prerouting priority mangle; policy accept; }}' 2>/dev/null || true
-nft flush chain inet amnezia_cascade_entry prerouting_mangle
-for c in $CLIENT_CIDRS; do
-  if [ -n "$VPN_INGRESS_IF" ]; then
-    nft add rule inet amnezia_cascade_entry prerouting_mangle iifname "$VPN_INGRESS_IF" ip saddr "$c" meta mark set 0x66
-  else
-    nft add rule inet amnezia_cascade_entry prerouting_mangle ip saddr "$c" meta mark set 0x66
-  fi
-done
-
-echo "entry cascade hook applied (uplink=$UPLINK_IF exit=$EXIT_TUNNEL_IP ingress=$VPN_INGRESS_IF)."
-"""
+def _build_exit_cascade_conf_text(
+    iface_fields: dict[str, str],
+    exit_private_key: str,
+    entry_cascade_public_key: str,
+    exit_address_cidr: str,
+    listen_port: int,
+    allowed_ips: str,
+) -> str:
+    lines = [
+        "# Generated by remote-deploy-cascade/install.py",
+        "",
+        "[Interface]",
+        f"PrivateKey = {exit_private_key.strip()}",
+        f"Address = {exit_address_cidr}",
+        f"ListenPort = {int(listen_port)}",
+    ]
+    for k in ("Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4"):
+        lines.append(f"{k} = {iface_fields[k]}")
+    lines.extend(
+        [
+            "",
+            "[Peer]",
+            f"PublicKey = {entry_cascade_public_key.strip()}",
+            f"AllowedIPs = {allowed_ips}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
 
 
-def build_exit_hook_script(exit_spec: HostSpec, tunnel: dict[str, Any]) -> str:
-    uplink_if = str(tunnel["iface"]).strip()
-    wan_if = str(exit_spec.network.get("wan_interface") or "").strip()
-    if not wan_if:
+def tunnel_params_for_exit_hooks(exit_spec: HostSpec) -> dict[str, Any]:
+    wan = str(exit_spec.network.get("wan_interface") or "").strip()
+    if not wan:
         raise SystemExit("exit.network.wan_interface is required")
-    client_cidrs = _cidr_list(exit_spec.network.get("client_cidrs"), required=True, ctx="exit.network.client_cidrs")
+    return {
+        "iface": "exit-cascade",
+        "wan_if": wan,
+        "client_cidrs": _cidr_list(exit_spec.network.get("client_cidrs"), required=True, ctx="exit.network.client_cidrs"),
+    }
+
+
+def build_exit_hook_script(tunnel: dict[str, Any]) -> str:
+    uplink_if = str(tunnel["iface"]).strip()
+    wan_if = str(tunnel["wan_if"]).strip()
+    client_cidrs = tunnel["client_cidrs"]
     cidrs = " ".join(shlex.quote(c) for c in client_cidrs)
     uplink_q = shlex.quote(uplink_if)
     wan_q = shlex.quote(wan_if)
@@ -807,6 +946,202 @@ nft add rule inet amnezia_cascade_exit_fwd forward iifname "$WAN_IF" oifname "$U
 
 echo "exit cascade hook applied (uplink=$UPLINK_IF wan=$WAN_IF)."
 """
+
+
+def sync_cascade_configs(
+    entry: HostSpec,
+    exit_spec: HostSpec,
+    *,
+    dry_run: bool,
+    wipe_cascade: bool,
+) -> None:
+    """Align exit-cascade.conf on S2 with awg0 Amnezia params on S1; publish peer keys."""
+    print("\n=== Sync cascade AmneziaWG configs ===", flush=True)
+    if dry_run:
+        print("[dry-run] would sync exit-cascade.conf and peer files")
+        return
+    if not _truthy(entry.network.get("cascade_enabled")):
+        print("[sync] cascade_enabled false on entry — skip")
+        return
+    if not exit_spec.is_exit_core:
+        raise SystemExit("sync_cascade_configs requires exit.core: true (exit-core stack)")
+
+    p = _parse_tunnel_settings(entry, exit_spec)
+    try:
+        listen = int(str(p["listen_port"]))
+    except ValueError as e:
+        raise SystemExit("cascade_listen_port must be integer") from e
+    entry_host = str(exit_spec.ssh.get("host", "")).strip()
+    endpoint_line = f"{entry_host}:{listen}" if entry_host else ""
+
+    client_cidrs = _cidr_list(entry.network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
+    allowed_ips = ",".join([f"{p['entry_ip']}/32"] + client_cidrs)
+    exit_addr = f"{p['exit_ip']}/{p['prefix']}"
+
+    en = connect_ssh(entry.ssh)
+    try:
+        if wipe_cascade:
+            wipe_e = """docker exec amnezia-awg rm -f \
+/opt/amnezia/awg/cascade_link.private /opt/amnezia/awg/cascade_link.public \
+/opt/amnezia/awg/cascade_exit.public /opt/amnezia/awg/cascade_exit.endpoint \
+/opt/amnezia/awg/awg-cascade.conf 2>/dev/null || true"""
+            run_remote(en, wipe_e, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
+        wd = shlex.quote(entry.remote_path)
+        node_save0 = (
+            "require('./lib/WireGuard').saveConfig().then(()=>process.exit(0))"
+            ".catch(e=>{console.error(e);process.exit(1);})"
+        )
+        trig = f"""set -e
+cd {wd}
+docker compose exec -T amnezia-wg-easy node -e {shlex.quote(node_save0)}
+"""
+        code, out, err = run_remote(en, trig, dry_run=False, timeout_sec=REMOTE_TIMEOUT_SYNC)
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code != 0:
+            raise SystemExit(f"entry: trigger WireGuard.saveConfig failed (exit {code})")
+
+        code, out, err = run_remote(
+            en,
+            "docker exec amnezia-awg cat /opt/amnezia/awg/awg0.conf",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_SYNC,
+        )
+        if code != 0:
+            raise SystemExit("entry: cannot read awg0.conf from container")
+        iface_fields = _parse_awg0_interface_fields(out)
+
+        code, out, err = run_remote(
+            en,
+            "docker exec amnezia-awg cat /opt/amnezia/awg/cascade_link.public",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_SYNC,
+        )
+        if code != 0 or not out.strip():
+            raise SystemExit("entry: cascade_link.public missing — ensure WG_CASCADE_ENABLED on entry")
+        entry_cascade_pub = out.strip()
+    finally:
+        en.close()
+
+    ex = connect_ssh(exit_spec.ssh)
+    try:
+        if wipe_cascade:
+            wipe_x = """docker exec amnezia-exit-cascade rm -f \
+/config/exit_link.private /config/exit_link.public /config/exit-cascade.conf 2>/dev/null || true"""
+            run_remote(ex, wipe_x, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
+
+        key_init = """set -e
+docker exec amnezia-exit-cascade sh -c 'test -s /config/exit_link.private || wg genkey > /config/exit_link.private'
+docker exec amnezia-exit-cascade sh -c 'wg pubkey < /config/exit_link.private > /config/exit_link.public'
+"""
+        code, out, err = run_remote(ex, key_init, dry_run=False, timeout_sec=REMOTE_TIMEOUT_SYNC)
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code != 0:
+            raise SystemExit("exit-core: key init failed")
+
+        code, priv, err = run_remote(
+            ex,
+            "docker exec amnezia-exit-cascade cat /config/exit_link.private",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_SYNC,
+        )
+        if code != 0:
+            raise SystemExit("exit-core: read exit_link.private failed")
+        code, pub_out, err = run_remote(
+            ex,
+            "docker exec amnezia-exit-cascade cat /config/exit_link.public",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_SYNC,
+        )
+        if code != 0:
+            raise SystemExit("exit-core: read exit_link.public failed")
+        exit_pub = pub_out.strip()
+
+        conf_text = _build_exit_cascade_conf_text(
+            iface_fields,
+            priv.strip(),
+            entry_cascade_pub,
+            exit_addr,
+            listen,
+            allowed_ips,
+        )
+        sftp_x = ex.open_sftp()
+        try:
+            with sftp_x.open("/tmp/exit-cascade-gen.conf", "wb") as rf:
+                rf.write(conf_text.encode("utf-8"))
+        finally:
+            sftp_x.close()
+        code, out, err = run_remote(
+            ex,
+            "docker cp /tmp/exit-cascade-gen.conf amnezia-exit-cascade:/config/exit-cascade.conf && rm -f /tmp/exit-cascade-gen.conf",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_SYNC,
+        )
+        if code != 0:
+            raise SystemExit("exit-core: install exit-cascade.conf failed")
+    finally:
+        ex.close()
+
+    en = connect_ssh(entry.ssh)
+    try:
+        pub_wr = (
+            f"printf '%s\\n' {shlex.quote(exit_pub)} | "
+            "docker exec -i amnezia-awg sh -c 'cat > /opt/amnezia/awg/cascade_exit.public'"
+        )
+        code, out, err = run_remote(en, pub_wr, dry_run=False, timeout_sec=REMOTE_TIMEOUT_SYNC)
+        if code != 0:
+            raise SystemExit("entry: write cascade_exit.public failed")
+        if endpoint_line:
+            ep_wr = (
+                f"printf '%s\\n' {shlex.quote(endpoint_line)} | "
+                "docker exec -i amnezia-awg sh -c 'cat > /opt/amnezia/awg/cascade_exit.endpoint'"
+            )
+            run_remote(en, ep_wr, dry_run=False, timeout_sec=REMOTE_TIMEOUT_SYNC)
+        wd = shlex.quote(entry.remote_path)
+        node_save = (
+            "require('./lib/WireGuard').saveConfig().then(()=>process.exit(0))"
+            ".catch(e=>{console.error(e);process.exit(1);})"
+        )
+        code, out, err = run_remote(
+            en,
+            f"cd {wd} && docker compose exec -T amnezia-wg-easy node -e {shlex.quote(node_save)}",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_SYNC,
+        )
+        if code != 0:
+            raise SystemExit("entry: second saveConfig after peer files failed")
+        code, out, err = run_remote(
+            en,
+            f"cd {wd} && docker compose restart amnezia-wg-easy",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_DEPLOY,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+    finally:
+        en.close()
+
+    ex = connect_ssh(exit_spec.ssh)
+    try:
+        code, out, err = run_remote(
+            ex,
+            "docker restart amnezia-exit-cascade",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_DEPLOY,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+        if code != 0:
+            raise SystemExit("exit-core: restart failed")
+    finally:
+        ex.close()
+
+    print("[sync] cascade configs and restarts done.", flush=True)
 
 
 def build_entry_cleanup_script(entry: HostSpec) -> str:
@@ -840,13 +1175,13 @@ echo "exit cascade state cleaned."
 """
 
 
-def apply_cascade_hooks(entry: HostSpec, exit_spec: HostSpec, *, dry_run: bool, tunnel: dict[str, Any]) -> None:
-    print("\n=== Apply cascade hooks ===", flush=True)
-    entry_script = build_entry_hook_script(entry, tunnel)
-    exit_script = build_exit_hook_script(exit_spec, tunnel)
+def apply_cascade_hooks(exit_spec: HostSpec, *, dry_run: bool) -> None:
+    """Host nft NAT/forward on exit only (interface exit-cascade, network_mode host)."""
+    print("\n=== Apply exit cascade hooks (host) ===", flush=True)
+    tunnel = tunnel_params_for_exit_hooks(exit_spec)
+    exit_script = build_exit_hook_script(tunnel)
     if dry_run:
-        print("[dry-run] would apply entry hook script")
-        print("[dry-run] would apply exit hook script")
+        print("[dry-run] would apply exit host nft hooks")
         return
 
     ex_client = connect_ssh(exit_spec.ssh)
@@ -862,20 +1197,6 @@ def apply_cascade_hooks(entry: HostSpec, exit_spec: HostSpec, *, dry_run: bool, 
             raise SystemExit(f"exit hook failed (exit {code})")
     finally:
         ex_client.close()
-
-    en_client = connect_ssh(entry.ssh)
-    try:
-        code, out, err = run_remote(en_client, entry_script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
-        if out:
-            _safe_write(sys.stdout, out)
-        if err:
-            _safe_write(sys.stderr, err)
-        if code == 124:
-            raise SystemExit("entry hook timeout")
-        if code != 0:
-            raise SystemExit(f"entry hook failed (exit {code})")
-    finally:
-        en_client.close()
 
 
 def resolve_config_path(explicit: Path | None) -> Path:
@@ -908,6 +1229,14 @@ def main() -> None:
         ),
     )
     ap.add_argument(
+        "--wipe-cascade",
+        action="store_true",
+        help=(
+            "Remove cascade keys/volumes: exit Docker volume for exit-cascade; "
+            "cascade files in the panel WG volume on entry. Default: preserve between reinstalls."
+        ),
+    )
+    ap.add_argument(
         "--phase",
         choices=("exit-only", "entry-only", "full"),
         default="full",
@@ -936,6 +1265,14 @@ def main() -> None:
     print(f"Using config: {config_path}")
     print(f"Phase: {args.phase}")
     print(f"Wipe DB: {'yes' if args.wipe_db else 'no (default preserve)'}")
+    print(f"Wipe cascade: {'yes' if args.wipe_cascade else 'no (default preserve)'}")
+
+    cascade_on = _truthy(entry.network.get("cascade_enabled"))
+    if cascade_on and not exit_spec.is_exit_core:
+        sys.exit(
+            "entry.network.cascade_enabled requires exit.core: true (or exit.mode: core). "
+            "See remote-deploy-cascade/config.example.yaml."
+        )
 
     if args.phase in ("exit-only", "full"):
         deploy_one(
@@ -943,6 +1280,7 @@ def main() -> None:
             dry_run=args.dry_run,
             skip_port_check=args.skip_port_check,
             wipe_db=args.wipe_db,
+            wipe_cascade=args.wipe_cascade,
             role="exit",
         )
     if args.phase in ("entry-only", "full"):
@@ -951,19 +1289,38 @@ def main() -> None:
             dry_run=args.dry_run,
             skip_port_check=args.skip_port_check,
             wipe_db=args.wipe_db,
+            wipe_cascade=args.wipe_cascade,
             role="entry",
         )
-    if args.phase == "full":
-        tunnel = setup_cascade_tunnel(entry, exit_spec, dry_run=args.dry_run)
-        apply_cascade_hooks(entry, exit_spec, dry_run=args.dry_run, tunnel=tunnel)
+
+    if cascade_on and exit_spec.is_exit_core:
+        if args.phase in ("full", "entry-only"):
+            sync_cascade_configs(
+                entry,
+                exit_spec,
+                dry_run=args.dry_run,
+                wipe_cascade=args.wipe_cascade,
+            )
+        if args.phase in ("full", "entry-only", "exit-only"):
+            apply_cascade_hooks(exit_spec, dry_run=args.dry_run)
 
     if args.dry_run:
         print("\n[dry-run] done.")
     else:
         print("\nDone.")
-        print(f"  Entry panel: https://{entry.merged_env.get('PANEL_DOMAIN', entry.merged_env.get('WG_HOST', '?'))}")
-        print(f"  Exit panel:  https://{exit_spec.merged_env.get('PANEL_DOMAIN', exit_spec.merged_env.get('WG_HOST', '?'))}")
-        print("  Verify routing with traceroute and nft/ip rule checks from README.")
+        entry_url = entry.merged_env.get("PANEL_DOMAIN", entry.merged_env.get("WG_HOST", "?"))
+        print(f"  Entry panel: https://{entry_url}")
+        if exit_spec.is_exit_core:
+            print(
+                f"  Exit core:   {exit_spec.ssh.get('host', '?')} "
+                f"(AmneziaWG exit-cascade, path {exit_spec.remote_path})"
+            )
+        else:
+            print(
+                f"  Exit panel:  https://{exit_spec.merged_env.get('PANEL_DOMAIN', exit_spec.merged_env.get('WG_HOST', '?'))}"
+            )
+        if cascade_on and exit_spec.is_exit_core:
+            print("  Verify: README — awg show awg-cascade (entry container), awg show exit-cascade (exit), nft on exit host.")
 
 
 if __name__ == "__main__":
