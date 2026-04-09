@@ -268,6 +268,16 @@ const WireGuard = class {
     });
   }
 
+  /**
+   * Handlers that only need client/server fields from SQLite must not call getConfig():
+   * that runs wg-quick + cascade and can exceed nginx proxy_read_timeout (default 60s).
+   */
+  async __configForApiRead() {
+    const built = this.__buildConfigFromDb();
+    if (built) return built;
+    return this.getConfig();
+  }
+
   async saveConfig() {
     this.__config = null;
     // getConfig() already runs __saveConfig, __syncConfig, __syncCascadeInterface; duplicating
@@ -535,7 +545,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       const { applyFirewall } = require('./firewall');
       applyFirewall();
     }
-    const config = await this.getConfig();
+    const config = await this.__configForApiRead();
     const amneziaDnsAvailable = isAmneziaDnsAvailable();
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
@@ -593,7 +603,7 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
   }
 
   async getClient({ clientId }) {
-    const config = await this.getConfig();
+    const config = await this.__configForApiRead();
     const client = config.clients[clientId];
     if (!client) {
       throw new ServerError(`Client Not Found: ${clientId}`, 404);
@@ -604,8 +614,11 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
 
   async getClientConfiguration({ clientId, forQR = false, forceOmitI1ForCapacity = false, level, profile }) {
     await loadSignatures();
-    const config = await this.getConfig();
-    const client = await this.getClient({ clientId });
+    const config = await this.__configForApiRead();
+    const client = config.clients[clientId];
+    if (!client) {
+      throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    }
 
     const profileId = (profile != null && isKnownProfile(profile)) ? profile : DEFAULT_PROFILE_ID;
     const prof = getProfileSignatures(profileId);
