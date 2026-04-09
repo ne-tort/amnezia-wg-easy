@@ -3,18 +3,15 @@
 # Args: $1 = tunnel peer IP (exit side, e.g. 172.31.255.2), $2 = client VPN CIDR (e.g. 10.8.0.0/24)
 #
 # Policy routing: from client subnet -> table 166 (default via awg-cascade).
-# Priorities MUST be lower than Amnezia/awg injected rules (~998: suppress_prefixlength, fwmark
-# -> table 51820), otherwise those rules win and traffic leaves via docker eth0 instead of cascade.
+# awg-quick inserts suppress_prefixlength + fwmark at the lowest free prefs after "local" (often 3+).
+# Cascade rules MUST use prefs 1 and 2 so they always win over Amnezia policy routing.
 set -e
 CASCADE_GW="${1:?missing tunnel gw}"
 CLIENT_CIDR="${2:?missing client cidr}"
 UPLINK_IF=awg-cascade
 INGRESS_IF=awg0
-# Must run BEFORE awg0/awg-cascade fwmark + suppress_prefixlength rules (often ~28+ in container).
-# Lower number = higher precedence in "ip rule".
-# Amnezia wg-quick inserts suppress_prefixlength/fwmark at ~8–9; must be lower than that.
-PRI_TO_MAIN=5
-PRI_FROM_CASCADE=6
+PRI_TO_MAIN=1
+PRI_FROM_CASCADE=2
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 for i in "$INGRESS_IF" "$UPLINK_IF" all; do
