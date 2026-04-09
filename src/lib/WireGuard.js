@@ -245,10 +245,9 @@ const WireGuard = class {
 
   async saveConfig() {
     this.__config = null;
-    const config = await this.getConfig();
-    await this.__saveConfig(config);
-    await this.__syncConfig();
-    await this.__syncCascadeInterface();
+    // getConfig() already runs __saveConfig, __syncConfig, __syncCascadeInterface; duplicating
+    // them here raced two concurrent wg-quick up awg-cascade (Address already assigned / link deleted).
+    await this.getConfig();
   }
 
   // * Converts H1–H4 range (e.g. "1-2147483647") to single int for server config; userspace amneziawg-go may not accept ranges.
