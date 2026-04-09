@@ -36,8 +36,8 @@ const messages = { // eslint-disable-line no-unused-vars
     qrAmneziaMultiHint:
       'Several QR codes: scan each part (any order on mobile). On desktop, import the downloaded .vpn file in Amnezia instead of scanning.',
     downloadFormatTitle: 'Download format',
-    downloadFormatConf: 'WireGuard (.conf)',
-    downloadFormatAmnezia: 'Amnezia (.vpn)',
+    downloadFormatConf: '.conf',
+    downloadFormatAmnezia: 'Amnezia',
     close: 'Close',
     madeBy: 'Made by',
     donate: 'Donate',
@@ -152,8 +152,8 @@ const messages = { // eslint-disable-line no-unused-vars
     qrAmneziaMultiHint:
       'Несколько QR: отсканируйте каждую часть (на телефоне порядок не важен). На ПК надёжнее импортировать скачанный файл .vpn в Amnezia.',
     downloadFormatTitle: 'Формат скачивания',
-    downloadFormatConf: 'WireGuard (.conf)',
-    downloadFormatAmnezia: 'Amnezia (.vpn)',
+    downloadFormatConf: '.conf',
+    downloadFormatAmnezia: 'Amnezia',
     close: 'Закрыть',
     madeBy: 'Автор',
     donate: 'Поблагодарить',
