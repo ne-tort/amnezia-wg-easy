@@ -523,7 +523,7 @@ R={r}
 URL={u}
 BR={b}
 if [ -f "$R/deploy.sh" ]; then
-  cd "$R" && git fetch origin && git checkout "$BR" && git pull origin "$BR"
+  cd "$R" && git fetch origin && git checkout "$BR" && git reset --hard "origin/$BR"
 elif [ -d "$R" ]; then
   echo "Directory $R exists but deploy.sh missing; remove or fix manually." >&2
   exit 1
