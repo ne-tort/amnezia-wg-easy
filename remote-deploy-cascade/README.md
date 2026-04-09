@@ -37,8 +37,9 @@ python install.py --phase full
 1. **`exit.network.wan_interface`** — имя реального выхода в Интернет на S2 (`ip -4 route get 1.1.1.1` → `dev …`). Неверный интерфейс ломает SNAT и forward.
 2. **Старый `wg-cascade` на хосте S2** — если UDP порт занят, снимите интерфейс: `wg-quick down wg-cascade` / `ip link del wg-cascade`.
 3. **Пиры** — `docker exec amnezia-awg awg show awg-cascade` на S1 и `awg show exit-cascade` на S2: должен быть `latest handshake`, растут `transfer`.
-4. **В контейнере entry** — `ip rule` / `ip route show table 166`: для помеченного трафика default через IP exit по `awg-cascade`.
-5. **На S2** — `nft list table ip amnezia_cascade_exit_nat` и `inet amnezia_cascade_exit_fwd`: masquerade для `client_cidrs` и forward WAN↔`exit-cascade`. При необходимости повторите деплой с фазой, где вызываются хуки (`full` / `entry-only` / `exit-only`).
+4. **В контейнере entry** — `ip rule` / `ip route show table 166`: для трафика **с адресов клиентов** (`from 10.8.0.0/24`) в table 166 должен быть `default via 172.31.255.2 dev awg-cascade` (не через fwmark). Проверка: `docker exec amnezia-awg ip rule`; `docker exec amnezia-awg ip route show table 166`.
+5. **Клиент Amnezia** — в профиле должен быть маршрут в Интернет через туннель (**AllowedIPs** с `0.0.0.0/0` или аналог), иначе трафик наружу не пойдёт через VPN даже при исправной каскадной маршрутизации.
+6. **На S2** — `nft list table ip amnezia_cascade_exit_nat` и `inet amnezia_cascade_exit_fwd`: masquerade для `client_cidrs` и forward WAN↔`exit-cascade`. При необходимости повторите деплой с фазой, где вызываются хуки (`full` / `entry-only` / `exit-only`).
 
 ## Фазы
 

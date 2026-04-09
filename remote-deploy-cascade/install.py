@@ -1193,12 +1193,23 @@ docker exec amnezia-exit-cascade sh -c 'wg pubkey < /config/exit_link.private > 
 def build_entry_cleanup_script(entry: HostSpec) -> str:
     local_cidrs = _cidr_list(entry.network.get("local_cidrs"), required=False, ctx="entry.network.local_cidrs")
     local_join = " ".join(shlex.quote(c) for c in local_cidrs)
+    client_cidrs = _cidr_list(entry.network.get("client_cidrs"), required=False, ctx="entry.network.client_cidrs")
+    client_join = " ".join(shlex.quote(c) for c in client_cidrs)
     return f"""set -e
 LOCAL_CIDRS="{local_join}"
+CLIENT_CIDRS="{client_join}"
 while ip rule show | grep -q "fwmark 0x66 .* lookup 166"; do
   p=$(ip rule show | awk '/fwmark 0x66 .* lookup 166/ {{gsub(":","",$1); print $1; exit}}')
   [ -n "$p" ] && ip rule del pref "$p" 2>/dev/null || break
 done
+if [ -n "$CLIENT_CIDRS" ]; then
+  for c in $CLIENT_CIDRS; do
+    while ip rule show | grep -q "from $c lookup 166"; do
+      p=$(ip rule show | awk -v c="$c" '$0 ~ ("from " c " lookup 166") {{gsub(":","",$1); print $1; exit}}')
+      [ -n "$p" ] && ip rule del pref "$p" 2>/dev/null || break
+    done
+  done
+fi
 ip route flush table 166 2>/dev/null || true
 if [ -n "$LOCAL_CIDRS" ]; then
   for c in $LOCAL_CIDRS; do
