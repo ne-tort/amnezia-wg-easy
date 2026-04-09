@@ -209,16 +209,43 @@ def connect_ssh(cfg: dict[str, Any]) -> paramiko.SSHClient:
     return client
 
 
+# * Wall-clock limits on the **remote** host (GNU `timeout`). Prevents indefinite hang if docker/ss stalls.
+REMOTE_TIMEOUT_COMPOSE_DOWN = 300
+REMOTE_TIMEOUT_PREFLIGHT = 120
+REMOTE_TIMEOUT_GIT = 600
+REMOTE_TIMEOUT_DEPLOY = 7200
+REMOTE_TIMEOUT_ADMIN_SCRIPT = 120
+REMOTE_TIMEOUT_DOCKER_CHECK = 60
+
+
 def run_remote(
     client: paramiko.SSHClient,
     cmd: str,
     *,
     dry_run: bool,
+    timeout_sec: int = 600,
 ) -> tuple[int, str, str]:
+    """
+    Run `cmd` on the remote default shell. Wraps in `timeout` when available so a stuck
+    docker/ss never blocks the SSH session forever (exit 124 = timed out on GNU coreutils).
+    """
     if dry_run:
-        print(f"[dry-run] exec: {cmd}")
+        print(f"[dry-run] exec (limit {timeout_sec}s): {cmd[:300]}{'...' if len(cmd) > 300 else ''}")
         return 0, "", ""
-    stdin, stdout, stderr = client.exec_command(cmd, get_pty=True)
+
+    # * Prefer GNU timeout on the server; fall back to plain sh if missing (rare).
+    wrapped = (
+        f"if command -v timeout >/dev/null 2>&1; then "
+        f"timeout {timeout_sec} sh -c {shlex.quote(cmd)}; "
+        f"else sh -c {shlex.quote(cmd)}; fi"
+    )
+
+    transport = client.get_transport()
+    if transport and transport.sock is not None:
+        # * Socket stall (network) — slightly longer than remote `timeout` so we see exit 124 first.
+        transport.sock.settimeout(float(timeout_sec + 90))
+
+    stdin, stdout, stderr = client.exec_command(wrapped, get_pty=False)
     out = stdout.read().decode("utf-8", errors="replace")
     err = stderr.read().decode("utf-8", errors="replace")
     code = stdout.channel.recv_exit_status()
@@ -252,8 +279,27 @@ def parse_target_ports(merged: dict[str, str]) -> tuple[int, int, int]:
     )
 
 
+def build_compose_down_own_project_script(remote_path: str) -> str:
+    """
+    Bash: stop only this repo's compose project (same cwd + docker-compose.yml).
+    Does not touch other containers. Run before port preflight so our stack releases ports.
+    """
+    rq = shlex.quote(remote_path)
+    return f"""set -e
+R={rq}
+if [ ! -d "$R" ] || [ ! -f "$R/docker-compose.yml" ]; then
+  echo "[install] No existing stack at $R (skip docker compose down)."
+  exit 0
+fi
+cd "$R"
+docker compose -f docker-compose.yml --profile letsencrypt down --remove-orphans || true
+docker compose -f docker-compose.yml down --remove-orphans || true
+echo "[install] This project's compose stack stopped (named volumes kept)."
+"""
+
+
 def build_remote_port_preflight_script(remote_path: str, wg: int, http: int, https: int) -> str:
-    """Bash: verify target ports are free or owned by this compose project (before compose down)."""
+    """Bash: verify target ports are free or owned by this compose project (run after own `compose down`)."""
     rq = shlex.quote(remote_path)
     return f"""set -e
 R={rq}
@@ -447,7 +493,7 @@ def main() -> None:
     ap.add_argument(
         "--skip-port-check",
         action="store_true",
-        help="Skip remote port preflight before docker compose down (not recommended).",
+        help="Skip remote port preflight (not recommended). Use only if ports are known free.",
     )
     args = ap.parse_args()
 
@@ -502,17 +548,17 @@ def main() -> None:
     if args.dry_run:
         print("[dry-run] Would connect SSH and:")
         sk = " (skipped with --skip-port-check)" if args.skip_port_check else ""
+        print(f"  0. Ensure Docker: docker compose version")
+        print(f"  1. Sync source ({mode}) -> {remote_path}")
         print(
-            f"  0. Port preflight on remote (ss + docker compose port){sk}: "
+            f"  2. Stop this project only (volumes kept): "
+            f"docker compose down in {remote_path} if docker-compose.yml exists"
+        )
+        print(
+            f"  3. Port preflight (ss + docker; foreign stacks: free ports manually first){sk}: "
             f"UDP {wg_p}, TCP {http_p}/{https_p}"
         )
-        print(f"  1. Ensure Docker: docker compose version")
-        print(f"  2. Sync source ({mode}) -> {remote_path}")
-        print(f"  3. Upload .env -> {remote_path}/.env")
-        print(
-            f"  4. Stop stack (this project only, volumes kept): "
-            f"cd {remote_path} && docker compose -f docker-compose.yml --profile letsencrypt down --remove-orphans"
-        )
+        print(f"  4. Upload .env -> {remote_path}/.env")
         print(f"  5. Run: cd {remote_path} && chmod +x deploy.sh && ./deploy.sh")
         print(
             f"  6. Sync panel admin password from .env: "
@@ -529,7 +575,10 @@ def main() -> None:
             client,
             "docker compose version 2>/dev/null || docker compose version",
             dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_DOCKER_CHECK,
         )
+        if code == 124:
+            sys.exit("Remote: `docker compose version` timed out — Docker daemon may be stuck; fix on the server.")
         if code != 0:
             print(err or out, file=sys.stderr)
             sys.exit(
@@ -558,7 +607,9 @@ else
   git clone -b "$BR" --depth 1 "$URL" "$R"
 fi
 """
-            code, out, err = run_remote(client, script, dry_run=False)
+            code, out, err = run_remote(client, script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_GIT)
+            if code == 124:
+                sys.exit("Git sync timed out — check network and server load.")
             if code != 0:
                 print(err or out, file=sys.stderr)
                 sys.exit(f"Git sync failed with exit {code}")
@@ -581,27 +632,58 @@ mkdir -p "$R"
 tar -xzf {tq} -C "$R"
 rm -f {tq}
 """
-                code, out, err = run_remote(client, script, dry_run=False)
+                code, out, err = run_remote(client, script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_GIT)
             finally:
                 sftp.close()
+            if code == 124:
+                sys.exit("Archive extract timed out — check disk space and server load.")
             if code != 0:
                 print(err or out, file=sys.stderr)
                 sys.exit(f"Extract failed with exit {code}")
         else:
             sys.exit(f"Unknown source.mode: {mode}")
 
+        down_script = build_compose_down_own_project_script(remote_path)
+        print("--- Stop this project's compose stack (if present) ---", flush=True)
+        code, out, err = run_remote(
+            client,
+            down_script,
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_COMPOSE_DOWN,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code == 124:
+            sys.exit(
+                "`docker compose down` timed out — Docker may be stuck. "
+                "On the server: `sudo systemctl restart docker` (or fix the daemon), then re-run install.py."
+            )
+        if code != 0:
+            sys.exit(
+                f"docker compose down failed with exit {code}. "
+                "See stderr above; fix Docker/compose on the server."
+            )
+
         if not args.skip_port_check:
             pf = build_remote_port_preflight_script(remote_path, wg_p, http_p, https_p)
             print("--- Remote port preflight ---", flush=True)
-            code, out, err = run_remote(client, pf, dry_run=False)
+            code, out, err = run_remote(client, pf, dry_run=False, timeout_sec=REMOTE_TIMEOUT_PREFLIGHT)
             if out:
                 _safe_write(sys.stdout, out)
             if err:
                 _safe_write(sys.stderr, err)
+            if code == 124:
+                sys.exit(
+                    "Port preflight timed out (`ss` / `docker` stalled). "
+                    "Restart Docker on the server or fix port conflicts manually, then re-run."
+                )
             if code != 0:
                 sys.exit(
                     f"Port preflight failed (exit {code}). "
-                    "Free the ports or fix conflicts; or use --skip-port-check if you accept the risk."
+                    "Required UDP/TCP ports are in use by another service — stop unrelated containers/processes "
+                    "manually, then re-run. Or use --skip-port-check only if you are sure the ports are free."
                 )
         else:
             print("[install] Skipping port preflight (--skip-port-check).", flush=True)
@@ -615,25 +697,22 @@ rm -f {tq}
             sftp.close()
 
         wd = shlex.quote(remote_path)
-        # Only this compose project (cwd + docker-compose.yml). No -v: DB volumes kept.
-        code, out, err = run_remote(
-            client,
-            f"cd {wd} && docker compose -f docker-compose.yml --profile letsencrypt down --remove-orphans",
-            dry_run=False,
-        )
-        if code != 0:
-            _safe_write(sys.stderr, err or out)
-            sys.exit(f"docker compose down failed with exit {code}")
-
         dp = shlex.quote(f"{remote_path}/deploy.sh")
+        print("--- deploy.sh (build + up) ---", flush=True)
         code, out, err = run_remote(
             client,
             f"chmod +x {dp} && cd {wd} && ./deploy.sh",
             dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_DEPLOY,
         )
         _safe_write(sys.stdout, out)
         if err:
             _safe_write(sys.stderr, err)
+        if code == 124:
+            sys.exit(
+                "deploy.sh timed out (build/up exceeded 2h). "
+                "Inspect the server: disk, CPU, Docker build logs; re-run install.py."
+            )
         if code != 0:
             sys.exit(f"deploy.sh exited with {code}")
 
@@ -641,10 +720,13 @@ rm -f {tq}
             client,
             f"cd {wd} && docker compose -f docker-compose.yml exec -T amnezia-wg-easy node scripts/applyAdminPasswordFromEnv.js",
             dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_ADMIN_SCRIPT,
         )
         _safe_write(sys.stdout, out)
         if err:
             _safe_write(sys.stderr, err)
+        if code == 124:
+            sys.exit("applyAdminPasswordFromEnv.js timed out — check that the amnezia-wg-easy container is running.")
         if code != 0:
             sys.exit(
                 f"applyAdminPasswordFromEnv.js exited with {code} "

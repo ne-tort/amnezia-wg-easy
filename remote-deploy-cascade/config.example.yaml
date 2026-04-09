@@ -1,0 +1,74 @@
+# Copy to config.yaml and adjust. Do not commit secrets (see .gitignore).
+#
+# One run can deploy:
+# - exit node (S2),
+# - entry node (S1),
+# - cascade routing hooks.
+
+source:
+  mode: "git" # "git" | "local"
+  git_url: "https://github.com/your-org/amnezia-wg-easy.git"
+  branch: "master"
+  # local_path: ".."
+
+entry:
+  ssh:
+    host: "203.0.113.10"
+    port: 22
+    user: "root"
+    identity_file: "~/.ssh/id_ed25519"
+    # password: "secret"
+    # ssh_password_env: "AMNEZIA_SSH_PASSWORD"
+  remote:
+    path: "/opt/amnezia-wg-easy-entry"
+  env:
+    WG_HOST: "203.0.113.10"
+    PANEL_DOMAIN: "panel-entry.example.com"
+    CERTBOT_EMAIL: "you@example.com"
+    ADMIN_USERNAME: "admin"
+    ADMIN_PASSWORD: "change-me-strong"
+    LANGUAGE: "ru"
+    WG_PORT: 51820
+    PORT: 51821
+    PANEL_HTTP_PORT: 80
+    PANEL_HTTPS_PORT: 443
+  network:
+    # Interface carrying traffic from entry to exit (must already exist, e.g. awg-exit/wg-exit).
+    exit_uplink_interface: "awg-exit"
+    # Client subnets behind entry panel.
+    client_cidrs:
+      - "10.8.0.0/24"
+    # Stay local on entry (peer/internal/LAN ranges), not through exit.
+    local_cidrs:
+      - "10.8.0.0/24"
+      - "192.168.0.0/16"
+
+exit:
+  ssh:
+    host: "198.51.100.20"
+    port: 22
+    user: "root"
+    identity_file: "~/.ssh/id_ed25519"
+    # password: "secret"
+    # ssh_password_env: "AMNEZIA_SSH_PASSWORD"
+  remote:
+    path: "/opt/amnezia-wg-easy-exit"
+  env:
+    WG_HOST: "198.51.100.20"
+    PANEL_DOMAIN: "panel-exit.example.com"
+    CERTBOT_EMAIL: "you@example.com"
+    ADMIN_USERNAME: "admin"
+    ADMIN_PASSWORD: "change-me-strong"
+    LANGUAGE: "ru"
+    WG_PORT: 51820
+    PORT: 51821
+    PANEL_HTTP_PORT: 80
+    PANEL_HTTPS_PORT: 443
+  network:
+    # Interface receiving routed traffic from entry (paired with entry.exit_uplink_interface).
+    entry_uplink_interface: "awg-entry"
+    # Public/WAN interface on exit node for Internet egress.
+    wan_interface: "eth0"
+    # Must include all client subnets from entry.
+    client_cidrs:
+      - "10.8.0.0/24"
