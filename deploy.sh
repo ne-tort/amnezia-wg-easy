@@ -142,9 +142,24 @@ else
   echo "[deploy] HTTPS: Let's Encrypt (certbot profile enabled)"
 fi
 
-# Build and start without forcing recreate so already-running services are left running
+# Build and start — retry on transient BuildKit/snapshot errors (common on busy hosts).
 echo "[deploy] Building and starting..."
-docker compose "${COMPOSE_TLS_ARGS[@]}" up -d --build --remove-orphans
+compose_ok=0
+for i in 1 2 3; do
+  if docker compose "${COMPOSE_TLS_ARGS[@]}" up -d --build --remove-orphans; then
+    compose_ok=1
+    break
+  fi
+  if [ "$i" -lt 3 ]; then
+    echo "[deploy] compose up --build failed (attempt $i/3); pruning builder cache and retrying in 5s..." >&2
+    docker builder prune -f 2>/dev/null || true
+    sleep 5
+  fi
+done
+if [ "$compose_ok" -ne 1 ]; then
+  echo "[deploy] ERROR: docker compose up --build failed after 3 attempts" >&2
+  exit 1
+fi
 
 PORT=$(grep -E "^PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "51821")
 WG_PORT=$(grep -E "^WG_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "51820")

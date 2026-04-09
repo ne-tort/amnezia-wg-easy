@@ -678,7 +678,23 @@ rm -f {tq}
         wd = shlex.quote(spec.remote_path)
         code, out, err = run_remote(
             client,
-            f"cd {wd} && docker compose -f docker-compose.yml pull && docker compose -f docker-compose.yml up -d",
+            f"""set -e
+cd {wd}
+docker compose -f docker-compose.yml pull
+ok=0
+for i in 1 2 3; do
+  if docker compose -f docker-compose.yml up -d; then
+    ok=1
+    break
+  fi
+  if [ "$i" -lt 3 ]; then
+    echo "[exit-core] compose up failed attempt $i/3; docker builder prune && sleep 5" >&2
+    docker builder prune -f 2>/dev/null || true
+    sleep 5
+  fi
+done
+[ "$ok" -eq 1 ]
+""",
             dry_run=False,
             timeout_sec=REMOTE_TIMEOUT_DEPLOY,
         )
