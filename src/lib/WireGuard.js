@@ -348,6 +348,19 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
     debug('Cascade conf saved.');
   }
 
+  /**
+   * Policy routing + table 166 for cascade. Must run after awg-cascade exists (wg-quick or syncconf).
+   * When wg-quick up fails (e.g. "Address already assigned" then link deleted), PostUp from wg-quick
+   * never runs — syncconf restores the tunnel but leaves table 166 empty and no internet for clients.
+   */
+  async __applyCascadePostUp() {
+    if (!WG_CASCADE_ENABLED) return;
+    const cidrEsc = String(WG_CASCADE_CLIENT_SUBNET).replace(/"/g, '\\"');
+    await Util.exec(
+      `/bin/sh -c '/app/scripts/cascade-in-container-postup.sh ${WG_CASCADE_EXIT_TUNNEL_IP} "${cidrEsc}"'`,
+    ).catch((e) => debug('Cascade postup script:', e.message));
+  }
+
   async __syncCascadeInterface() {
     if (!WG_CASCADE_ENABLED) return;
     const cascadePath = path.join(WG_PATH, AWG_CASCADE_CONF);
@@ -367,6 +380,7 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
       debug('Cascade wg-quick up:', upErr.message);
     }
     await Util.exec(`wg syncconf ${AWG_CASCADE_IFACE} <(wg-quick strip "${cascadePath}")`).catch(() => {});
+    await this.__applyCascadePostUp();
   }
 
   async __saveConfig(config) {

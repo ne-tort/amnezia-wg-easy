@@ -40,7 +40,16 @@ REMOTE_TIMEOUT_TUNNEL = 240
 REMOTE_TIMEOUT_SYNC = 300
 
 ENV_SUBST_PATTERN = re.compile(r"\$\{ENV:([^}]+)\}")
-TAR_EXCLUDE_NAMES = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules", ".cursor"}
+TAR_EXCLUDE_NAMES = {
+    ".git",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pytest_cache",
+    "node_modules",
+    ".cursor",
+    "browser_capture",  # may contain WSL symlinks; breaks tar on Windows
+}
 TAR_EXCLUDE_GLOBS = ("*.pyc", "*.pyo", ".env")
 
 # S2 exit-core AmneziaWG UDP — avoid default WireGuard 51820/51821.

@@ -83,15 +83,16 @@ COPY config/dnsmasq-amnezia.conf /etc/dnsmasq-amnezia.conf
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-COPY scripts/cascade-in-container-postup.sh scripts/cascade-in-container-predown.sh /app/scripts/
-RUN chmod +x /app/scripts/cascade-in-container-postup.sh /app/scripts/cascade-in-container-predown.sh
-
 # * Migrations path in runtime: path.join(__dirname, '..','..','migrations') from /app/lib => /migrations
 COPY migrations /migrations
 
 # * App code and node_modules last so cache is invalidated only when src/ or lockfile changes.
 COPY --from=build_node_modules /app /app
 COPY --from=build_node_modules /node_modules /app/node_modules
+
+# * Cascade hooks must come AFTER copying /app from Node stage — that copy overwrites /app entirely.
+COPY scripts/cascade-in-container-postup.sh scripts/cascade-in-container-predown.sh /app/scripts/
+RUN chmod +x /app/scripts/cascade-in-container-postup.sh /app/scripts/cascade-in-container-predown.sh
 
 WORKDIR /app
 CMD ["/entrypoint.sh"]
