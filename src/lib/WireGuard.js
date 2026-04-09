@@ -305,6 +305,7 @@ const WireGuard = class {
       await fs.unlink(cascadePath).catch(() => {});
       return;
     }
+    await this.__ensureCascadeLinkPrivateKey();
     const exitPub = await this.__readCascadeExitPublicKey();
     const endpoint = await this.__readCascadeExitEndpoint();
     if (!exitPub || !endpoint) {
