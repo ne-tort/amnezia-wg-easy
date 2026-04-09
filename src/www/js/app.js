@@ -309,13 +309,24 @@ new Vue({
           alert(err.message || err.toString());
         });
     },
-    setClientDownloadFormat(clientId, value) {
+    /** Avoids ReferenceError if cached HTML references state before/without data key (use ?v= bump after deploy). */
+    downloadFormatValue(clientId) {
+      const m = this.clientDownloadFormat;
+      if (m == null || typeof m !== 'object') return 'conf';
+      return m[clientId] || 'conf';
+    },
+    onDownloadFormatChange(clientId, ev) {
+      const value = ev && ev.target ? ev.target.value : '';
+      if (this.clientDownloadFormat == null || typeof this.clientDownloadFormat !== 'object') {
+        this.$set(this, 'clientDownloadFormat', {});
+      }
       this.$set(this.clientDownloadFormat, clientId, value);
     },
     clientConfigurationDownloadHref(client) {
       const level = this.getClientLevel(client);
       const profile = this.getClientProfile(client);
-      const fmt = this.clientDownloadFormat[client.id] || 'conf';
+      const map = this.clientDownloadFormat;
+      const fmt = (map && map[client.id]) || 'conf';
       const params = [`level=${Number(level)}`];
       if (profile) params.push(`profile=${encodeURIComponent(profile)}`);
       if (fmt === 'amnezia') params.push('format=amnezia');
@@ -327,7 +338,8 @@ new Vue({
         .replace(/(-{2,}|-$)/g, '-')
         .replace(/-$/, '')
         .substring(0, 32);
-      const fmt = this.clientDownloadFormat[client.id] || 'conf';
+      const map = this.clientDownloadFormat;
+      const fmt = (map && map[client.id]) || 'conf';
       const base = safe || 'configuration';
       return fmt === 'amnezia' ? `${base}.vpn` : `${base}.conf`;
     },
@@ -1002,6 +1014,11 @@ new Vue({
     timeago: (value) => {
       return timeago.format(value, i18n.locale);
     },
+  },
+  created() {
+    if (this.clientDownloadFormat == null || typeof this.clientDownloadFormat !== 'object') {
+      this.$set(this, 'clientDownloadFormat', {});
+    }
   },
   mounted() {
     this.prefersDarkScheme.addListener(this.handlePrefersChange);
