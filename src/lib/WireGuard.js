@@ -240,6 +240,11 @@ const WireGuard = class {
     if (!WG_HOST) {
       throw new Error('WG_HOST Environment Variable Not Set!');
     }
+    // Warm cache: do not queue on __withConfigLock. Otherwise every API reader (e.g. client list
+    // polling) waited behind wg-quick + cascade even when config was already loaded.
+    if (this.__config) {
+      return this.__config;
+    }
     return this.__withConfigLock(async () => {
       if (this.__config) return this.__config;
       await this.__ensureServerConfig();
