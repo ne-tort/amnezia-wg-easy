@@ -2,6 +2,7 @@
 
 const fs = require('node:fs/promises');
 const path = require('path');
+const dns = require('node:dns').promises;
 const debug = require('debug')('WireGuard');
 const crypto = require('node:crypto');
 const QRCode = require('qrcode');
@@ -13,7 +14,7 @@ const { migrateAwgToDb } = require('./migrateAwgToDb');
 const { isKnownProfile, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
 const { loadSignatures, runSignatureGeneration, getProfileSignatures } = require('./signatures');
 const { isAmneziaDnsAvailable } = require('./amneziaDns');
-const { generateAmneziaClientQrSvgs, buildAmneziaVpnExport } = require('./amneziaClientQr');
+const { generateAmneziaClientQrSvgs, buildAmneziaVpnExport, parseEndpoint } = require('./amneziaClientQr');
 
 const {
   WG_PATH,
@@ -118,6 +119,93 @@ function cascadeExitPublicHostFromEndpoint(endpointLine) {
   const c = s.indexOf(':');
   if (c < 0) return s;
   return s.slice(0, c).trim();
+}
+
+/**
+ * Resolve panel endpoint hostname to an IP for client exports (.conf, Amnezia). Literals unchanged.
+ * @param {string} host - from parseEndpoint hostName
+ * @returns {Promise<string>}
+ */
+async function resolveEndpointHostToIp(host) {
+  const h = String(host || '').trim();
+  if (!h) return '';
+  if (Util.isValidIPv4(h)) return h;
+  if (h.includes(':') && !h.includes('.')) return h;
+  /* lookup uses getaddrinfo (same as ping/curl in container); resolve4/6 query DNS directly */
+  try {
+    const r = await dns.lookup(h, { family: 4 });
+    if (r?.address) return r.address;
+  } catch {
+    /* */
+  }
+  try {
+    const r = await dns.lookup(h, { family: 0, verbatim: true });
+    if (r?.address) return r.address;
+  } catch {
+    /* */
+  }
+  try {
+    const v4 = await dns.resolve4(h);
+    if (v4 && v4.length) return v4[0];
+  } catch {
+    /* */
+  }
+  try {
+    const v6 = await dns.resolve6(h);
+    if (v6 && v6.length) return v6[0];
+  } catch {
+    /* */
+  }
+  return h;
+}
+
+/**
+ * @param {string} ip
+ * @param {number} port
+ * @returns {string}
+ */
+function formatWireGuardEndpoint(ip, port) {
+  const p = Number(port);
+  if (ip.includes(':') && !Util.isValidIPv4(ip)) {
+    return `[${ip}]:${p}`;
+  }
+  return `${ip}:${p}`;
+}
+
+/**
+ * Rewrites `Endpoint =` in client ini (.conf) so hostname becomes IPv4/IPv6 literal when resolvable.
+ * Used for live exports, Amnezia build from stored text, and config version downloads.
+ * @param {string} iniText
+ * @returns {Promise<string>}
+ */
+async function rewriteIniEndpointHostToIp(iniText) {
+  if (typeof iniText !== 'string' || !iniText.trim()) return iniText || '';
+  const hadCrLf = iniText.includes('\r\n');
+  const nl = hadCrLf ? '\r\n' : '\n';
+  const lines = iniText.replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  for (const line of lines) {
+    const m = line.match(/^(\s*Endpoint\s*=\s*)(.+)$/i);
+    if (!m) {
+      out.push(line);
+      continue;
+    }
+    const prefix = m[1];
+    const rawEp = m[2].trim();
+    try {
+      const { hostName, port } = parseEndpoint(rawEp);
+      if (Util.isValidIPv4(hostName) || (hostName.includes(':') && !hostName.includes('.'))) {
+        out.push(line);
+        continue;
+      }
+      const ip = await resolveEndpointHostToIp(hostName);
+      const newEp = formatWireGuardEndpoint(ip, port);
+      out.push(newEp === rawEp ? line : `${prefix}${newEp}`);
+    } catch {
+      out.push(line);
+    }
+  }
+  return out.join(nl);
 }
 
 /**
@@ -677,15 +765,44 @@ PublicKey = ${config.server.publicKey}
 ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''
 }AllowedIPs = ${getAllowedIPsForClient(client)}
 PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
-Endpoint = ${this.__getEndpoint()}`;
+Endpoint = ${await this.__getClientEndpointLine()}`;
   }
 
+  /**
+   * Raw endpoint host:port from settings / env (may be a domain for TLS/panel).
+   */
   __getEndpoint() {
     const stored = db.appSettings.get('endpoint');
     if (stored && stored.trim()) return stored.trim();
     const fromEnv = WG_HOST && WG_PORT ? `${WG_HOST}:${WG_PORT}` : '';
     if (fromEnv) db.appSettings.set('endpoint', fromEnv);
     return fromEnv;
+  }
+
+  /**
+   * Endpoint for client .conf / Amnezia export: host resolved to IPv4/IPv6 literal when possible.
+   */
+  async __getClientEndpointLine() {
+    const raw = this.__getEndpoint();
+    if (!raw || !String(raw).trim()) return '';
+    try {
+      const { hostName, port } = parseEndpoint(raw.trim());
+      const ip = await resolveEndpointHostToIp(hostName);
+      return formatWireGuardEndpoint(ip, port);
+    } catch (e) {
+      debug('__getClientEndpointLine: parse failed, using raw endpoint:', e.message);
+      return String(raw).trim();
+    }
+  }
+
+  /** Resolved Endpoint line for DB audit / API (same as in exported .conf). */
+  async getResolvedClientEndpointLine() {
+    return this.__getClientEndpointLine();
+  }
+
+  /** Normalize stored or live ini before .conf download / Amnezia payload. */
+  async rewriteIniEndpointForClientExport(iniText) {
+    return rewriteIniEndpointHostToIp(iniText);
   }
 
   async getClientQRCodeSVG({ clientId, level, profile }) {
@@ -735,11 +852,12 @@ Endpoint = ${this.__getEndpoint()}`;
     if (typeof iniText !== 'string' || !iniText.trim()) {
       throw new ServerError('Config text is empty', 400);
     }
+    const normalized = await rewriteIniEndpointHostToIp(iniText.trim());
     const client = await this.getClient({ clientId });
     const description = client.name && String(client.name).trim() ? client.name : 'AmneziaWG';
     const dnsAvailable = isAmneziaDnsAvailable();
     const useServerDns = dnsAvailable && client.useServerDns !== false;
-    return buildAmneziaVpnExport(iniText, description, {
+    return buildAmneziaVpnExport(normalized, description, {
       includeAmneziaDns: dnsAvailable && useServerDns,
     });
   }

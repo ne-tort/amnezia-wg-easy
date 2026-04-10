@@ -266,7 +266,7 @@ module.exports = class Server {
             preshared_key: client.preSharedKey || null,
             allowed_ips: WireGuard.getAllowedIPsForClient(clientForAllowed),
             persistent_keepalive: WG_PERSISTENT_KEEPALIVE || '25',
-            endpoint: db.appSettings.get('endpoint') || (WG_HOST && WG_PORT ? `${WG_HOST}:${WG_PORT}` : ''),
+            endpoint: await WireGuard.getResolvedClientEndpointLine(),
             config_raw: config,
             obfuscation_level: level != null ? level : null,
             obfuscation_profile: profile || null,
@@ -296,16 +296,17 @@ module.exports = class Server {
         const list = db.clientConfigVersions.getByClientId(clientId);
         return list.map((v) => ({ id: v.id, version: v.version, created_at: v.created_at }));
       }))
-      .get('/api/wireguard/client/:clientId/config-versions/:versionId', defineEventHandler((event) => {
+      .get('/api/wireguard/client/:clientId/config-versions/:versionId', defineEventHandler(async (event) => {
         const versionId = getRouterParam(event, 'versionId');
         const v = db.clientConfigVersions.getById(parseInt(versionId, 10));
         if (!v) throw createError({ status: 404, message: 'Version not found' });
+        const config_raw = await WireGuard.rewriteIniEndpointForClientExport(v.config_raw || '');
         return {
           id: v.id,
           client_id: v.client_id,
           version: v.version,
           created_at: v.created_at,
-          config_raw: v.config_raw,
+          config_raw,
         };
       }))
       .get('/api/wireguard/client/:clientId/config-versions/:versionId/download', defineEventHandler(async (event) => {
@@ -329,7 +330,7 @@ module.exports = class Server {
         }
         setHeader(event, 'Content-Disposition', `attachment; filename="${name}-v${v.version}.conf"`);
         setHeader(event, 'Content-Type', 'text/plain');
-        return v.config_raw || '';
+        return await WireGuard.rewriteIniEndpointForClientExport(v.config_raw || '');
       }))
       .post('/api/wireguard/client', defineEventHandler(async (event) => {
         requireRoles(event, ['admin', 'moderator']);
