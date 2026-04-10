@@ -75,7 +75,8 @@ fi
 AMNEZIA_DNS_NET=""
 DNS_IF=""
 for try in eth0 eth1; do
-  AMNEZIA_DNS_NET=$(ip -4 route show proto kernel scope link dev "$try" 2>/dev/null | awk '/^172\.29\.172\// {print $1; exit}')
+  # Match 172.29.172.0/24 (not 172.29.172/ which is wrong)
+  AMNEZIA_DNS_NET=$(ip -4 route show proto kernel scope link dev "$try" 2>/dev/null | awk '/^172\.29\.172\./ {print $1; exit}')
   if [ -n "$AMNEZIA_DNS_NET" ]; then
     DNS_IF=$try
     break
