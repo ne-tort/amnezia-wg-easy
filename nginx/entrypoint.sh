@@ -114,7 +114,7 @@ inject_root() {
   _template="$1"
   _rootfile="$2"
   envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${WEBUI_PUBLIC_PREFIX}' < "$_template" | awk -v rf="$_rootfile" '
-    /__ROOT_BLOCK__/ { while ((getline line < rf) > 0) print line; next }
+    /^[[:space:]]*__ROOT_BLOCK__[[:space:]]*$/ { while ((getline line < rf) > 0) print line; next }
     { print }
   '
 }
