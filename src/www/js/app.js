@@ -63,16 +63,16 @@ const UI_CHART_TYPES = [
   { type: 'bar', strokeWidth: 0 },
 ];
 
-// * Profile id -> label and qrFriendly (order comes from API /signatures/profiles).
+// * Profile id -> label (order comes from API /signatures/profiles).
 const PROFILE_META = {
-  dns: { label: 'DNS', qrFriendly: true },
-  sip: { label: 'SIP', qrFriendly: true },
-  dtls: { label: 'DTLS', qrFriendly: true },
-  quic: { label: 'QUIC', qrFriendly: false },
-  quic_browser: { label: 'QUIC (browser)', qrFriendly: false },
-  stun: { label: 'STUN', qrFriendly: true },
-  webrtc: { label: 'WebRTC', qrFriendly: true },
-  stun_browser: { label: 'STUN (browser)', qrFriendly: true },
+  dns: { label: 'DNS' },
+  sip: { label: 'SIP' },
+  dtls: { label: 'DTLS' },
+  quic: { label: 'QUIC' },
+  quic_browser: { label: 'QUIC (browser)' },
+  stun: { label: 'STUN' },
+  webrtc: { label: 'WebRTC' },
+  stun_browser: { label: 'STUN (browser)' },
 };
 
 const CHART_COLORS = {
@@ -274,10 +274,6 @@ new Vue({
     getProfileLabel(profileId) {
       const meta = PROFILE_META[profileId];
       return meta ? meta.label : profileId;
-    },
-    isProfileQRFriendly(profileId) {
-      const meta = PROFILE_META[profileId];
-      return meta ? meta.qrFriendly === true : false;
     },
     cycleClientProfile(client) {
       const list = this.profileIds.length ? this.profileIds : [this.defaultProfile || 'dns'];
