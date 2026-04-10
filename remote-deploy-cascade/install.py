@@ -544,10 +544,12 @@ def parse_host_spec(
                 "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" oifname \"awg-cascade\" accept ; "
                 "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg-cascade\" oifname \"awg0\" accept"
             )
+        # Docker may attach amnezia-dns-net to eth0 or eth1; masquerade must match the iface that carries 172.29.172.0/24.
         dns_nat = (
             "nft delete table ip amnezia_nat 2>/dev/null || true ; "
             "nft add table ip amnezia_nat ; "
             "nft add chain ip amnezia_nat postrouting '{ type nat hook postrouting priority 100; }' ; "
+            f'nft add rule ip amnezia_nat postrouting ip saddr {client_cidr} oifname "eth0" masquerade ; '
             f'nft add rule ip amnezia_nat postrouting ip saddr {client_cidr} oifname "eth1" masquerade'
         )
         merged["WG_POST_UP"] = (

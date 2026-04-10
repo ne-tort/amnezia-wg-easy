@@ -70,13 +70,18 @@ if [ -n "$DOCKER_NET" ]; then
     ip route replace "$DOCKER_NET" dev "$DOCKER_IF" table "$t" 2>/dev/null || true
   done
 fi
-# Amnezia DNS (amnezia-dns-net on eth1, e.g. 172.29.172.0/24 → 172.29.172.254): local to this container.
-# Policy rule "from CLIENT_CIDR table 166" applies to forwarded packets from VPN clients. Table 166 has
-# default via awg-cascade; without this more-specific route, DNS to 172.29.172.254 is misrouted into the
-# cascade (Amnezia client hardcodes 172.29.172.254 for AmneziaDNS).
-DNS_IF=eth1
-AMNEZIA_DNS_NET=$(ip -4 route show proto kernel scope link dev "$DNS_IF" 2>/dev/null | awk '{print $1; exit}')
-if [ -n "$AMNEZIA_DNS_NET" ]; then
+# Amnezia DNS (amnezia-dns-net 172.29.172.0/24 → 172.29.172.254): Docker may attach it to eth0 or eth1.
+# Policy "from CLIENT_CIDR table 166" needs a more-specific route than default via awg-cascade.
+AMNEZIA_DNS_NET=""
+DNS_IF=""
+for try in eth0 eth1; do
+  AMNEZIA_DNS_NET=$(ip -4 route show proto kernel scope link dev "$try" 2>/dev/null | awk '/^172\.29\.172\// {print $1; exit}')
+  if [ -n "$AMNEZIA_DNS_NET" ]; then
+    DNS_IF=$try
+    break
+  fi
+done
+if [ -n "$AMNEZIA_DNS_NET" ] && [ -n "$DNS_IF" ]; then
   ip route replace "$AMNEZIA_DNS_NET" dev "$DNS_IF" table 166 2>/dev/null || true
   for t in $(ip -4 rule show 2>/dev/null | sed -n 's/.*lookup \([0-9][0-9]*\).*/\1/p' | sort -u); do
     ip route show table "$t" 2>/dev/null | grep -qE "default .*dev ${UPLINK_IF}( |$)" || continue
