@@ -71,6 +71,17 @@ services:
       PANEL_DOMAIN: ${PANEL_DOMAIN:-}
       PANEL_PORT: ${PORT:-51821}
       WG_HOST: ${WG_HOST:-}
+      NGINX_CONFIG_PROFILE: ${NGINX_CONFIG_PROFILE:-entry}
+      WEBUI_PUBLIC_PREFIX: ${WEBUI_PUBLIC_PREFIX:-}
+      NGINX_ROOT_BEHAVIOR: ${NGINX_ROOT_BEHAVIOR:-redirect}
+      NGINX_MIRROR_HOST: ${NGINX_MIRROR_HOST:-}
+      NGINX_LOCAL_URL: ${NGINX_LOCAL_URL:-}
+      # entry profile: panel at / (legacy) or under WEBUI_PUBLIC_PREFIX (e.g. /panel); root = mirror|local|redirect
+      NGINX_CONFIG_PROFILE: ${NGINX_CONFIG_PROFILE:-entry}
+      WEBUI_PUBLIC_PREFIX: ${WEBUI_PUBLIC_PREFIX:-}
+      NGINX_ROOT_BEHAVIOR: ${NGINX_ROOT_BEHAVIOR:-redirect}
+      NGINX_MIRROR_HOST: ${NGINX_MIRROR_HOST:-}
+      NGINX_LOCAL_URL: ${NGINX_LOCAL_URL:-}
     volumes:
       - certbot_conf:/etc/letsencrypt
       - certbot_www:/var/www/certbot:ro
