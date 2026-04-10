@@ -8,7 +8,7 @@ class API {
   async call({ method, path, body }) {
     let res;
     try {
-      res = await fetch(`./api${path}`, {
+      res = await fetch(`/api${path}`, {
         method,
         credentials: 'include',
         headers: {
@@ -64,7 +64,7 @@ class API {
     if (profile !== undefined && profile !== null && profile !== '') params.push(`profile=${encodeURIComponent(profile)}`);
     if (format === 'amnezia' || format === 'vpn') params.push('format=amnezia');
     const qs = params.length ? `?${params.join('&')}` : '';
-    const res = await fetch(`./api/wireguard/client/${clientId}/configuration${qs}`, {
+    const res = await fetch(`/api/wireguard/client/${clientId}/configuration${qs}`, {
       credentials: 'include',
     });
     if (!res.ok) throw new Error(res.statusText);
@@ -85,7 +85,7 @@ class API {
     if (profile !== undefined && profile !== null && profile !== '') params.push(`profile=${encodeURIComponent(profile)}`);
     if (encoding === 'amnezia' || encoding === 'text') params.push(`encoding=${encodeURIComponent(encoding)}`);
     const qs = params.length ? `?${params.join('&')}` : '';
-    const res = await fetch(`./api/wireguard/client/${clientId}/qrcode.svg${qs}`, {
+    const res = await fetch(`/api/wireguard/client/${clientId}/qrcode.svg${qs}`, {
       credentials: 'include',
     });
     if (!res.ok) throw new Error(res.statusText);

@@ -330,7 +330,7 @@ new Vue({
       const params = [`level=${Number(level)}`];
       if (profile) params.push(`profile=${encodeURIComponent(profile)}`);
       if (fmt === 'amnezia') params.push('format=amnezia');
-      return `./api/wireguard/client/${client.id}/configuration?${params.join('&')}`;
+      return `/api/wireguard/client/${client.id}/configuration?${params.join('&')}`;
     },
     clientDownloadFilename(client) {
       const safe = String(client.name || client.id || 'configuration')

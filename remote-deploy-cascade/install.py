@@ -8,11 +8,13 @@ Cascade remote deploy orchestrator:
 from __future__ import annotations
 
 import argparse
+import errno
 import fnmatch
 import ipaddress
 import io
 import os
 import re
+import time
 import shlex
 import sys
 import tarfile
@@ -29,15 +31,18 @@ EXIT_CORE_DIR = WORK_DIR / "exit-core"
 ENV_EXAMPLE = REPO_ROOT / ".env.example"
 SSH_CONNECT_TIMEOUT_SEC = 5
 
-REMOTE_TIMEOUT_COMPOSE_DOWN = 300
-REMOTE_TIMEOUT_PREFLIGHT = 120
-REMOTE_TIMEOUT_GIT = 600
+# Orchestrator SSH ops: cap 30s (fail fast; long hangs hide real errors). Exception: full image build.
+REMOTE_TIMEOUT_COMPOSE_DOWN = 30
+REMOTE_TIMEOUT_PREFLIGHT = 30
+# Git clone/fetch on remote can exceed 30s; orchestration steps stay capped below.
+REMOTE_TIMEOUT_GIT = 120
 REMOTE_TIMEOUT_DEPLOY = 7200
-REMOTE_TIMEOUT_ADMIN_SCRIPT = 120
-REMOTE_TIMEOUT_DOCKER_CHECK = 60
-REMOTE_TIMEOUT_HOOKS = 180
-REMOTE_TIMEOUT_TUNNEL = 240
-REMOTE_TIMEOUT_SYNC = 300
+REMOTE_TIMEOUT_ADMIN_SCRIPT = 30
+REMOTE_TIMEOUT_DOCKER_CHECK = 30
+REMOTE_TIMEOUT_HOOKS = 30
+REMOTE_TIMEOUT_TUNNEL = 30
+REMOTE_TIMEOUT_SYNC = 30
+REMOTE_TIMEOUT_VERIFY = 30
 
 ENV_SUBST_PATTERN = re.compile(r"\$\{ENV:([^}]+)\}")
 TAR_EXCLUDE_NAMES = {
@@ -54,6 +59,9 @@ TAR_EXCLUDE_GLOBS = ("*.pyc", "*.pyo", ".env")
 
 # S2 exit-core AmneziaWG UDP — avoid default WireGuard 51820/51821.
 CASCADE_DEFAULT_LISTEN_PORT = 8443
+
+# Path inside amnezia-awg container (volume amnezia-wg-data → /opt/amnezia/awg).
+ENTRY_CONTAINER_CASCADE_CONF = "/opt/amnezia/awg/awg-cascade.conf"
 
 
 def _safe_write(stream: Any, text: str) -> None:
@@ -184,12 +192,30 @@ def _truthy(v: Any) -> bool:
 def pack_exit_core() -> bytes:
     if not EXIT_CORE_DIR.is_dir():
         raise SystemExit(f"exit-core bundle missing: {EXIT_CORE_DIR}")
+    for sub in ("nginx", "certbot"):
+        p = REPO_ROOT / sub
+        if not p.is_dir():
+            raise SystemExit(f"exit-core bundle requires {p} (nginx + certbot from repo root)")
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        for name in ("docker-compose.yml", "README.md"):
-            p = EXIT_CORE_DIR / name
+        for arc in ("docker-compose.yml", "README.md", "deploy-exit.sh"):
+            p = EXIT_CORE_DIR / arc
             if p.is_file():
-                tar.add(p, arcname=name)
+                tar.add(p, arcname=arc)
+        for sub in ("nginx", "certbot"):
+            src = REPO_ROOT / sub
+            for root, dirs, files in os.walk(src):
+                rp = Path(root)
+                dirs[:] = [d for d in dirs if d not in TAR_EXCLUDE_NAMES]
+                for f in files:
+                    fp = rp / f
+                    if should_exclude_tar(fp, REPO_ROOT):
+                        continue
+                    try:
+                        arcname = fp.relative_to(REPO_ROOT).as_posix()
+                    except ValueError:
+                        continue
+                    tar.add(fp, arcname=arcname)
     return buf.getvalue()
 
 
@@ -258,10 +284,59 @@ def run_remote(
     if tr and tr.sock is not None:
         tr.sock.settimeout(float(timeout_sec + 90))
     _, stdout, stderr = client.exec_command(wrapped, get_pty=False)
-    out = stdout.read().decode("utf-8", errors="replace")
-    err = stderr.read().decode("utf-8", errors="replace")
-    code = stdout.channel.recv_exit_status()
-    return code, out, err
+    ch = stdout.channel
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+    last_emit = time.time()
+    last_heartbeat = time.time()
+    heartbeat_sec = 20.0
+
+    try:
+        while True:
+            made_progress = False
+
+            if ch.recv_ready():
+                data = ch.recv(65535)
+                if data:
+                    text = data.decode("utf-8", errors="replace")
+                    out_chunks.append(text)
+                    made_progress = True
+                    last_emit = time.time()
+
+            if ch.recv_stderr_ready():
+                data = ch.recv_stderr(65535)
+                if data:
+                    text = data.decode("utf-8", errors="replace")
+                    err_chunks.append(text)
+                    made_progress = True
+                    last_emit = time.time()
+
+            if ch.exit_status_ready() and not ch.recv_ready() and not ch.recv_stderr_ready():
+                break
+
+            now = time.time()
+            if (not made_progress) and (now - last_heartbeat >= heartbeat_sec):
+                idle_for = int(now - last_emit)
+                _safe_write(sys.stdout, f"[remote] still running... idle {idle_for}s\n")
+                last_heartbeat = now
+            if not made_progress:
+                time.sleep(0.2)
+
+        code = ch.recv_exit_status()
+        return code, "".join(out_chunks), "".join(err_chunks)
+    finally:
+        try:
+            stdout.close()
+        except Exception:
+            pass
+        try:
+            stderr.close()
+        except Exception:
+            pass
+        try:
+            ch.close()
+        except Exception:
+            pass
 
 
 def parse_target_ports(merged_env: dict[str, str]) -> tuple[int, int, int]:
@@ -347,6 +422,7 @@ R={rq}
 WIPE={wipe}
 if [ -d "$R" ] && [ -f "$R/docker-compose.yml" ]; then
   cd "$R"
+  docker compose -f docker-compose.yml --profile letsencrypt down --remove-orphans || true
   docker compose -f docker-compose.yml down --remove-orphans || true
 fi
 if [ "$WIPE" = "1" ]; then
@@ -429,16 +505,24 @@ def parse_host_spec(
             raise SystemExit("exit.network.cascade_listen_port must be an integer") from e
         if listen < 1 or listen > 65535:
             raise SystemExit("exit.network.cascade_listen_port out of range")
+        exit_env = section.get("env") or {}
+        if not isinstance(exit_env, dict):
+            raise SystemExit("exit.env: mapping expected when exit.core is true")
+        merged_ex = merge_env(order, defaults, exit_env)
+        if not str(merged_ex.get("WG_HOST", "")).strip():
+            merged_ex["WG_HOST"] = str(ssh_cfg.get("host", "")).strip()
+        env_body_ex = render_env_file(order, merged_ex, tag="exit-core")
+        wg_e, http_e, https_e = parse_target_ports(merged_ex)
         return HostSpec(
             name=name,
             ssh=ssh_cfg,
             source={},
             remote_path=rpath,
-            merged_env={},
-            env_body="# exit-core (AmneziaWG only — no panel .env)\n\n",
+            merged_env=merged_ex,
+            env_body=env_body_ex,
             wg_port=listen,
-            http_port=80,
-            https_port=443,
+            http_port=http_e,
+            https_port=https_e,
             network=network,
             is_exit_core=True,
         )
@@ -553,12 +637,6 @@ fi
             return
         tarball = pack_local_repo(root)
         tmp_tar = "/tmp/amnezia-wg-easy-cascade-bundle.tgz"
-        sftp = client.open_sftp()
-        try:
-            with sftp.open(tmp_tar, "wb") as f:
-                f.write(tarball)
-        finally:
-            sftp.close()
         rq = shlex.quote(spec.remote_path)
         tq = shlex.quote(tmp_tar)
         script = f"""set -e
@@ -567,16 +645,36 @@ mkdir -p "$R"
 tar -xzf {tq} -C "$R"
 rm -f {tq}
 """
-        code, out, err = run_remote(client, script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_GIT)
-        if out:
-            _safe_write(sys.stdout, out)
-        if err:
-            _safe_write(sys.stderr, err)
-        if code == 124:
-            raise SystemExit(f"{spec.name}: local extract timeout")
-        if code != 0:
-            raise SystemExit(f"{spec.name}: local extract failed (exit {code})")
-        return
+        attempts = 3
+        for idx in range(1, attempts + 1):
+            try:
+                sftp = client.open_sftp()
+                try:
+                    with sftp.open(tmp_tar, "wb") as f:
+                        f.write(tarball)
+                finally:
+                    sftp.close()
+
+                code, out, err = run_remote(client, script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_GIT)
+                if out:
+                    _safe_write(sys.stdout, out)
+                if err:
+                    _safe_write(sys.stderr, err)
+                if code == 124:
+                    raise SystemExit(f"{spec.name}: local extract timeout")
+                if code != 0:
+                    raise SystemExit(f"{spec.name}: local extract failed (exit {code})")
+                return
+            except (EOFError, OSError, paramiko.SSHException) as exc:
+                if idx >= attempts:
+                    raise
+                if isinstance(exc, OSError) and getattr(exc, "errno", None) not in (None, errno.ECONNRESET):
+                    raise
+                _safe_write(
+                    sys.stderr,
+                    f"[sync-source] local upload attempt {idx}/{attempts} failed: {exc}; retrying...\n",
+                )
+                time.sleep(2.0 * idx)
 
     raise SystemExit(f"{spec.name}: unknown source.mode={mode!r}")
 
@@ -588,15 +686,19 @@ def deploy_exit_core_stack(
     skip_port_check: bool,
     wipe_cascade: bool,
 ) -> None:
-    """S2: minimal amneziawg-go stack only (no panel). Does not touch old panel paths."""
+    """S2: AmneziaWG (host/UDP) + nginx TLS + optional certbot. Does not touch old panel paths elsewhere."""
     print(f"\n=== Deploy EXIT-CORE ({spec.ssh['host']}) ===", flush=True)
-    print(f"UDP cascade listen: {spec.wg_port}. Remote path: {spec.remote_path}", flush=True)
+    print(
+        f"UDP cascade: {spec.wg_port}, TCP nginx: {spec.http_port}/{spec.https_port}. "
+        f"Remote path: {spec.remote_path}",
+        flush=True,
+    )
 
     if dry_run:
         print(
             "[dry-run] exit-core: upload bundle, compose down (exit-core only)"
             + (" + wipe cascade volume" if wipe_cascade else "")
-            + ", nft cleanup, UDP preflight, compose up"
+            + ", nft cleanup, port preflight, .env, deploy-exit.sh"
         )
         return
 
@@ -654,7 +756,17 @@ rm -f {tq}
         if err:
             _safe_write(sys.stderr, err)
 
-        cleanup_script = build_exit_cleanup_script()
+        # Stale host iface (network_mode host) — only here, never in apply_cascade_hooks (would kill a live tunnel).
+        code, out, err = run_remote(
+            client,
+            "ip link del exit-cascade 2>/dev/null || true",
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_HOOKS,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+
+        cleanup_script = build_exit_cleanup_script(spec)
         code, out, err = run_remote(client, cleanup_script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
         if out:
             _safe_write(sys.stdout, out)
@@ -664,7 +776,9 @@ rm -f {tq}
         if not skip_port_check:
             code, out, err = run_remote(
                 client,
-                build_udp_port_preflight_script(spec.wg_port),
+                build_port_preflight_script(
+                    spec.remote_path, spec.wg_port, spec.http_port, spec.https_port
+                ),
                 dry_run=False,
                 timeout_sec=REMOTE_TIMEOUT_PREFLIGHT,
             )
@@ -673,27 +787,24 @@ rm -f {tq}
             if err:
                 _safe_write(sys.stderr, err)
             if code != 0:
-                raise SystemExit("exit-core: UDP port preflight failed")
+                raise SystemExit("exit-core: port preflight failed")
+
+        sftp_w = client.open_sftp()
+        try:
+            with sftp_w.open(f"{spec.remote_path}/.env", "w") as f:
+                f.write(spec.env_body.encode("utf-8"))
+        finally:
+            sftp_w.close()
 
         wd = shlex.quote(spec.remote_path)
         code, out, err = run_remote(
             client,
             f"""set -e
 cd {wd}
-docker compose -f docker-compose.yml pull
-ok=0
-for i in 1 2 3; do
-  if docker compose -f docker-compose.yml up -d; then
-    ok=1
-    break
-  fi
-  if [ "$i" -lt 3 ]; then
-    echo "[exit-core] compose up failed attempt $i/3; docker builder prune && sleep 5" >&2
-    docker builder prune -f 2>/dev/null || true
-    sleep 5
-  fi
-done
-[ "$ok" -eq 1 ]
+sed -i 's/\r$//' deploy-exit.sh 2>/dev/null || true
+chmod +x deploy-exit.sh 2>/dev/null || true
+docker compose -f docker-compose.yml pull || true
+./deploy-exit.sh
 """,
             dry_run=False,
             timeout_sec=REMOTE_TIMEOUT_DEPLOY,
@@ -780,7 +891,11 @@ def deploy_one(
         if code != 0:
             raise SystemExit(f"{spec.name}: compose down failed (exit {code})")
 
-        cleanup_script = build_entry_cleanup_script(spec) if role == "entry" else build_exit_cleanup_script()
+        cleanup_script = (
+            build_entry_cleanup_script(spec)
+            if role == "entry"
+            else build_exit_cleanup_script(spec)
+        )
         code, out, err = run_remote(client, cleanup_script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
         if out:
             _safe_write(sys.stdout, out)
@@ -1001,6 +1116,16 @@ CLIENT_CIDRS="{cidrs}"
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || true
+# Per-interface rp_filter=2 (Ubuntu default) breaks WAN↔tunnel return path; all=0 is not always enough.
+sysctl -w net.ipv4.conf.$WAN_IF.rp_filter=0 >/dev/null 2>&1 || true
+sysctl -w net.ipv4.conf.$UPLINK_IF.rp_filter=0 >/dev/null 2>&1 || true
+
+# Docker installs ip/filter FORWARD with policy drop at priority filter; our inet forward is priority filter+1
+# and never runs for eth0<->tunnel traffic. Insert ACCEPT in DOCKER-USER (runs first) — see Docker docs.
+if command -v iptables >/dev/null 2>&1 && iptables -L DOCKER-USER -n >/dev/null 2>&1; then
+  iptables -C DOCKER-USER -i "$UPLINK_IF" -o "$WAN_IF" -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER 1 -i "$UPLINK_IF" -o "$WAN_IF" -j ACCEPT
+  iptables -C DOCKER-USER -i "$WAN_IF" -o "$UPLINK_IF" -j ACCEPT 2>/dev/null || iptables -I DOCKER-USER 1 -i "$WAN_IF" -o "$UPLINK_IF" -j ACCEPT
+fi
 
 nft add table ip amnezia_cascade_exit_nat 2>/dev/null || true
 nft 'add chain ip amnezia_cascade_exit_nat postrouting {{ type nat hook postrouting priority 100; policy accept; }}' 2>/dev/null || true
@@ -1017,6 +1142,22 @@ nft add rule inet amnezia_cascade_exit_fwd forward iifname "$UPLINK_IF" oifname 
 
 echo "exit cascade hook applied (uplink=$UPLINK_IF wan=$WAN_IF)."
 """
+
+
+def wait_exit_cascade_iface_up(ex_client: paramiko.SSHClient, *, max_sec: float = 30.0) -> None:
+    """After `docker restart amnezia-exit-cascade`, awg-quick runs asynchronously — wait for iface (strict cap)."""
+    deadline = time.time() + max_sec
+    cmd = "docker exec amnezia-exit-cascade ip link show dev exit-cascade 2>&1"
+    while time.time() < deadline:
+        code, out, err = run_remote(ex_client, cmd, dry_run=False, timeout_sec=REMOTE_TIMEOUT_VERIFY)
+        o = (out or "") + (err or "")
+        if code == 0 and re.search(r"^\d+:\s*exit-cascade:", o, re.MULTILINE) and "does not exist" not in o.lower():
+            print("[sync] exit-cascade interface present in container.", flush=True)
+            return
+        time.sleep(2)
+    raise SystemExit(
+        "sync: exit-cascade not UP inside amnezia-exit-cascade within 30s after restart — check container logs and exit-cascade.conf."
+    )
 
 
 def sync_cascade_configs(
@@ -1195,14 +1336,34 @@ docker exec amnezia-exit-cascade sh -c 'wg pubkey < /config/exit_link.private > 
             ex,
             "docker restart amnezia-exit-cascade",
             dry_run=False,
-            timeout_sec=REMOTE_TIMEOUT_DEPLOY,
+            timeout_sec=REMOTE_TIMEOUT_SYNC,
         )
         if out:
             _safe_write(sys.stdout, out)
         if code != 0:
             raise SystemExit("exit-core: restart failed")
+        wait_exit_cascade_iface_up(ex)
     finally:
         ex.close()
+
+    en_re = connect_ssh(entry.ssh)
+    try:
+        code, out, err = run_remote(
+            en_re,
+            build_entry_container_cascade_reapply_script(),
+            dry_run=False,
+            timeout_sec=REMOTE_TIMEOUT_TUNNEL,
+        )
+        if out:
+            _safe_write(sys.stdout, out)
+        if err:
+            _safe_write(sys.stderr, err)
+        if code == 124:
+            raise SystemExit("entry: cascade wg-quick cycle timeout")
+        if code != 0:
+            raise SystemExit(f"entry: cascade wg-quick reapply failed (exit {code})")
+    finally:
+        en_re.close()
 
     print("[sync] cascade configs and restarts done.", flush=True)
 
@@ -1241,11 +1402,44 @@ echo "entry cascade state cleaned."
 """
 
 
-def build_exit_cleanup_script() -> str:
-    return """set -e
+def build_exit_cleanup_script(exit_spec: HostSpec, *, entry: HostSpec | None = None) -> str:
+    tunnel = tunnel_params_for_exit_hooks(exit_spec, entry=entry)
+    uplink = str(tunnel["iface"]).strip()
+    wan = str(tunnel["wan_if"]).strip()
+    uplink_q = shlex.quote(uplink)
+    wan_q = shlex.quote(wan)
+    return f"""set -e
 nft delete table ip amnezia_cascade_exit_nat 2>/dev/null || true
 nft delete table inet amnezia_cascade_exit_fwd 2>/dev/null || true
+if command -v iptables >/dev/null 2>&1; then
+  while iptables -D DOCKER-USER -i {uplink_q} -o {wan_q} -j ACCEPT 2>/dev/null; do :; done
+  while iptables -D DOCKER-USER -i {wan_q} -o {uplink_q} -j ACCEPT 2>/dev/null; do :; done
+  # Stale rows after renaming wan_interface in YAML: remove leftover DOCKER-USER lines mentioning the tunnel if.
+  while iptables -L DOCKER-USER -n --line-numbers 2>/dev/null | grep -Fq {uplink_q}; do
+    ln=$(iptables -L DOCKER-USER -n --line-numbers 2>/dev/null | grep -F {uplink_q} | head -1 | awk '{{print $1}}')
+    [ -n "$ln" ] && iptables -D DOCKER-USER "$ln" 2>/dev/null || break
+  done
+fi
 echo "exit cascade state cleaned."
+"""
+
+
+def build_entry_container_cascade_reapply_script() -> str:
+    """Full teardown + bring-up of awg-cascade inside amnezia-awg (PreDown clears old routes/nft; PostUp reapplies)."""
+    conf = ENTRY_CONTAINER_CASCADE_CONF
+    conf_q = shlex.quote(conf)
+    # Quote the full inner shell command — do not embed conf_q inside single-quoted '...' (breaks after path).
+    inner_down = f"wg-quick down {shlex.quote(conf)} 2>/dev/null || true"
+    inner_up = f"wg-quick up {shlex.quote(conf)}"
+    return f"""set -e
+if ! docker exec amnezia-awg test -f {conf_q} 2>/dev/null; then
+  echo "[sync] no cascade conf in container — skip wg-quick cycle"
+  exit 0
+fi
+echo "[sync] entry container: wg-quick down/up cascade (PreDown cleanup + PostUp rules)"
+docker exec amnezia-awg sh -c {shlex.quote(inner_down)}
+docker exec amnezia-awg sh -c {shlex.quote(inner_up)}
+echo "[sync] awg-cascade reapply done."
 """
 
 
@@ -1255,14 +1449,16 @@ def apply_cascade_hooks(
     """Host nft NAT/forward on exit only (interface exit-cascade, network_mode host)."""
     print("\n=== Apply exit cascade hooks (host) ===", flush=True)
     tunnel = tunnel_params_for_exit_hooks(exit_spec, entry=entry)
+    cleanup_script = build_exit_cleanup_script(exit_spec, entry=entry)
     exit_script = build_exit_hook_script(tunnel)
     if dry_run:
-        print("[dry-run] would apply exit host nft hooks")
+        print("[dry-run] would clean exit host cascade state then apply nft/sysctl/iptables hooks")
         return
 
     ex_client = connect_ssh(exit_spec.ssh)
+    combined = cleanup_script.rstrip() + "\n\n" + exit_script
     try:
-        code, out, err = run_remote(ex_client, exit_script, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
+        code, out, err = run_remote(ex_client, combined, dry_run=False, timeout_sec=REMOTE_TIMEOUT_HOOKS)
         if out:
             _safe_write(sys.stdout, out)
         if err:
@@ -1273,6 +1469,138 @@ def apply_cascade_hooks(
             raise SystemExit(f"exit hook failed (exit {code})")
     finally:
         ex_client.close()
+
+
+def _cascade_awg_show_indicates_live_peer(text: str) -> bool:
+    """True if awg/wg show output reports a peer with a real handshake (not (none))."""
+    t = text.strip()
+    if not t:
+        return False
+    if "Unable to access interface" in t or "No such device" in t:
+        return False
+    if not re.search(r"latest handshake:", t, re.IGNORECASE):
+        return False
+    if re.search(r"latest handshake:\s*\(none\)", t, re.IGNORECASE):
+        return False
+    return True
+
+
+def _awg_show_iface_has_live_handshake(text: str, iface: str) -> bool:
+    """
+    Parse full `awg show` output for one interface block (amneziawg-go userspace may reject `awg show <iface>`).
+    """
+    t = text.strip()
+    if not t:
+        return False
+    marker = f"interface: {iface}"
+    idx = t.find(marker)
+    if idx < 0:
+        return False
+    rest = t[idx:]
+    m2 = re.search(r"(?m)^interface:\s*\S+", rest[len(marker) :])
+    block = rest[: len(marker) + m2.start()] if m2 else rest
+    return _cascade_awg_show_indicates_live_peer(block)
+
+
+def verify_cascade_peers_connected(
+    entry: HostSpec,
+    exit_spec: HostSpec,
+    *,
+    dry_run: bool,
+    max_attempts: int = 5,
+    delay_sec: float = 5.0,
+) -> None:
+    """
+    After sync + hooks, require a live AmneziaWG/WireGuard handshake on both cascade interfaces.
+    Key sync alone is insufficient — this checks the real tunnel.
+    """
+    if dry_run:
+        print("[dry-run] skip cascade peer verification", flush=True)
+        return
+
+    # Merge stderr into stdout. On exit, full `awg show` — per-iface show can fail with "Protocol not supported" on userspace.
+    entry_show = (
+        "docker exec amnezia-awg sh -c "
+        "'awg show awg-cascade 2>&1 || wg show awg-cascade 2>&1'"
+    )
+    exit_show = "docker exec amnezia-exit-cascade sh -c 'awg show 2>&1 || wg show 2>&1'"
+    dmesg_tail = "dmesg -T 2>/dev/null | tail -n 25 || true"
+
+    en = connect_ssh(entry.ssh)
+    ex = connect_ssh(exit_spec.ssh)
+    try:
+        last_entry_out = ""
+        last_exit_out = ""
+        for attempt in range(1, max_attempts + 1):
+            print(
+                f"\n[cascade-verify] attempt {attempt}/{max_attempts} (entry + exit awg show)...",
+                flush=True,
+            )
+            code_e, out_e, err_e = run_remote(
+                en, entry_show, dry_run=False, timeout_sec=REMOTE_TIMEOUT_VERIFY
+            )
+            code_x, out_x, err_x = run_remote(
+                ex, exit_show, dry_run=False, timeout_sec=REMOTE_TIMEOUT_VERIFY
+            )
+            last_entry_out = (out_e or "") + (err_e or "")
+            last_exit_out = (out_x or "") + (err_x or "")
+            ok_e = code_e == 0 and _cascade_awg_show_indicates_live_peer(last_entry_out)
+            ok_x = code_x == 0 and _awg_show_iface_has_live_handshake(last_exit_out, "exit-cascade")
+            if not ok_x and ok_e:
+                # amneziawg-go userspace on exit often returns empty `awg show` — confirm iface + rely on entry handshake.
+                code_l, out_l, err_l = run_remote(
+                    ex,
+                    "docker exec amnezia-exit-cascade ip link show dev exit-cascade 2>&1",
+                    dry_run=False,
+                    timeout_sec=REMOTE_TIMEOUT_VERIFY,
+                )
+                link_out = (out_l or "") + (err_l or "")
+                ok_x = code_l == 0 and bool(
+                    re.search(r"^\d+:\s*exit-cascade:", link_out, re.MULTILINE)
+                    and "does not exist" not in link_out.lower()
+                )
+                if ok_x:
+                    print(
+                        "[cascade-verify] exit: awg show unusable; ip link shows exit-cascade + entry handshake (OK)",
+                        flush=True,
+                    )
+                elif ok_e:
+                    print(
+                        f"[cascade-verify] exit: ip link fallback failed (code={code_l}): {link_out[:500]!r}",
+                        flush=True,
+                    )
+            if ok_e and ok_x:
+                print("[cascade-verify] OK: both sides report a non-(none) latest handshake.", flush=True)
+                print("--- entry awg-cascade (excerpt) ---", flush=True)
+                print(last_entry_out[:2000], end="" if last_entry_out.endswith("\n") else "\n", flush=True)
+                print("--- exit exit-cascade (excerpt) ---", flush=True)
+                print(last_exit_out[:2000], end="" if last_exit_out.endswith("\n") else "\n", flush=True)
+                print("--- kernel log tail (entry host) ---", flush=True)
+                _, dm_e, _ = run_remote(en, dmesg_tail, dry_run=False, timeout_sec=REMOTE_TIMEOUT_VERIFY)
+                print((dm_e or "").strip() or "(empty)", flush=True)
+                print("--- kernel log tail (exit host) ---", flush=True)
+                _, dm_x, _ = run_remote(ex, dmesg_tail, dry_run=False, timeout_sec=REMOTE_TIMEOUT_VERIFY)
+                print((dm_x or "").strip() or "(empty)", flush=True)
+                return
+            print(
+                f"[cascade-verify] entry_ok={ok_e} exit_ok={ok_x} "
+                f"(codes {code_e}/{code_x})",
+                flush=True,
+            )
+            if attempt < max_attempts:
+                time.sleep(delay_sec)
+
+        print("--- entry awg show (last) ---", flush=True)
+        print(last_entry_out[:4000] or "(no output)", flush=True)
+        print("--- exit awg show (last) ---", flush=True)
+        print(last_exit_out[:4000] or "(no output)", flush=True)
+        raise SystemExit(
+            "cascade peer verification failed: no live handshake on awg-cascade and/or exit-cascade "
+            f"after {max_attempts} attempts. See excerpts above; check firewall UDP, keys, and routes."
+        )
+    finally:
+        en.close()
+        ex.close()
 
 
 def resolve_config_path(explicit: Path | None) -> Path:
@@ -1318,6 +1646,11 @@ def main() -> None:
         default="full",
         help="Run only one side or full cascade (default).",
     )
+    ap.add_argument(
+        "--skip-cascade-verify",
+        action="store_true",
+        help="Skip post-deploy awg show handshake check on entry+exit (not recommended).",
+    )
     args = ap.parse_args()
 
     config_path = resolve_config_path(args.config)
@@ -1350,7 +1683,27 @@ def main() -> None:
             "See remote-deploy-cascade/config.example.yaml."
         )
 
-    if args.phase in ("exit-only", "full"):
+    # With cascade, entry must be up before exit so sync runs soon after exit starts (conf within 30s).
+    cascade_full_entry_first = (
+        args.phase == "full" and cascade_on and exit_spec.is_exit_core
+    )
+    if cascade_full_entry_first:
+        print(
+            "\n[Cascade pipeline 1/5] deploy entry (panel + amnezia-awg) on S1 — before exit-core",
+            flush=True,
+        )
+        deploy_one(
+            entry,
+            dry_run=args.dry_run,
+            skip_port_check=args.skip_port_check,
+            wipe_db=args.wipe_db,
+            wipe_cascade=args.wipe_cascade,
+            role="entry",
+        )
+        print(
+            "\n[Cascade pipeline 2/5] deploy exit-core on S2 — DEPLOY_ORDER.md",
+            flush=True,
+        )
         deploy_one(
             exit_spec,
             dry_run=args.dry_run,
@@ -1359,7 +1712,50 @@ def main() -> None:
             wipe_cascade=args.wipe_cascade,
             role="exit",
         )
-    if args.phase in ("entry-only", "full"):
+    elif args.phase == "exit-only":
+        print(
+            "\n[Cascade pipeline 1/5] deploy exit-core on S2 — DEPLOY_ORDER.md",
+            flush=True,
+        )
+        deploy_one(
+            exit_spec,
+            dry_run=args.dry_run,
+            skip_port_check=args.skip_port_check,
+            wipe_db=args.wipe_db,
+            wipe_cascade=args.wipe_cascade,
+            role="exit",
+        )
+    elif args.phase == "entry-only":
+        print(
+            "\n[Cascade pipeline 2/5] deploy entry (panel + amnezia-awg) on S1",
+            flush=True,
+        )
+        deploy_one(
+            entry,
+            dry_run=args.dry_run,
+            skip_port_check=args.skip_port_check,
+            wipe_db=args.wipe_db,
+            wipe_cascade=args.wipe_cascade,
+            role="entry",
+        )
+    elif args.phase == "full":
+        # Non-cascade full: legacy order exit → entry
+        print(
+            "\n[Cascade pipeline 1/5] deploy exit-core on S2 — DEPLOY_ORDER.md",
+            flush=True,
+        )
+        deploy_one(
+            exit_spec,
+            dry_run=args.dry_run,
+            skip_port_check=args.skip_port_check,
+            wipe_db=args.wipe_db,
+            wipe_cascade=args.wipe_cascade,
+            role="exit",
+        )
+        print(
+            "\n[Cascade pipeline 2/5] deploy entry (panel + amnezia-awg) on S1",
+            flush=True,
+        )
         deploy_one(
             entry,
             dry_run=args.dry_run,
@@ -1371,6 +1767,10 @@ def main() -> None:
 
     if cascade_on and exit_spec.is_exit_core:
         if args.phase in ("full", "entry-only"):
+            print(
+                "\n[Cascade pipeline 3/5] sync_cascade_configs (keys, exit-cascade.conf, restarts)",
+                flush=True,
+            )
             sync_cascade_configs(
                 entry,
                 exit_spec,
@@ -1378,22 +1778,44 @@ def main() -> None:
                 wipe_cascade=args.wipe_cascade,
             )
         if args.phase in ("full", "entry-only", "exit-only"):
+            print(
+                "\n[Cascade pipeline 4/5] apply_cascade_hooks on S2 host "
+                "(clean old nft/iptables, then nft, sysctl, iptables DOCKER-USER)",
+                flush=True,
+            )
             apply_cascade_hooks(
                 exit_spec,
                 entry=entry if cascade_on else None,
                 dry_run=args.dry_run,
             )
+        if not args.skip_cascade_verify:
+            print(
+                "\n[Cascade pipeline 5/5] verify_cascade_peers_connected (awg show + dmesg)",
+                flush=True,
+            )
+            verify_cascade_peers_connected(
+                entry,
+                exit_spec,
+                dry_run=args.dry_run,
+            )
+        elif not args.dry_run:
+            print("\n[cascade-verify] skipped (--skip-cascade-verify)", flush=True)
 
     if args.dry_run:
         print("\n[dry-run] done.")
     else:
         print("\nDone.")
         entry_url = entry.merged_env.get("PANEL_DOMAIN", entry.merged_env.get("WG_HOST", "?"))
-        print(f"  Entry panel: https://{entry_url}")
+        entry_suffix = entry.merged_env.get("WEBUI_PUBLIC_PREFIX", "").strip().rstrip("/")
+        if entry_suffix:
+            print(f"  Entry panel: https://{entry_url}{entry_suffix}/")
+        else:
+            print(f"  Entry panel: https://{entry_url}")
         if exit_spec.is_exit_core:
+            ex_dom = exit_spec.merged_env.get("PANEL_DOMAIN") or exit_spec.ssh.get("host", "?")
             print(
-                f"  Exit core:   {exit_spec.ssh.get('host', '?')} "
-                f"(AmneziaWG exit-cascade, path {exit_spec.remote_path})"
+                f"  Exit HTTPS:  https://{ex_dom} "
+                f"(nginx TLS; cascade UDP {exit_spec.wg_port}, path {exit_spec.remote_path})"
             )
         else:
             print(
