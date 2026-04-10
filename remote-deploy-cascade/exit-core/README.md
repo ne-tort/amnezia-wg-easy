@@ -1,42 +1,70 @@
-# Exit-core: AmneziaWG-only cascade node (S2)
+# Exit-core: каскад S2 (AmneziaWG + nginx + certbot)
 
-Один контейнер `amneziavpn/amneziawg-go:latest`, `network_mode: host`. Интерфейс из файла `exit-cascade.conf` называется **`exit-cascade`** (имя берётся из имени файла).
+Стек в каталоге после деплоя [`install.py`](../install.py):
 
-## Однократно: снять старую панель с этого сервера
+- **`amnezia-exit-cascade`** — `network_mode: host`, только **UDP** каскада (порт из `cascade_listen_port`).
+- **`nginx`** — **TCP 80/443**, TLS, reverse proxy на корень сайта (режимы `mirror` / `local` через `.env`).
+- **`certbot`** — профиль `letsencrypt`, тома `certbot_conf` / `certbot_www` (сертификаты сохраняются между редеплоями).
 
-Если раньше на S2 стоял полный `amnezia-wg-easy` (панель + nginx), **оркестратор его не трогает**. Выполните вручную на S2:
+UDP и TCP не пересекаются: nginx не слушает порт каскада.
 
-```bash
-cd /opt/amnezia-wg-easy-exit   # или ваш путь
-docker compose -f docker-compose.yml down --remove-orphans
-# при необходимости: docker volume rm … только свои тома панели
-```
+## Конфигурация
 
-После этого каталог можно оставить или удалить — на каскад exit-core это не влияет.
+Параметры задаются в **`exit.env`** в YAML оркестратора; на сервере появляется `.env`. Обязательно для публичного сайта: `PANEL_DOMAIN`, `CERTBOT_EMAIL`, `NGINX_*`.
 
-## Установка
-
-Деплой выполняет `remote-deploy-cascade/install.py` с `exit.core: true` (или `exit.mode: core`). Локально для проверки:
+Запуск вручную после правок `.env`:
 
 ```bash
 cd /opt/amnezia-cascade-exit
-docker compose pull
-docker compose up -d
+./deploy-exit.sh
 ```
 
-Конфиг кладёт оркестратор в volume как `/config/exit-cascade.conf`. После обновления конфига:
+## Однократно: снять старую панель с этого сервера
 
-```bash
-docker restart amnezia-exit-cascade
-```
+Если раньше стоял полный `amnezia-wg-easy`, остановите его вручную (см. старые инструкции). Тома **certbot** нового стека не удаляйте без необходимости.
 
 ## Проверки
 
 ```bash
-docker logs amnezia-exit-cascade --tail 50
+docker logs amnezia-exit-cascade --tail 30
 docker exec amnezia-exit-cascade awg show exit-cascade
+docker exec nginx nginx -t
+curl -sI "https://$(grep ^PANEL_DOMAIN= .env | cut -d= -f2-)/"
 ```
 
-NAT/forward на хосте задаётся хуками оркестратора (`nft`), интерфейс в правилах — `exit-cascade`.
+Диагностика каскада: [AGENTS-cascade-debug.md](../AGENTS-cascade-debug.md).
+# Exit-core: каскад S2 (AmneziaWG + nginx + certbot)
 
-Порт **UDP** для `ListenPort` в `exit-cascade.conf` задаётся в YAML как `cascade_listen_port` (по умолчанию в оркестраторе **8443**, не 51820).
+Стек в каталоге после деплоя [`install.py`](../remote-deploy-cascade/install.py):
+
+- **`amnezia-exit-cascade`** — `network_mode: host`, только **UDP** каскада (порт из `cascade_listen_port`).
+- **`nginx`** — **TCP 80/443**, TLS, reverse proxy на корень сайта (режимы `mirror` / `local` через `.env`).
+- **`certbot`** — профиль `letsencrypt`, тома `certbot_conf` / `certbot_www` (сертификаты сохраняются между редеплоями).
+
+UDP и TCP не пересекаются: nginx не слушает порт каскада.
+
+## Конфигурация
+
+Параметры задаются в **`exit.env`** в YAML оркестратора; на сервере появляется `.env`. Обязательно для публичного сайта: `PANEL_DOMAIN`, `CERTBOT_EMAIL`, `NGINX_*`.
+
+Запуск вручную после правок `.env`:
+
+```bash
+cd /opt/amnezia-cascade-exit
+./deploy-exit.sh
+```
+
+## Однократно: снять старую панель с этого сервера
+
+Если раньше стоял полный `amnezia-wg-easy`, остановите его вручную (см. старые инструкции). Тома **certbot** нового стека не удаляйте без необходимости.
+
+## Проверки
+
+```bash
+docker logs amnezia-exit-cascade --tail 30
+docker exec amnezia-exit-cascade awg show exit-cascade
+docker exec nginx nginx -t
+curl -sI "https://$(grep ^PANEL_DOMAIN= .env | cut -d= -f2-)/"
+```
+
+Диагностика каскада: [AGENTS-cascade-debug.md](../remote-deploy-cascade/AGENTS-cascade-debug.md).

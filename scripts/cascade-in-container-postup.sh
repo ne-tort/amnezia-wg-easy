@@ -83,17 +83,11 @@ fi
 # and go into the tunnel. Two /1 routes beat 0.0.0.0/0 and steer almost all IPv4 to the WAN.
 # Never touch table 166: there default via cascade is required for traffic from CLIENT_CIDR.
 if [ -n "$DEFAULT_GW" ] && [ -n "$DEFAULT_DEV" ]; then
-  # 51820 is the canonical awg-quick table; include it explicitly even if rule parsing is noisy.
-  TABLES="$(printf '51820\n'; ip -4 rule show 2>/dev/null | sed -n 's/.*lookup \([0-9][0-9]*\).*/\1/p' | sort -u)"
-  for t in $(echo "$TABLES" | sort -u); do
+  for t in $(ip -4 rule show 2>/dev/null | sed -n 's/.*lookup \([0-9][0-9]*\).*/\1/p' | sort -u); do
     [ "$t" = "166" ] && continue
     ip route show table "$t" 2>/dev/null | grep -qE "default .*dev ${UPLINK_IF}( |$)" || continue
     ip route replace 0.0.0.0/1 via "$DEFAULT_GW" dev "$DEFAULT_DEV" table "$t" 2>/dev/null || true
     ip route replace 128.0.0.0/1 via "$DEFAULT_GW" dev "$DEFAULT_DEV" table "$t" 2>/dev/null || true
-    # Also pin active awg0 peer endpoint IPs to WAN for stable handshakes (domain and raw IP cases).
-    for ep in $(awg show awg0 endpoints 2>/dev/null | awk '$2 != "(none)" { split($2,a,":"); print a[1] }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | sort -u); do
-      ip route replace "${ep}/32" via "$DEFAULT_GW" dev "$DEFAULT_DEV" table "$t" 2>/dev/null || true
-    done
   done
 fi
 

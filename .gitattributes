@@ -1,0 +1,2 @@
+# Shell in Linux containers must use LF (CRLF breaks #!/bin/sh shebang).
+*.sh text eol=lf

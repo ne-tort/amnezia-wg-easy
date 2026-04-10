@@ -1,11 +1,13 @@
 # Удалённая установка каскада (entry + exit) по SSH
 
-`remote-deploy-cascade/install.py` поднимает:
+**Порядок операций (обязательный):** [DEPLOY_ORDER.md](DEPLOY_ORDER.md).
 
-1. **S2 (exit)** — только [exit-core](exit-core/README.md): контейнер `amneziavpn/amneziawg-go`, интерфейс **`exit-cascade`**, `network_mode: host`. Полная панель на S2 **не ставится**.
-2. **S1 (entry)** — полный стек `amnezia-wg-easy` (панель + awg0). При `entry.network.cascade_enabled` панель дополнительно синхронизирует **`awg-cascade.conf`** внутри контейнера `amnezia-awg` (те же параметры обфускации Amnezia, что у `awg0`).
-3. **Синхронизация ключей** — скрипт вытягивает `awg0.conf`, пишет `exit-cascade.conf` на S2, публикует публичные ключи пира на S1 и перезапускает контейнеры.
-4. **Хост на S2** — только NAT/forward (`nft`) для трафика с `exit-cascade` в WAN; отдельного `wg-cascade` в netns хоста больше нет.
+При **`cascade_enabled`** порядок в `--phase full`: **S1 entry → S2 exit** (чтобы `exit-cascade.conf` появился сразу после старта exit; подробности — [DEPLOY_ORDER.md](DEPLOY_ORDER.md)). Дальше:
+
+1. **S1 (entry)** — полный стек `amnezia-wg-easy` (панель + awg0). При каскаде синхронизируется **`awg-cascade.conf`** в контейнере `amnezia-awg` (как у `awg0`).
+2. **S2 (exit)** — [exit-core](exit-core/README.md): `amneziavpn/amneziawg-go`, **`exit-cascade`**, `network_mode: host`. Контейнер ждёт конфиг **не дольше 30 с**, иначе падает.
+3. **Синхронизация ключей** — `awg0.conf`, `exit-cascade.conf` на S2, ключи пира на S1, перезапуск exit и `wg-quick` каскада на entry.
+4. **Хост S2** — NAT/forward (`nft` + `iptables` в `DOCKER-USER`) для WAN↔`exit-cascade`.
 
 Старый стек панели на S2 оркестратор **не останавливает** — см. однократную процедуру в [exit-core/README.md](exit-core/README.md).
 

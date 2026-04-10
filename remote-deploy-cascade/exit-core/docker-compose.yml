@@ -1,5 +1,5 @@
-# Cascade exit node: AmneziaWG only (no panel). Project name fixes volume prefix.
-# Manual once: remove old full panel stack on this host (see README.md).
+# Cascade exit: AmneziaWG (host network, UDP) + nginx (80/443 TCP) + optional certbot.
+# UDP cascade is only on amnezia-exit-cascade; nginx does not publish UDP.
 name: amnezia-cascade-exit
 
 services:
@@ -21,19 +21,65 @@ services:
     command:
       - |
         set -e
-        for i in $$(seq 1 60); do
+        for i in $$(seq 1 15); do
           if [ -s /config/exit-cascade.conf ]; then break; fi
-          echo "[exit-cascade] waiting for exit-cascade.conf ($$i)..."
+          echo "[exit-cascade] waiting for exit-cascade.conf ($$i/15, max 30s)..."
           sleep 2
         done
         if ! [ -s /config/exit-cascade.conf ]; then
-          echo "[exit-cascade] missing /config/exit-cascade.conf" >&2
-          sleep infinity
-          exit 0
+          echo "[exit-cascade] FATAL: no /config/exit-cascade.conf within 30s." >&2
+          exit 1
         fi
+        echo "[exit-cascade] config present, bringing up interface"
         awg-quick down /config/exit-cascade.conf 2>/dev/null || true
         awg-quick up /config/exit-cascade.conf
         exec sleep infinity
 
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    image: amnezia-wg-easy-nginx:local
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "${PANEL_HTTP_PORT:-80}:80"
+      - "${PANEL_HTTPS_PORT:-443}:443"
+    env_file:
+      - .env
+    environment:
+      NGINX_CONFIG_PROFILE: exit
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
+      PANEL_PORT: "51821"
+      WG_HOST: ${WG_HOST:-}
+      NGINX_ROOT_BEHAVIOR: ${NGINX_ROOT_BEHAVIOR:-mirror}
+      NGINX_MIRROR_HOST: ${NGINX_MIRROR_HOST:-}
+      NGINX_LOCAL_URL: ${NGINX_LOCAL_URL:-}
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot:ro
+
+  certbot:
+    profiles:
+      - letsencrypt
+    build:
+      context: ./certbot
+      dockerfile: Dockerfile
+    image: amnezia-wg-easy-certbot:local
+    container_name: certbot
+    env_file:
+      - .env
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-}
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - nginx
+
 volumes:
   exit-cascade-config:
+  certbot_conf:
+  certbot_www:
