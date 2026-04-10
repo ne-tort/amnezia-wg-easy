@@ -70,6 +70,19 @@ if [ -n "$DOCKER_NET" ]; then
     ip route replace "$DOCKER_NET" dev "$DOCKER_IF" table "$t" 2>/dev/null || true
   done
 fi
+# Amnezia DNS (amnezia-dns-net on eth1, e.g. 172.29.172.0/24 → 172.29.172.254): local to this container.
+# Policy rule "from CLIENT_CIDR table 166" applies to forwarded packets from VPN clients. Table 166 has
+# default via awg-cascade; without this more-specific route, DNS to 172.29.172.254 is misrouted into the
+# cascade (Amnezia client hardcodes 172.29.172.254 for AmneziaDNS).
+DNS_IF=eth1
+AMNEZIA_DNS_NET=$(ip -4 route show proto kernel scope link dev "$DNS_IF" 2>/dev/null | awk '{print $1; exit}')
+if [ -n "$AMNEZIA_DNS_NET" ]; then
+  ip route replace "$AMNEZIA_DNS_NET" dev "$DNS_IF" table 166 2>/dev/null || true
+  for t in $(ip -4 rule show 2>/dev/null | sed -n 's/.*lookup \([0-9][0-9]*\).*/\1/p' | sort -u); do
+    ip route show table "$t" 2>/dev/null | grep -qE "default .*dev ${UPLINK_IF}( |$)" || continue
+    ip route replace "$AMNEZIA_DNS_NET" dev "$DNS_IF" table "$t" 2>/dev/null || true
+  done
+fi
 # Peer Endpoint must leave via the same iface as default route (often eth1, not docker bridge eth0).
 if [ -n "$EXIT_PUB" ] && [ -n "$DEFAULT_GW" ] && echo "$EXIT_PUB" | grep -qE '^([0-9]{1,3}\.){3}[0-9]{1,3}$'; then
   ip route replace "$EXIT_PUB/32" via "$DEFAULT_GW" dev "$DEFAULT_DEV" table 166 2>/dev/null || true
