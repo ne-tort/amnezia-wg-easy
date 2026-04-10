@@ -529,7 +529,9 @@ def parse_host_spec(
 
     merged = merge_env(order, defaults, env_overrides)
 
-    # Cascade mode: disable entry-side default masquerade in awg PostUp.
+    # Entry awg PostUp: filter/forward for cascade + VPN. We omit default eth0 masquerade so client
+    # source IPs stay 10.8.x for policy routing into awg-cascade. Amnezia DNS lives on eth1
+    # (amnezia-dns-net): without SNAT to eth1, replies from 172.29.172.254 never return to VPN clients.
     if name == "entry":
         client_cidrs = _cidr_list(network.get("client_cidrs"), required=True, ctx="entry.network.client_cidrs")
         client_cidr = client_cidrs[0]
@@ -542,6 +544,12 @@ def parse_host_spec(
                 "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" oifname \"awg-cascade\" accept ; "
                 "nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg-cascade\" oifname \"awg0\" accept"
             )
+        dns_nat = (
+            "nft delete table ip amnezia_nat 2>/dev/null || true ; "
+            "nft add table ip amnezia_nat ; "
+            "nft add chain ip amnezia_nat postrouting '{ type nat hook postrouting priority 100; }' ; "
+            f'nft add rule ip amnezia_nat postrouting ip saddr {client_cidr} oifname "eth1" masquerade'
+        )
         merged["WG_POST_UP"] = (
             "nft delete table inet amnezia_wg_base 2>/dev/null || true ; "
             "nft add table inet amnezia_wg_base ; "
@@ -552,8 +560,12 @@ def parse_host_spec(
             "nft add rule inet amnezia_wg_base forward_awg0_base oifname \"awg0\" accept ; "
             f"nft add rule inet amnezia_wg_base forward_awg0_base iifname \"awg0\" ip saddr {client_cidr} accept"
             + (f" ; {cascade_fwd}" if cascade_fwd else "")
+            + f" ; {dns_nat}"
         )
-        merged["WG_POST_DOWN"] = "nft delete table inet amnezia_wg_base 2>/dev/null || true"
+        merged["WG_POST_DOWN"] = (
+            "nft delete table ip amnezia_nat 2>/dev/null || true ; "
+            "nft delete table inet amnezia_wg_base 2>/dev/null || true"
+        )
 
         if _truthy(network.get("cascade_enabled")):
             ei = str(network.get("cascade_entry_ip", "172.31.255.1")).strip()
