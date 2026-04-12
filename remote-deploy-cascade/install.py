@@ -1458,16 +1458,20 @@ def build_entry_container_cascade_reapply_script() -> str:
     conf = ENTRY_CONTAINER_CASCADE_CONF
     conf_q = shlex.quote(conf)
     # Quote the full inner shell command — do not embed conf_q inside single-quoted '...' (breaks after path).
-    inner_down = f"wg-quick down {shlex.quote(conf)} 2>/dev/null || true"
-    inner_up = f"wg-quick up {shlex.quote(conf)}"
+    # After container restart, wg-quick down may leave a stale iface; del before up (matches WireGuard.__syncCascadeInterface).
+    inner_cycle = (
+        f"wg-quick down {shlex.quote(conf)} 2>/dev/null || true; "
+        "ip link set dev awg-cascade down 2>/dev/null || true; "
+        "ip link del dev awg-cascade 2>/dev/null || true; "
+        f"wg-quick up {shlex.quote(conf)}"
+    )
     return f"""set -e
 if ! docker exec amnezia-awg test -f {conf_q} 2>/dev/null; then
   echo "[sync] no cascade conf in container — skip wg-quick cycle"
   exit 0
 fi
 echo "[sync] entry container: wg-quick down/up cascade (PreDown cleanup + PostUp rules)"
-docker exec amnezia-awg sh -c {shlex.quote(inner_down)}
-docker exec amnezia-awg sh -c {shlex.quote(inner_up)}
+docker exec amnezia-awg sh -c {shlex.quote(inner_cycle)}
 echo "[sync] awg-cascade reapply done."
 """
 
