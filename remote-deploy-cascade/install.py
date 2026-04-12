@@ -1054,12 +1054,24 @@ def _parse_awg0_interface_fields(awg0_conf: str) -> dict[str, str]:
     return fields
 
 
+def _effective_wg_mtu(merged_env: dict[str, str]) -> str:
+    """Same rule as src/config.js WG_MTU: empty or 'none' -> 1280."""
+    raw = merged_env.get("WG_MTU")
+    if raw is None:
+        return "1280"
+    s = str(raw).strip()
+    if s == "" or s.lower() == "none":
+        return "1280"
+    return s
+
+
 def _build_exit_cascade_conf_text(
     iface_fields: dict[str, str],
     exit_private_key: str,
     entry_cascade_public_key: str,
     exit_address_cidr: str,
     listen_port: int,
+    mtu: str,
     allowed_ips: str,
 ) -> str:
     lines = [
@@ -1069,6 +1081,7 @@ def _build_exit_cascade_conf_text(
         f"PrivateKey = {exit_private_key.strip()}",
         f"Address = {exit_address_cidr}",
         f"ListenPort = {int(listen_port)}",
+        f"MTU = {mtu.strip()}",
     ]
     for k in ("Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4"):
         lines.append(f"{k} = {iface_fields[k]}")
@@ -1288,12 +1301,14 @@ docker exec amnezia-exit-cascade sh -c 'wg pubkey < /config/exit_link.private > 
             raise SystemExit("exit-core: read exit_link.public failed")
         exit_pub = pub_out.strip()
 
+        mtu_val = (iface_fields.get("MTU") or "").strip() or _effective_wg_mtu(entry.merged_env)
         conf_text = _build_exit_cascade_conf_text(
             iface_fields,
             priv.strip(),
             entry_cascade_pub,
             exit_addr,
             listen,
+            mtu_val,
             allowed_ips,
         )
         sftp_x = ex.open_sftp()

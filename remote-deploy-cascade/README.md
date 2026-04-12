@@ -29,6 +29,8 @@ python install.py --phase full
 
 В `config.yaml` для каскада нужны **`entry.network.cascade_enabled: true`** и **`exit.core: true`** (или `exit.mode: core`).
 
+**Источник кода:** используйте **`source.mode: git`** и репозиторий с нужным коммитом (сначала `git push`). Режим **`source.mode: local`** в этой среде **непригоден** для реального выката: серверы не получают гарантированно актуальный дерево с вашей машины. Файл [`deploy-local.yaml`](deploy-local.yaml) оставлен как заглушка-предупреждение.
+
 ## Порты (важно)
 
 - **Не используйте стандартный WG UDP 51820/51821** для продакшена: в примере `WG_PORT: 5443` на entry и **`cascade_listen_port: 8443`** на S2 (UDP, слушает exit-core). Значения должны совпадать в `entry.network` и `exit.network` для каскада.

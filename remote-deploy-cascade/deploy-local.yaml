@@ -1,21 +1,26 @@
-# One-off: deploy from local repo (no git push). Same hosts as deploy-runtime.yaml.
-# Run: python remote-deploy-cascade/install.py -c remote-deploy-cascade/deploy-local.yaml …
-# from repo root so local_path "." is the repository.
+# BROKEN / DO NOT USE for real deploys.
+#
+# Local (tar/rsync) mode is unreliable in this environment; servers do not consistently
+# receive the workspace tree you expect. Use source.mode: "git" and push commits first
+# (see deploy-runtime.yaml or config.example.yaml).
+#
+# Kept only as a stub so old docs/commands fail loudly — replace with git-based config.
+
 source:
   mode: "local"
   local_path: "."
 
 entry:
   ssh:
-    host: "93.88.203.24"
+    host: "INVALID"
     port: 22
     user: "root"
     identity_file: "~/.ssh/myserver_key"
   remote:
     path: "/opt/amnezia-wg-easy-entry"
   env:
-    WG_HOST: "93.88.203.24"
-    PANEL_DOMAIN: "93.88.203.24"
+    WG_HOST: "127.0.0.1"
+    PANEL_DOMAIN: "127.0.0.1"
     ADMIN_USERNAME: "admin"
     ADMIN_PASSWORD: "admin"
     WG_PORT: "5443"
@@ -37,7 +42,7 @@ entry:
 exit:
   core: true
   ssh:
-    host: "89.125.17.164"
+    host: "INVALID"
     port: 22
     user: "root"
     identity_file: "~/.ssh/myserver_key"
