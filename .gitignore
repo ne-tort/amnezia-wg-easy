@@ -6,9 +6,15 @@
 /wg0.json
 /vpn-client-test/wg0.conf
 /vpn-client-smb/wg0.conf
+/synology/
 /src/node_modules
 .DS_Store
 *.swp
 
-# https://github.com/amnezia-vpn/amnezia-xray-core
+# Amnezia xray core submodule (optional)
 /amnezia-xray-core/
+
+# capture_udp_sig is a git submodule (see capture_udp_sig/)
+
+# Legacy local copy (optional, not tracked)
+/signature-lab/

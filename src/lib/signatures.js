@@ -6,10 +6,16 @@ const { spawn } = require('node:child_process');
 const debug = require('debug')('signatures');
 
 const { WG_PATH } = require('../config');
+const {
+  labRoot,
+  regeneratePanelSignatures,
+  captureProfile,
+} = require('./siglabBridge');
 
 const SIGNATURES_PATH = path.join(WG_PATH, 'signatures.json');
 const DEFAULT_SIGNATURES_PATH = path.join(process.cwd(), 'python_signatures', 'config', 'signatures.default.json');
-const RUN_ALL_TIMEOUT_MS = 150000;
+const CONFIG_DIR = path.join(labRoot(), 'python_signatures', 'config');
+const RUN_ALL_TIMEOUT_MS = 300000;
 
 const DEFAULT_PROFILE_ID = 'dns';
 
@@ -42,6 +48,10 @@ function isCompleteProfile(profile) {
     typeof profile.i4 === 'string' && profile.i4.trim() &&
     typeof profile.i5 === 'string' && profile.i5.trim()
   );
+}
+
+function hasMinimumProfile(profile) {
+  return Boolean(profile && typeof profile.i1 === 'string' && profile.i1.trim());
 }
 
 /**
@@ -100,8 +110,8 @@ function getProfileSignatures(profileId, signaturesObj) {
     throw new Error(`profile not found in signatures: ${pid}`);
   }
   const norm = normalizeProfileEntry(raw);
-  if (!isCompleteProfile(norm)) {
-    throw new Error(`profile is incomplete (i1..i5 required): ${pid}`);
+  if (!hasMinimumProfile(norm)) {
+    throw new Error(`profile has no I1: ${pid}`);
   }
   return norm;
 }
@@ -144,6 +154,18 @@ function runSignatureGeneration() {
     }
     regenerationInProgress = true;
 
+    const finish = (result) => {
+      regenerationInProgress = false;
+      resolve(result);
+    };
+
+    const apiResult = regeneratePanelSignatures(SIGNATURES_PATH, CONFIG_DIR);
+    if (apiResult && apiResult.success) {
+      invalidateCache();
+      loadSignatures().then(() => finish({ success: true, ...apiResult })).catch(() => finish({ success: true, ...apiResult }));
+      return;
+    }
+
     let settled = false;
     const once = (result) => {
       if (settled) return;
@@ -153,16 +175,18 @@ function runSignatureGeneration() {
       resolve(result);
     };
 
+    const root = labRoot();
+    const py = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
     const child = spawn(
-      'python3',
-      ['-m', 'python_signatures.run_all', '--out', SIGNATURES_PATH],
-      { cwd: process.cwd(), env: { ...process.env, PYTHONPATH: process.cwd() } }
+      py,
+      ['-m', 'siglab', 'batch', '--out', SIGNATURES_PATH, '--format', 'panel'],
+      { cwd: root, env: { ...process.env, PYTHONPATH: root } }
     );
 
     let timeoutId = setTimeout(() => {
       timeoutId = null;
       child.kill('SIGTERM');
-      debug('run_all timeout after %d ms', RUN_ALL_TIMEOUT_MS);
+      debug('siglab batch timeout after %d ms', RUN_ALL_TIMEOUT_MS);
       once({ success: false, message: 'Timeout' });
     }, RUN_ALL_TIMEOUT_MS);
 
@@ -201,5 +225,18 @@ module.exports = {
   getProfileSignatures,
   getProfilePayload,
   normalizeProfileEntry,
+  hasMinimumProfile,
+  isCompleteProfile,
   runSignatureGeneration,
+  captureProfileForPanel: (profileId) => {
+    return new Promise((resolve) => {
+      const result = captureProfile(profileId, SIGNATURES_PATH);
+      if (result && result.success) {
+        invalidateCache();
+        loadSignatures().then(() => resolve(result)).catch(() => resolve(result));
+      } else {
+        resolve(result || { success: false, message: 'capture failed' });
+      }
+    });
+  },
 };

@@ -25,8 +25,8 @@ const {
 const db = require('./db');
 const auth = require('./auth');
 const WireGuard = require('./WireGuard');
-const { isKnownProfile, getProfileIds, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
-const { runSignatureGeneration } = require('./signatures');
+const { isKnownProfile, getProfileIds, DEFAULT_PROFILE_ID, getProfilesMeta } = require('./obfuscationProfiles');
+const { runSignatureGeneration, captureProfileForPanel } = require('./signatures');
 const { applyFirewall } = require('./firewall');
 const {
   normalizeCidr,
@@ -575,7 +575,25 @@ module.exports = class Server {
         return db.traffic.deltas.sumByPeriod(tsFrom);
       }))
       .get('/api/signatures/profiles', defineEventHandler(() => {
-        return { profileIds: getProfileIds(), defaultProfile: DEFAULT_PROFILE_ID };
+        const meta = getProfilesMeta();
+        return {
+          profileIds: getProfileIds(),
+          defaultProfile: DEFAULT_PROFILE_ID,
+          browserEnabled: meta?.browser_enabled ?? false,
+          availableProfileIds: meta?.available_profile_ids ?? getProfileIds(),
+        };
+      }))
+      .get('/api/signatures/capabilities', defineEventHandler(() => {
+        const meta = getProfilesMeta();
+        return meta || { profile_ids: getProfileIds(), default_profile: DEFAULT_PROFILE_ID };
+      }))
+      .post('/api/signatures/capture/:profile', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const profile = String(getRouterParam(event, 'profile') || '').trim();
+        if (!profile || !isKnownProfile(profile)) {
+          throw createError({ status: 400, message: 'Unknown or unavailable profile' });
+        }
+        return captureProfileForPanel(profile);
       }))
       .post('/api/signatures/regenerate', defineEventHandler((event) => {
         requireRoles(event, ['admin', 'moderator']);

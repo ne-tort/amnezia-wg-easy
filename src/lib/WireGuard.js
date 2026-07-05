@@ -718,25 +718,34 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
 
     let iLines = [];
+    const pushSlot = (slot, label) => {
+      if (prof[slot]) iLines.push(`${label} = ${prof[slot]}`);
+    };
     if (level !== undefined && level !== null) {
       const l = Number(level);
       if (l === 0) {
         iLines = [];
       } else if (l === 1) {
-        if (prof.i1) iLines.push(`I1 = ${prof.i1}`);
+        pushSlot('i1', 'I1');
       } else if (l >= 2 && l <= 5) {
-        if (prof.i1) iLines.push(`I1 = ${prof.i1}`);
-        if (l >= 2) iLines.push(`I2 = ${prof.i2}`);
-        if (l >= 3) iLines.push(`I3 = ${prof.i3}`);
-        if (l >= 4) iLines.push(`I4 = ${prof.i4}`);
-        if (l >= 5) iLines.push(`I5 = ${prof.i5}`);
+        pushSlot('i1', 'I1');
+        if (l >= 2) pushSlot('i2', 'I2');
+        if (l >= 3) pushSlot('i3', 'I3');
+        if (l >= 4) pushSlot('i4', 'I4');
+        if (l >= 5) pushSlot('i5', 'I5');
       } else {
-        if (!omitI1 && prof.i1) iLines.push(`I1 = ${prof.i1}`);
-        iLines.push(`I2 = ${prof.i2}`, `I3 = ${prof.i3}`, `I4 = ${prof.i4}`, `I5 = ${prof.i5}`);
+        if (!omitI1) pushSlot('i1', 'I1');
+        pushSlot('i2', 'I2');
+        pushSlot('i3', 'I3');
+        pushSlot('i4', 'I4');
+        pushSlot('i5', 'I5');
       }
     } else {
-      if (!omitI1 && prof.i1) iLines.push(`I1 = ${prof.i1}`);
-      iLines.push(`I2 = ${prof.i2}`, `I3 = ${prof.i3}`, `I4 = ${prof.i4}`, `I5 = ${prof.i5}`);
+      if (!omitI1) pushSlot('i1', 'I1');
+      pushSlot('i2', 'I2');
+      pushSlot('i3', 'I3');
+      pushSlot('i4', 'I4');
+      pushSlot('i5', 'I5');
     }
     const iBlock = iLines.length ? iLines.join('\n') + '\n\n' : '';
 

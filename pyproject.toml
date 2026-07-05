@@ -13,8 +13,11 @@ pyyaml = "^6.0"
 scapy = { version = "^2.7.0", python = ">=3.10,<4" }
 # aioquic = "^1.0.0"  # for real QUIC capture (future)
 
-# * Browser capture (Playwright + Chromium) — not in Docker panel image (Alpine/musl);
-#   install on a capture host: poetry install --with capture
+# * Browser capture (Playwright + Chromium) — optional; not in Docker panel image (Alpine/musl).
+#   poetry install --with capture   # enable browser profiles
+[tool.poetry.group.capture]
+optional = true
+
 [tool.poetry.group.capture.dependencies]
 browser-capture = { path = "browser_capture", develop = true }
 
