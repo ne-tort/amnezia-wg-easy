@@ -183,6 +183,26 @@ HTTPS_SUFFIX=""
 if [ "$PANEL_HTTPS_PORT" != "443" ]; then
   HTTPS_SUFFIX=":${PANEL_HTTPS_PORT}"
 fi
+
+# Wait until nginx can reach the panel (avoids immediate 502 right after compose up).
+PANEL_URL="https://${PANEL_DOMAIN_PRINT}${HTTPS_SUFFIX}/"
+if command -v curl >/dev/null 2>&1; then
+  echo "[deploy] Waiting for panel at ${PANEL_URL} ..."
+  ready=0
+  for _ in $(seq 1 40); do
+    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 3 "$PANEL_URL" || true)
+    case "$code" in
+      200|301|302) ready=1; break ;;
+    esac
+    sleep 2
+  done
+  if [ "$ready" -eq 1 ]; then
+    echo "[deploy] Panel is responding (HTTP ${code})"
+  else
+    echo "[deploy] WARNING: panel not responding yet; check: docker compose logs -f amnezia-wg-easy"
+  fi
+fi
+
 echo "[deploy] Done. Panel (HTTPS): https://${PANEL_DOMAIN_PRINT}${HTTPS_SUFFIX}"
 if [ "$PANEL_HTTP_PORT" != "80" ]; then
   echo "[deploy] Note: HTTP (redirect/ACME) is on host TCP port ${PANEL_HTTP_PORT} — allow it in firewall; Let's Encrypt HTTP-01 uses this mapping to container port 80."
