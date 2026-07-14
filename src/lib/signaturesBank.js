@@ -40,18 +40,40 @@ function resolveSeedPath() {
   return null;
 }
 
+function bankVersion(data) {
+  const n = Number(data && data.version);
+  return Number.isFinite(n) ? n : 0;
+}
+
 /**
- * Copy packaged seed into WG_PATH when signatures.json is missing or unusable.
+ * Copy packaged seed into WG_PATH when signatures.json is missing, unusable,
+ * or older than the packaged seed (version bump).
  * Returns true if a seed was written.
  */
 function ensureSeedBank() {
+  const seedPath = resolveSeedPath();
+  if (!seedPath) {
+    if (!fs.existsSync(SIGNATURES_PATH)) {
+      throw new BankError('signatures.json missing and no packaged seed available');
+    }
+    return false;
+  }
+
+  let seed;
+  try {
+    seed = parseBankObject(JSON.parse(fs.readFileSync(seedPath, 'utf8')));
+  } catch (err) {
+    throw new BankError(`packaged seed invalid: ${err.message}`);
+  }
+
   let needsSeed = false;
   try {
     if (!fs.existsSync(SIGNATURES_PATH) || fs.statSync(SIGNATURES_PATH).size === 0) {
       needsSeed = true;
     } else {
       try {
-        parseBankObject(JSON.parse(fs.readFileSync(SIGNATURES_PATH, 'utf8')));
+        const current = parseBankObject(JSON.parse(fs.readFileSync(SIGNATURES_PATH, 'utf8')));
+        if (bankVersion(current) < bankVersion(seed)) needsSeed = true;
       } catch {
         needsSeed = true;
       }
@@ -61,16 +83,12 @@ function ensureSeedBank() {
   }
 
   if (!needsSeed) return false;
-  const seedPath = resolveSeedPath();
-  if (!seedPath) {
-    throw new BankError('signatures.json missing and no packaged seed available');
-  }
 
   fs.mkdirSync(path.dirname(SIGNATURES_PATH), { recursive: true });
   fs.copyFileSync(seedPath, SIGNATURES_PATH);
   invalidateCache();
   // eslint-disable-next-line no-console
-  console.log(`[signaturesBank] seeded ${SIGNATURES_PATH} from ${seedPath}`);
+  console.log(`[signaturesBank] seeded ${SIGNATURES_PATH} from ${seedPath} (version ${bankVersion(seed)})`);
   return true;
 }
 

@@ -264,10 +264,7 @@ new Vue({
       return this.clientSignatures[client.id] ?? client.defaultSignature ?? null;
     },
     getClientProfileLabel(client) {
-      const id = this.getClientProfile(client);
-      const sig = this.getClientSignature(client);
-      const base = this.getProfileLabel(id);
-      return sig ? `${base} #${sig}` : base;
+      return this.getProfileLabel(this.getClientProfile(client));
     },
     getProfileLabel(profileId) {
       const row = (this.profileCatalog || []).find((p) => (p.id || p.profile_id) === profileId);

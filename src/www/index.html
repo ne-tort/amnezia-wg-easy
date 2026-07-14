@@ -416,7 +416,7 @@
                       :title="$t('obfuscationLevelTitle', { level: 'I' + getClientLevel(client) })">
                       I{{ getClientLevel(client) }}
                     </button>
-                    <!-- Obfuscation profile (protocol + variant) -->
+                    <!-- Obfuscation profile (protocol name only; variant is internal) -->
                     <button v-if="client.downloadableConfig" type="button"
                       @click="getClientLevel(client) !== 0 && cycleClientProfile(client)"
                       class="align-middle p-2 rounded transition text-sm min-h-[2.25rem] min-w-[3.5rem]"
@@ -424,7 +424,17 @@
                       :title="$t('profileTitle', { profile: getClientProfileLabel(client) }) + (getProfileHint(getClientProfile(client)) ? ' — ' + getProfileHint(getClientProfile(client)) : '')">
                       {{ getClientProfileLabel(client) }}
                     </button>
-                    <!-- DNS: server (Amnezia) vs direct (8.8.8.8 etc). Shown only when Amnezia DNS is available. Only icon changes, no red highlight. -->
+                    <!-- Pick another signature variant for this protocol (right of protocol) -->
+                    <button v-if="client.downloadableConfig" type="button"
+                      @click="refreshClientSignature(client)"
+                      :disabled="regeneratingSignatures || !!signaturesBankError"
+                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition disabled:opacity-50 disabled:cursor-not-allowed"
+                      :title="$t('refreshSignatures')">
+                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                    </button>
+                    <!-- DNS: server (Amnezia) vs direct (8.8.8.8 etc). Shown only when Amnezia DNS is available. -->
                     <button v-if="client.downloadableConfig && amneziaDnsAvailable" type="button"
                       @click="toggleClientDns(client)"
                       class="align-middle p-2 rounded transition min-h-[2.25rem] min-w-[2.25rem] bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-gray-200 dark:hover:bg-neutral-500"
@@ -434,16 +444,6 @@
                       </svg>
                       <svg v-else class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
-                      </svg>
-                    </button>
-                    <!-- Pick another signature variant for this protocol -->
-                    <button v-if="client.downloadableConfig" type="button"
-                      @click="refreshClientSignature(client)"
-                      :disabled="regeneratingSignatures || !!signaturesBankError"
-                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition disabled:opacity-50 disabled:cursor-not-allowed"
-                      :title="$t('refreshSignatures')">
-                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
                     </button>
                     <!-- Download Config: format + link -->

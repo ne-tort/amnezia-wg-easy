@@ -1101,10 +1101,13 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
     const bank = await loadBank();
     const binding = ensureBinding(client.default_profile, client.default_signature, bank);
-    const next = pickRandomVariant(binding.profile, bank, { exclude: binding.signature });
-    if (!next) {
+    // Do not fall back to the current variant — refresh must change the binding.
+    const alternatives = listVariants(binding.profile, bank)
+      .filter((v) => v !== String(binding.signature));
+    if (!alternatives.length) {
       throw new ServerError('No alternative signatures for this protocol', 400);
     }
+    const next = alternatives[crypto.randomInt(0, alternatives.length)];
     if (binding.changed) {
       client.default_profile = binding.profile;
     }
