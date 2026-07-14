@@ -211,7 +211,7 @@ function buildAmneziaVpnExport(iniText, description, options = {}) {
  * @param {string} iniText
  * @param {string} description
  * @param {{ includeAmneziaDns?: boolean }} [options]
- * @returns {Promise<string[]>} One SVG string per QR chunk
+ * @returns {Promise<{ svgs: string[], payloads: string[] }>}
  */
 async function generateAmneziaClientQrSvgs(iniText, description, options = {}) {
   const root = buildAmneziaRoot(iniText, description, options);
@@ -224,7 +224,7 @@ async function generateAmneziaClientQrSvgs(iniText, description, options = {}) {
     const svg = await QRCode.toString(payload, QR_OPTS);
     svgs.push(svg);
   }
-  return svgs;
+  return { svgs, payloads };
 }
 
 module.exports = {

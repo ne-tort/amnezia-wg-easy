@@ -33,8 +33,6 @@ const messages = { // eslint-disable-line no-unused-vars
     qrTabText: 'Text',
     qrTabAmneziaClient: 'AmneziaClient',
     qrAmneziaChunk: 'Part {n} of {total}',
-    qrAmneziaMultiHint:
-      'Several QR codes: scan each part (any order on mobile). On desktop, import the downloaded .vpn file in Amnezia instead of scanning.',
     downloadFormatTitle: 'Download format',
     downloadFormatConf: '.conf',
     downloadFormatAmnezia: 'Amnezia',
@@ -142,8 +140,6 @@ const messages = { // eslint-disable-line no-unused-vars
     qrTabText: 'Текст',
     qrTabAmneziaClient: 'AmneziaClient',
     qrAmneziaChunk: 'Часть {n} из {total}',
-    qrAmneziaMultiHint:
-      'Несколько QR: отсканируйте каждую часть (на телефоне порядок не важен). На ПК надёжнее импортировать скачанный файл .vpn в Amnezia.',
     downloadFormatTitle: 'Формат скачивания',
     downloadFormatConf: '.conf',
     downloadFormatAmnezia: 'Amnezia',

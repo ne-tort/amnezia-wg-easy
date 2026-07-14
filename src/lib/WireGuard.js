@@ -856,16 +856,17 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       profile,
       signature,
     });
-    return QRCode.toString(config, {
+    const svg = await QRCode.toString(config, {
       type: 'svg',
       width: 512,
       errorCorrectionLevel: 'L',
     });
+    return { svg, payload: config };
   }
 
   /**
    * AmneziaVPN app: chunked Base64URL QR payloads (see amneziaClientQr.js).
-   * @returns {Promise<string[]>} One SVG per chunk
+   * @returns {Promise<{ svgs: string[], payloads: string[] }>}
    */
   async getClientAmneziaQRCodeSvgs({ clientId, level, profile, signature }) {
     const config = await this.getClientConfiguration({

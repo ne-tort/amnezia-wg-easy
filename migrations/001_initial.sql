@@ -121,8 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_ip_rules_rule_profile_id ON ip_rules(rule_profile
 -- Seed rule profiles
 INSERT INTO rule_profiles (id, name, description) VALUES
   (1, 'Full access', 'VPN + LAN + other clients'),
-  (2, 'Internet only', 'No LAN, no other VPN clients'),
-  (3, 'Internet + one LAN IP', 'Internet + single allowed LAN host/subnet');
+  (2, 'Internet only', 'No LAN, no other VPN clients');
 
 -- Seed ip_rules for "Internet only" (profile 2): allow 0.0.0.0/0 (NAT), deny 10.8.0.0/24 and 192.168.0.0/16
 INSERT INTO ip_rules (rule_profile_id, action, destination_cidr, sort_order) VALUES

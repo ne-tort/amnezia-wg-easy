@@ -94,13 +94,16 @@ class API {
       credentials: 'include',
     });
     if (!res.ok) throw new Error(res.statusText);
+    const data = await res.json();
     if (encoding === 'amnezia') {
-      const data = await res.json();
       if (!data.svgs || !Array.isArray(data.svgs)) throw new Error('Invalid QR response');
-      // data.chunkCount === data.svgs.length (for UI / diagnostics)
-      return data.svgs;
+      return {
+        svgs: data.svgs,
+        payloads: Array.isArray(data.payloads) ? data.payloads : [],
+      };
     }
-    return res.text();
+    if (!data.svg || typeof data.payload !== 'string') throw new Error('Invalid QR response');
+    return { svg: data.svg, payload: data.payload };
   }
 
   async getCheckUpdate() {

@@ -844,18 +844,21 @@
               </div>
               <div class="p-4 overflow-auto max-w-[min(100vw-2rem,56rem)]">
                 <template v-if="qrcodeTab === 'amnezia' && amneziaQrImages.length">
-                  <p v-if="amneziaQrImages.length > 1"
-                    class="text-sm text-gray-600 dark:text-neutral-400 mb-3 text-center">
-                    {{ $t('qrAmneziaMultiHint') }}
-                  </p>
                   <div class="flex flex-row flex-wrap justify-center items-start gap-4 w-full">
                     <div v-for="(src, idx) in amneziaQrImages" :key="idx" class="flex-1 min-w-[140px] max-w-[min(48%,280px)] text-center">
                       <p v-if="amneziaQrImages.length > 1" class="text-sm text-gray-600 dark:text-neutral-400 mb-2">{{ $t('qrAmneziaChunk', { n: idx + 1, total: amneziaQrImages.length }) }}</p>
-                      <img :src="src" :alt="'QR ' + (idx + 1)" class="w-full h-auto mx-auto" />
+                      <button type="button" class="block w-full p-0 border-0 bg-transparent cursor-pointer"
+                        @click="copyQrPayload(qrcodeAmneziaPayloads && qrcodeAmneziaPayloads[idx])">
+                        <img :src="src" :alt="'QR ' + (idx + 1)" class="w-full h-auto mx-auto pointer-events-none" />
+                      </button>
                     </div>
                   </div>
                 </template>
-                <img v-else-if="qrcodeTab === 'text' && qrcodeText" :src="qrcodeText" alt="QR Code" class="max-w-full" />
+                <button v-else-if="qrcodeTab === 'text' && qrcodeText" type="button"
+                  class="block p-0 border-0 bg-transparent cursor-pointer"
+                  @click="copyQrPayload(qrcodeTextPayload)">
+                  <img :src="qrcodeText" alt="QR Code" class="max-w-full pointer-events-none" />
+                </button>
               </div>
             </div>
           </div>

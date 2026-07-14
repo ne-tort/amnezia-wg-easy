@@ -100,7 +100,9 @@ new Vue({
     clientEditAddress: null,
     clientEditAddressId: null,
     qrcodeText: null,
+    qrcodeTextPayload: null,
     qrcodeAmneziaSvgs: null,
+    qrcodeAmneziaPayloads: null,
     qrcodeTab: 'amnezia',
     configViewClient: null,
     configViewText: '',
@@ -430,14 +432,16 @@ new Vue({
       try {
         const level = this.getClientLevel(client);
         const profile = this.getClientProfile(client);
-        const [svgText, svgsAmnezia] = await Promise.all([
+        const [textQr, amneziaQr] = await Promise.all([
           this.api.getClientQRCodeSVG(client.id, level, profile, 'text'),
           this.api.getClientQRCodeSVG(client.id, level, profile, 'amnezia'),
         ]);
-        this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(svgText);
-        this.qrcodeAmneziaSvgs = svgsAmnezia.map(
+        this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(textQr.svg);
+        this.qrcodeTextPayload = textQr.payload;
+        this.qrcodeAmneziaSvgs = amneziaQr.svgs.map(
           (s) => 'data:image/svg+xml,' + encodeURIComponent(s),
         );
+        this.qrcodeAmneziaPayloads = amneziaQr.payloads || [];
         this.qrcodeTab = 'amnezia';
       } catch (err) {
         alert(err.message || 'Failed to load QR code');
@@ -445,29 +449,44 @@ new Vue({
     },
     closeQR() {
       this.qrcodeText = null;
+      this.qrcodeTextPayload = null;
       this.qrcodeAmneziaSvgs = null;
+      this.qrcodeAmneziaPayloads = null;
       this.qrcodeTab = 'amnezia';
     },
     closeConfigView() {
       this.configViewClient = null;
       this.configViewText = '';
     },
-    copyFromConfigView() {
-      if (!this.configViewText) return;
+    async copyTextToClipboard(text) {
+      if (text == null || text === '') return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.cssText = 'position:fixed;top:0;left:0;width:2em;height:2em;padding:0;border:none;outline:none;boxShadow:none;background:transparent;opacity:0;';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if (!ok) throw new Error('Copy failed');
+    },
+    async copyQrPayload(payload) {
       try {
-        const ta = document.createElement('textarea');
-        ta.value = this.configViewText;
-        ta.setAttribute('readonly', '');
-        ta.style.cssText = 'position:fixed;top:0;left:0;width:2em;height:2em;padding:0;border:none;outline:none;boxShadow:none;background:transparent;opacity:0;';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        if (!ok) throw new Error('Copy failed');
+        await this.copyTextToClipboard(payload);
       } catch (err) {
         alert(err.message || 'Copy failed');
       }
+    },
+    copyFromConfigView() {
+      if (!this.configViewText) return;
+      this.copyTextToClipboard(this.configViewText).catch((err) => {
+        alert(err.message || 'Copy failed');
+      });
     },
     dateTime: (value) => {
       return new Intl.DateTimeFormat(undefined, {

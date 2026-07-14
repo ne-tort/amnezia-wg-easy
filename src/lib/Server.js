@@ -264,13 +264,17 @@ module.exports = class Server {
         let signature;
         if (query.signature !== undefined && query.signature !== '') signature = String(query.signature);
         if (query.encoding === 'amnezia') {
-          const svgs = await WireGuard.getClientAmneziaQRCodeSvgs({ clientId, level, profile, signature });
+          const { svgs, payloads } = await WireGuard.getClientAmneziaQRCodeSvgs({
+            clientId, level, profile, signature,
+          });
           setHeader(event, 'Content-Type', 'application/json');
-          return JSON.stringify({ svgs, chunkCount: svgs.length });
+          return JSON.stringify({ svgs, payloads, chunkCount: svgs.length });
         }
-        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile, signature });
-        setHeader(event, 'Content-Type', 'image/svg+xml');
-        return svg;
+        const { svg, payload } = await WireGuard.getClientQRCodeSVG({
+          clientId, level, profile, signature,
+        });
+        setHeader(event, 'Content-Type', 'application/json');
+        return JSON.stringify({ svg, payload });
       }))
       .get('/api/wireguard/client/:clientId/configuration', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
