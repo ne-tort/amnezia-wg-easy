@@ -119,6 +119,16 @@ new Vue({
     signaturesBankError: null,
     regeneratingSignatures: false,
     amneziaDnsAvailable: false,
+    amneziaDnsPhase: 'off',
+    amneziaDnsBusy: false,
+    amneziaDnsError: null,
+    amneziaDnsPollTimer: null,
+    amneziaDnsProfileId: null,
+    amneziaDnsProfile: null,
+    amneziaDnsProfiles: [],
+    amneziaDnsProfilesError: null,
+    amneziaDnsInstallOpen: false,
+    amneziaDnsInstallSelected: null,
     ruleProfiles: [],
     globalFirewallRules: [],
     globalRuleEdit: null,
@@ -352,6 +362,194 @@ new Vue({
         this.profileCatalog = [];
       }
     },
+    applyAmneziaDnsCapability(caps) {
+      const c = caps || {};
+      this.amneziaDnsAvailable = c.amneziaDnsAvailable === true;
+      const st = c.amneziaDns || {};
+      if (st.phase) this.amneziaDnsPhase = st.phase;
+      this.amneziaDnsBusy = st.busy === true
+        || st.phase === 'installing'
+        || st.phase === 'removing';
+      this.amneziaDnsError = st.lastError || null;
+      if (st.profileId != null) this.amneziaDnsProfileId = st.profileId;
+      if (st.profile !== undefined) this.amneziaDnsProfile = st.profile;
+      if (this.amneziaDnsBusy) this.ensureAmneziaDnsPoll();
+      else this.stopAmneziaDnsPoll();
+    },
+    async refreshAmneziaDnsStatus() {
+      try {
+        const st = await this.api.getAmneziaDnsStatus();
+        this.applyAmneziaDnsCapability({
+          amneziaDnsAvailable: st.available === true,
+          amneziaDns: st,
+        });
+        return st;
+      } catch (err) {
+        this.amneziaDnsError = (err && err.message) || String(err);
+        return null;
+      }
+    },
+    ensureAmneziaDnsPoll() {
+      if (this.amneziaDnsPollTimer) return;
+      this.amneziaDnsPollTimer = setInterval(() => {
+        this.refreshAmneziaDnsStatus().then((st) => {
+          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
+            this.refresh().catch(() => {});
+          }
+        });
+      }, 1000);
+    },
+    stopAmneziaDnsPoll() {
+      if (this.amneziaDnsPollTimer) {
+        clearInterval(this.amneziaDnsPollTimer);
+        this.amneziaDnsPollTimer = null;
+      }
+    },
+    amneziaDnsHeaderTitle() {
+      const phase = this.amneziaDnsPhase;
+      if (phase === 'installing' || phase === 'removing' || this.amneziaDnsBusy) {
+        return this.$t('dnsHeaderBusy');
+      }
+      if (phase === 'error') {
+        return (this.amneziaDnsError && `${this.$t('dnsHeaderError')}: ${this.amneziaDnsError}`)
+          || this.$t('dnsHeaderError');
+      }
+      if (phase === 'degraded') return this.$t('dnsHeaderDegraded');
+      if (phase === 'running') {
+        const name = this.amneziaDnsProfile && this.amneziaDnsProfile.name;
+        return name
+          ? `${this.$t('dnsHeaderDisable')} (${name})`
+          : this.$t('dnsHeaderDisable');
+      }
+      return this.$t('dnsHeaderEnable');
+    },
+    withAmneziaDnsTimeout(promise, ms = 100000) {
+      let timer;
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`${this.$t('dnsToggleFailed')} (timeout)`));
+        }, ms);
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    },
+    formatDnsServerEndpoint(server) {
+      if (!server || !server.address) return '';
+      const port = server.port != null ? server.port : '';
+      return port !== '' ? `${server.address}:${port}` : String(server.address);
+    },
+    formatDnsProfileEndpoints(profile) {
+      const servers = (profile && profile.servers) || [];
+      return servers.map((s) => this.formatDnsServerEndpoint(s)).filter(Boolean).join('  ·  ');
+    },
+    dnsProfileDisplayMs(profile) {
+      if (!profile || profile.available === false) return null;
+      if (profile.displayMs != null) return profile.displayMs;
+      if (profile.pingMs != null) return profile.pingMs;
+      if (profile.latencyMs != null) return profile.latencyMs;
+      return null;
+    },
+    dnsLatencyClass(ms) {
+      if (ms == null) return '';
+      if (ms < 50) return 'is-good';
+      if (ms < 100) return 'is-ok';
+      if (ms < 200) return 'is-slow';
+      if (ms < 400) return 'is-bad';
+      return 'is-dead';
+    },
+    closeAmneziaDnsInstall() {
+      this.amneziaDnsInstallOpen = false;
+      this.amneziaDnsInstallSelected = null;
+    },
+    async openAmneziaDnsInstall() {
+      this.amneziaDnsProfilesError = null;
+      try {
+        // Cached server-side probes (5 min TTL) — no blocking wait on open.
+        const catalog = await this.api.getAmneziaDnsProfiles({ refresh: false });
+        this.amneziaDnsProfiles = (catalog && catalog.profiles) || [];
+        if (!this.amneziaDnsProfiles.length) {
+          throw new Error((catalog && catalog.error) || this.$t('dnsProfilesEmpty'));
+        }
+        const available = this.amneziaDnsProfiles.filter((p) => p.available !== false);
+        if (!available.length) {
+          throw new Error(this.$t('dnsProfilesEmpty'));
+        }
+        const preferredId = this.amneziaDnsProfileId
+          || (catalog && catalog.defaultProfile)
+          || available[0].id;
+        const preferred = available.find((p) => p.id === preferredId) || available[0];
+        this.amneziaDnsInstallSelected = preferred.id;
+        this.amneziaDnsInstallOpen = true;
+      } catch (err) {
+        this.amneziaDnsProfilesError = (err && err.message) || this.$t('dnsProfilesUnavailable');
+        alert(this.amneziaDnsProfilesError);
+      }
+    },
+    async confirmAmneziaDnsInstall() {
+      const profileId = this.amneziaDnsInstallSelected;
+      const selected = this.amneziaDnsProfiles.find((p) => p.id === profileId);
+      if (!profileId || this.amneziaDnsBusy || !selected || selected.available === false) return;
+      this.closeAmneziaDnsInstall();
+      this.amneziaDnsBusy = true;
+      this.ensureAmneziaDnsPoll();
+      try {
+        await this.withAmneziaDnsTimeout(
+          this.api.enableAmneziaDns({ profileId }),
+          100000,
+        );
+        await this.refreshAmneziaDnsStatus();
+        await this.refresh();
+      } catch (err) {
+        this.amneziaDnsError = (err && err.message) || this.$t('dnsToggleFailed');
+        alert(this.amneziaDnsError);
+        await this.refreshAmneziaDnsStatus();
+      } finally {
+        this.amneziaDnsBusy = false;
+        if (!['installing', 'removing'].includes(this.amneziaDnsPhase)) {
+          this.stopAmneziaDnsPoll();
+        }
+      }
+    },
+    async toggleAmneziaDns() {
+      if (this.amneziaDnsBusy) return;
+      const phase = this.amneziaDnsPhase;
+      if (phase === 'running' || phase === 'degraded') {
+        this.amneziaDnsBusy = true;
+        this.ensureAmneziaDnsPoll();
+        try {
+          await this.withAmneziaDnsTimeout(this.api.disableAmneziaDns(), 60000);
+          await this.refreshAmneziaDnsStatus();
+          await this.refresh();
+        } catch (err) {
+          this.amneziaDnsError = (err && err.message) || this.$t('dnsToggleFailed');
+          alert(this.amneziaDnsError);
+          await this.refreshAmneziaDnsStatus();
+        } finally {
+          this.amneziaDnsBusy = false;
+          if (!['installing', 'removing'].includes(this.amneziaDnsPhase)) {
+            this.stopAmneziaDnsPoll();
+          }
+        }
+        return;
+      }
+      if (phase === 'error') {
+        this.amneziaDnsBusy = true;
+        this.ensureAmneziaDnsPoll();
+        try {
+          await this.withAmneziaDnsTimeout(this.api.forceCleanupAmneziaDns(), 60000);
+          await this.refreshAmneziaDnsStatus();
+          await this.refresh();
+        } catch (err) {
+          this.amneziaDnsError = (err && err.message) || this.$t('dnsToggleFailed');
+          alert(this.amneziaDnsError);
+          await this.refreshAmneziaDnsStatus();
+        } finally {
+          this.amneziaDnsBusy = false;
+          this.stopAmneziaDnsPoll();
+        }
+        return;
+      }
+      await this.openAmneziaDnsInstall();
+    },
     getClientUseServerDns(client) {
       return this.clientUseServerDns[client.id] !== false;
     },
@@ -505,7 +703,7 @@ new Vue({
       try {
         const res = await this.api.getClients();
         this.refreshError = null;
-        this.amneziaDnsAvailable = res.serverCapabilities?.amneziaDnsAvailable ?? false;
+        this.applyAmneziaDnsCapability(res.serverCapabilities);
         const list = Array.isArray(res.clients) ? res.clients : [];
         this.clients = list.map((client) => {
         this.$set(this.clientLevels, client.id, client.defaultLevel != null ? client.defaultLevel : 1);

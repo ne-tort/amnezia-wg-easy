@@ -60,9 +60,13 @@ COPY --from=build_node_modules /app /app
 COPY --from=build_node_modules /node_modules /app/node_modules
 # Seed after app copy so it is never wiped by the build stage overlay.
 COPY config/signatures.seed.json /app/config/signatures.seed.json
+COPY config/dns-profiles.seed.json /app/config/dns-profiles.seed.json
 
 COPY scripts/cascade-in-container-postup.sh scripts/cascade-in-container-predown.sh /app/scripts/
 RUN chmod +x /app/scripts/cascade-in-container-postup.sh /app/scripts/cascade-in-container-predown.sh
+
+# Same path as Amnezia client (/opt/amnezia/amnezia-dns) for on-demand docker build from the panel.
+COPY amnezia-dns/Dockerfile /opt/amnezia/amnezia-dns/Dockerfile
 
 WORKDIR /app
 CMD ["/entrypoint.sh"]

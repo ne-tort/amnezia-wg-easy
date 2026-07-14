@@ -7,13 +7,20 @@ const db = require('./lib/db');
 const { ensureFirstAdmin } = require('./lib/ensureFirstAdmin');
 const WireGuard = require('./lib/WireGuard');
 const { applyFirewall } = require('./lib/firewall');
-const { startAmneziaDns, stopAmneziaDns } = require('./lib/amneziaDns');
+const { bootAmneziaDns, stopAmneziaDns, startDnsProfileProbes } = require('./lib/amneziaDns');
 const { startTrafficRecorder, stopTrafficRecorder } = require('./lib/trafficRecorder');
+const { stopProbeScheduler } = require('./lib/dnsProfileProbe');
 
 async function main() {
   // * Ensure static signature bank exists before any client/API code touches it.
   const { ensureSeedBank } = require('./lib/signaturesBank');
   ensureSeedBank();
+  try {
+    require('./lib/dnsProfilesBank').ensureSeedBank();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('Amnezia DNS profiles seed:', err && err.message ? err.message : err);
+  }
 
   db.getDb();
 
@@ -39,8 +46,6 @@ async function main() {
 
   // * getConfig() persists awg0.conf with ListenPort from WG_PORT and brings awg0 up; restart container after changing WG_PORT.
   await WireGuard.getConfig();
-  // * Start Amnezia DNS (dnsmasq) after WG interface is up so it can bind to 0.0.0.0 including awg0.
-  startAmneziaDns();
 
   const firewallApplied = applyFirewall();
   if (!firewallApplied && process.env.FIREWALL_FAIL_FAST === '1') {
@@ -49,8 +54,15 @@ async function main() {
     process.exit(1);
   }
 
+  // Start HTTP before DNS reconcile — enable/reinstall can take up to ~90s and must not block the panel.
   await server.start();
   startTrafficRecorder();
+  // Background DNS-profile latency cache (5 min TTL) — UI must not wait on open.
+  startDnsProfileProbes();
+  bootAmneziaDns().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Amnezia DNS boot:', err && err.message ? err.message : err);
+  });
 }
 
 main().catch((err) => {
@@ -63,6 +75,7 @@ process.on('SIGTERM', async () => {
   // eslint-disable-next-line no-console
   console.log('SIGTERM signal received.');
   stopTrafficRecorder();
+  stopProbeScheduler();
   stopAmneziaDns();
   await WireGuard.Shutdown();
   process.exit(0);

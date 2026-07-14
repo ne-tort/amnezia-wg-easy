@@ -103,15 +103,51 @@ if [ -z "$SESSION_SECRET_VAL" ] || [ "$SESSION_SECRET_VAL" = "change-me-in-produ
   echo "[deploy] Generated SESSION_SECRET (saved in $ENV_WORKING)"
 fi
 
-# Amnezia DNS: if WG_DEFAULT_DNS is unset, set it to VPN gateway so dnsmasq starts and clients use gateway as DNS.
+# Default client DNS address line (gateway). Amnezia DNS stack itself is toggled from the panel UI.
 WG_ADDR=$(grep -E "^WG_DEFAULT_ADDRESS=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
 WG_ADDR=${WG_ADDR:-10.8.0.x}
 WG_GW="${WG_ADDR%x}1"
 CURRENT_DNS=$(grep -E "^WG_DEFAULT_DNS=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
 if [ -z "$CURRENT_DNS" ]; then
   env_set WG_DEFAULT_DNS "$WG_GW"
-  echo "[deploy] WG_DEFAULT_DNS set to ${WG_GW} (Amnezia DNS enabled)"
+  echo "[deploy] WG_DEFAULT_DNS set to ${WG_GW}"
 fi
+
+# Amnezia DNS network + image — same as amnezia-client prepare_host / build_container
+# (optional service: docker run from panel UI, not a compose service).
+ensure_amnezia_dns_net() {
+  if docker network ls --format '{{.Name}}' | grep -qx 'amnezia-dns-net'; then
+    return 0
+  fi
+  # Migrate legacy compose-prefixed nets on 172.29.172.0/24 (cannot rename Docker networks).
+  # Drop orphan Unbound so it is recreated on the new net by the panel (same as client reinstall).
+  docker rm -f amnezia-dns 2>/dev/null || true
+  while IFS= read -r old; do
+    [ -n "$old" ] || continue
+    [ "$old" = "amnezia-dns-net" ] && continue
+    echo "[deploy] Migrating DNS network $old -> amnezia-dns-net"
+    for c in $(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$old" 2>/dev/null); do
+      docker network disconnect -f "$old" "$c" 2>/dev/null || true
+    done
+    docker network rm "$old" 2>/dev/null || true
+  done < <(docker network ls --format '{{.Name}}' | grep 'amnezia-dns-net' || true)
+  if ! docker network ls --format '{{.Name}}' | grep -qx 'amnezia-dns-net'; then
+    docker network create \
+      --driver bridge \
+      --subnet=172.29.172.0/24 \
+      --opt com.docker.network.bridge.name=amn0 \
+      amnezia-dns-net
+    echo "[deploy] Created network amnezia-dns-net"
+  fi
+}
+ensure_amnezia_dns_net
+
+echo "[deploy] Building amnezia-dns image (client-compatible tag, container not started)..."
+if ! docker build -t amnezia-dns ./amnezia-dns; then
+  echo "[deploy] WARNING: amnezia-dns image build failed; panel can rebuild on enable if Dockerfile is present" >&2
+fi
+# Drop obsolete local tag from older deploys
+docker rmi amnezia-dns:local 2>/dev/null || true
 
 # HTTPS: self-signed (no certbot) for empty / 127.0.0.1 / localhost / plain IPv4 (no ACME for IP).
 # Let's Encrypt + certbot when PANEL_DOMAIN is a DNS name and CERTBOT_EMAIL is set.
@@ -209,4 +245,4 @@ if [ "$PANEL_HTTP_PORT" != "80" ]; then
 fi
 echo "[deploy] Admin login: ${ADMIN_USER}"
 echo "[deploy] Admin password: ${ADMIN_PWD}"
-echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). DNS: WG_DEFAULT_DNS in $ENV_WORKING (gateway = Amnezia DNS)."
+echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). Amnezia DNS: enable/disable from panel header."

@@ -1,8 +1,7 @@
 #!/bin/bash
-# Install Amnezia DNS directly (without Amnezia client).
-# For the full stack (WG + panel + DNS), prefer: docker compose up -d (from repo root).
-# This script is for standalone DNS (e.g. on another host). Same container as in amnezia-vpn/amnezia-client (server_scripts/dns).
-# Requires: Docker. Run from repo root or set AMNEZIA_WG_FRESH_ROOT.
+# Legacy/standalone Amnezia DNS install (Unbound container only).
+# Preferred: enable Amnezia DNS from the panel header toggle (orchestrates Unbound + dnsmasq).
+# This script is for offline/standalone hosts without the panel. Requires Docker.
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

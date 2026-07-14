@@ -1,22 +1,8 @@
 # Amnezia WG-Easy — ./deploy.sh or: docker compose up -d --build
+# Amnezia DNS matches amnezia-client: optional container via docker run (not a compose service).
+# Network amnezia-dns-net is created by deploy.sh (same as client prepare_host.sh); panel attaches as external.
 
 services:
-  amnezia-dns:
-    build:
-      context: amnezia-dns
-      dockerfile: Dockerfile
-    image: amnezia-dns:local
-    container_name: amnezia-dns
-    restart: always
-    logging:
-      driver: json-file
-      options:
-        max-size: "5m"
-        max-file: "1"
-    networks:
-      amnezia-dns-net:
-        ipv4_address: 172.29.172.254
-
   amnezia-wg-easy:
     build:
       context: .
@@ -25,8 +11,6 @@ services:
     container_name: amnezia-awg
     env_file:
       - .env
-    depends_on:
-      - amnezia-dns
     ports:
       # VPN (UDP): host and container use same port so ListenPort in awg0.conf matches. Change via WG_PORT in .env.
       # Web UI is only via nginx (HTTPS) when nginx service is used; no direct TCP port exposure.
@@ -35,6 +19,8 @@ services:
       - amnezia-wg-data:/opt/amnezia/awg
       # * Mount host kernel modules so container can use amneziawg.ko if installed (same as Amnezia client).
       - /lib/modules:/lib/modules:ro
+      # Panel manages amnezia-dns container via Docker when UI toggle is used.
+      - /var/run/docker.sock:/var/run/docker.sock
     restart: always
     # * Set to "none" to disable logs; use "json-file" (default) to read with docker logs
     logging:
@@ -106,13 +92,10 @@ services:
       - default
 
 networks:
+  # Same fixed name as Amnezia client (not project-prefixed).
   amnezia-dns-net:
-    driver: bridge
-    driver_opts:
-      com.docker.network.bridge.name: amn0
-    ipam:
-      config:
-        - subnet: 172.29.172.0/24
+    name: amnezia-dns-net
+    external: true
 
 volumes:
   amnezia-wg-data:

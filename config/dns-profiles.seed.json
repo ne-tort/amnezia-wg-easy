@@ -1,0 +1,114 @@
+{
+  "version": 3,
+  "defaultProfile": "1",
+  "profiles": {
+    "1": {
+      "name": "Cloudflare DoT",
+      "description": "",
+      "forwardTls": true,
+      "servers": [
+        { "address": "1.1.1.1", "port": 853, "tlsName": "cloudflare-dns.com" },
+        { "address": "1.0.0.1", "port": 853, "tlsName": "cloudflare-dns.com" }
+      ]
+    },
+    "2": {
+      "name": "Google DoT",
+      "description": "",
+      "forwardTls": true,
+      "servers": [
+        { "address": "8.8.8.8", "port": 853, "tlsName": "dns.google" },
+        { "address": "8.8.4.4", "port": 853, "tlsName": "dns.google" }
+      ]
+    },
+    "3": {
+      "name": "Quad9 DoT",
+      "description": "",
+      "forwardTls": true,
+      "servers": [
+        { "address": "9.9.9.9", "port": 853, "tlsName": "dns.quad9.net" },
+        { "address": "149.112.112.112", "port": 853, "tlsName": "dns.quad9.net" }
+      ]
+    },
+    "4": {
+      "name": "Cloudflare UDP",
+      "description": "",
+      "forwardTls": false,
+      "servers": [
+        { "address": "1.1.1.1", "port": 53 },
+        { "address": "1.0.0.1", "port": 53 }
+      ]
+    },
+    "5": {
+      "name": "Google UDP",
+      "description": "",
+      "forwardTls": false,
+      "servers": [
+        { "address": "8.8.8.8", "port": 53 },
+        { "address": "8.8.4.4", "port": 53 }
+      ]
+    },
+    "6": {
+      "name": "Quad9 UDP",
+      "description": "",
+      "forwardTls": false,
+      "servers": [
+        { "address": "9.9.9.9", "port": 53 },
+        { "address": "149.112.112.112", "port": 53 }
+      ]
+    },
+    "7": {
+      "name": "AdGuard DoT",
+      "description": "",
+      "forwardTls": true,
+      "servers": [
+        { "address": "94.140.14.14", "port": 853, "tlsName": "dns.adguard-dns.com" },
+        { "address": "94.140.15.15", "port": 853, "tlsName": "dns.adguard-dns.com" }
+      ]
+    },
+    "8": {
+      "name": "OpenDNS",
+      "description": "",
+      "forwardTls": false,
+      "servers": [
+        { "address": "208.67.222.222", "port": 53 },
+        { "address": "208.67.220.220", "port": 53 }
+      ]
+    },
+    "9": {
+      "name": "Control D DoT",
+      "description": "",
+      "forwardTls": true,
+      "servers": [
+        { "address": "76.76.2.0", "port": 853, "tlsName": "p0.freedns.controld.com" },
+        { "address": "76.76.10.0", "port": 853, "tlsName": "p0.freedns.controld.com" }
+      ]
+    },
+    "10": {
+      "name": "Mullvad DoT",
+      "description": "",
+      "forwardTls": true,
+      "servers": [
+        { "address": "194.242.2.2", "port": 853, "tlsName": "dns.mullvad.net" },
+        { "address": "194.242.2.3", "port": 853, "tlsName": "adblock.dns.mullvad.net" }
+      ]
+    },
+    "11": {
+      "name": "CleanBrowsing",
+      "description": "",
+      "forwardTls": true,
+      "servers": [
+        { "address": "185.228.168.9", "port": 853, "tlsName": "security-filter-dns.cleanbrowsing.org" },
+        { "address": "185.228.169.9", "port": 853, "tlsName": "security-filter-dns.cleanbrowsing.org" }
+      ]
+    },
+    "12": {
+      "name": "AdGuard UDP",
+      "description": "",
+      "forwardTls": false,
+      "servers": [
+        { "address": "94.140.14.14", "port": 53 },
+        { "address": "94.140.15.15", "port": 53 }
+      ]
+    }
+  }
+}

@@ -1,9 +1,10 @@
-# Amnezia DNS — same image as in amnezia-vpn/amnezia-client (server_scripts/dns).
-# Unbound with DoT forward to Cloudflare. Replace 1.1.1.1 with 8.8.8.8 in forward-addr if needed (e.g. Russia).
+# Amnezia DNS — Unbound (+ Emercoin stubs). Upstream forwarders come from a profile
+# written by the panel to /opt/amnezia/awg/amnezia-dns/forward-records.conf at enable time.
 FROM mvance/unbound:latest
 
 LABEL maintainer="AmneziaVPN"
 
+# Fallback forwarders (Cloudflare DoT) if no profile file is mounted.
 RUN echo " \n\
 domain-insecure: \"coin.\"\n\
 domain-insecure: \"emc.\"\n\
@@ -44,6 +45,17 @@ stub-zone:\n\
 forward-zone:\n\
  name: .\n\
  forward-tls-upstream: yes\n\
- forward-addr: 1.1.1.1@853 #cloudflare-dns.com\n\
- forward-addr: 1.0.0.1@853 #cloudflare-dns.com\n\
+ forward-addr: 1.1.1.1@853#cloudflare-dns.com\n\
+ forward-addr: 1.0.0.1@853#cloudflare-dns.com\n\
 " | tee /opt/unbound/etc/unbound/forward-records.conf
+
+# Entrypoint (inline so `docker build -` from panel still works without build context).
+RUN printf '%s\n' \
+  '#!/bin/sh' \
+  'SRC=/opt/amnezia/awg/amnezia-dns/forward-records.conf' \
+  'DST=/opt/unbound/etc/unbound/forward-records.conf' \
+  'if [ -f "$SRC" ]; then cp "$SRC" "$DST" || true; fi' \
+  'exec /unbound.sh' \
+  > /entrypoint-dns.sh && chmod +x /entrypoint-dns.sh
+
+ENTRYPOINT ["/entrypoint-dns.sh"]

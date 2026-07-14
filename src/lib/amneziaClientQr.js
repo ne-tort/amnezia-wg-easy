@@ -14,7 +14,8 @@ const CHUNK_PAYLOAD = 850;
 const REQUIRED_JUNK = ['Jc', 'Jmin', 'Jmax', 'S1', 'S2', 'H1', 'H2', 'H3', 'H4'];
 const OPTIONAL_JUNK = ['S3', 'S4', 'I1', 'I2', 'I3', 'I4', 'I5'];
 
-const DNS_RE = /DNS = (\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b).*(\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b)/;
+// One or two IPv4 addresses on the DNS = line (Amnezia often uses a single gateway IP).
+const DNS_RE = /DNS\s*=\s*(\d{1,3}(?:\.\d{1,3}){3})(?:\s*,\s*(\d{1,3}(?:\.\d{1,3}){3}))?/;
 
 function parseIniWireguardStyle(text) {
   const cfg = {};
@@ -180,7 +181,7 @@ function buildAmneziaRoot(iniText, description, options = {}) {
   const dnsM = iniText.match(DNS_RE);
   if (dnsM) {
     root.dns1 = dnsM[1];
-    root.dns2 = dnsM[2];
+    if (dnsM[2]) root.dns2 = dnsM[2];
   }
 
   return root;

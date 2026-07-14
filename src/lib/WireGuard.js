@@ -20,7 +20,7 @@ const {
   BankError,
 } = require('./signaturesBank');
 const { isKnownProfile } = require('./obfuscationProfiles');
-const { isAmneziaDnsAvailable } = require('./amneziaDns');
+const { isAmneziaDnsAvailable, getStatus: getAmneziaDnsStatus } = require('./amneziaDns');
 const { generateAmneziaClientQrSvgs, buildAmneziaVpnExport, parseEndpoint } = require('./amneziaClientQr');
 
 const {
@@ -650,7 +650,8 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       applyFirewall();
     }
     const config = await this.getConfig();
-    const amneziaDnsAvailable = isAmneziaDnsAvailable();
+    const amneziaDnsStatus = getAmneziaDnsStatus();
+    const amneziaDnsAvailable = amneziaDnsStatus.available === true;
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
       name: client.name,
@@ -703,7 +704,21 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
         client.persistentKeepalive = persistentKeepalive;
       });
 
-    return { clients, serverCapabilities: { amneziaDnsAvailable } };
+    return {
+      clients,
+      serverCapabilities: {
+        amneziaDnsAvailable,
+        amneziaDns: {
+          phase: amneziaDnsStatus.phase,
+          desired: amneziaDnsStatus.desired,
+          lastError: amneziaDnsStatus.lastError,
+          busy: amneziaDnsStatus.busy,
+          updatedAt: amneziaDnsStatus.updatedAt,
+          profileId: amneziaDnsStatus.profileId,
+          profile: amneziaDnsStatus.profile,
+        },
+      },
+    };
   }
 
   async getClient({ clientId }) {

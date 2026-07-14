@@ -263,6 +263,31 @@ class API {
     });
   }
 
+  async getAmneziaDnsStatus() {
+    return this.call({ method: 'get', path: '/amnezia-dns' });
+  }
+
+  async getAmneziaDnsProfiles({ refresh = false } = {}) {
+    const q = refresh ? '?refresh=1' : '';
+    return this.call({ method: 'get', path: `/amnezia-dns/profiles${q}` });
+  }
+
+  async enableAmneziaDns({ profileId } = {}) {
+    return this.call({
+      method: 'post',
+      path: '/amnezia-dns/enable',
+      body: { profileId },
+    });
+  }
+
+  async disableAmneziaDns() {
+    return this.call({ method: 'post', path: '/amnezia-dns/disable' });
+  }
+
+  async forceCleanupAmneziaDns() {
+    return this.call({ method: 'post', path: '/amnezia-dns/force-cleanup' });
+  }
+
   async getRuleProfiles() {
     return this.call({ method: 'get', path: '/rule-profiles' });
   }

@@ -32,6 +32,7 @@ const {
   getProfilesCatalog,
 } = require('./obfuscationProfiles');
 const { BankError } = require('./signaturesBank');
+const amneziaDns = require('./amneziaDns');
 const { applyFirewall } = require('./firewall');
 
 /**
@@ -470,10 +471,73 @@ module.exports = class Server {
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
+        if (!amneziaDns.isAmneziaDnsAvailable()) {
+          throw httpError(503, 'Amnezia DNS is not running');
+        }
         const body = await readBody(event);
         const useServerDns = body.useServerDns === true;
         await WireGuard.updateClientDns({ clientId, useServerDns });
         return { success: true };
+      }))
+      .get('/api/amnezia-dns', defineEventHandler((event) => {
+        requireRoles(event, ['admin', 'moderator', 'user']);
+        return amneziaDns.getStatus();
+      }))
+      .get('/api/amnezia-dns/profiles', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator', 'user']);
+        try {
+          const q = getQuery(event) || {};
+          const forceProbe = q.refresh === '1' || q.refresh === 'true';
+          const catalog = await amneziaDns.listProfiles({ probe: true, forceProbe });
+          if (catalog.error) {
+            throw httpError(503, catalog.error);
+          }
+          return catalog;
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          const status = (err && err.status) || 503;
+          throw httpError(status, err.message || 'DNS profiles unavailable');
+        }
+      }))
+      .post('/api/amnezia-dns/enable', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const profileId = body && body.profileId != null ? body.profileId : undefined;
+          if (profileId === undefined || profileId === null || String(profileId).trim() === '') {
+            throw httpError(400, 'profileId is required');
+          }
+          const status = await amneziaDns.enable({ profileId: String(profileId).trim() });
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          if (err && err.status === 409) throw httpError(409, err.message);
+          if (err && err.status === 404) throw httpError(404, err.message);
+          if (err && err.status === 400) throw httpError(400, err.message);
+          if (err && err.status === 504) throw httpError(504, err.message);
+          if (err && err.status === 503) throw httpError(503, err.message);
+          throw httpError(500, err.message || 'Amnezia DNS enable failed');
+        }
+      }))
+      .post('/api/amnezia-dns/disable', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        try {
+          const status = await amneziaDns.disable();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia DNS disable failed');
+        }
+      }))
+      .post('/api/amnezia-dns/force-cleanup', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        try {
+          const status = await amneziaDns.forceCleanup();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia DNS cleanup failed');
+        }
       }))
       .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
         requireRoles(event, ['admin', 'moderator']);
