@@ -2,7 +2,7 @@
 
 FROM docker.io/library/node:20-alpine AS build_node_modules
 
-RUN npm install -g npm@latest
+# Keep the image npm (Node 20 ships npm 10). Do not bump to npm@latest — it may require Node 22+.
 
 RUN for i in 1 2 3 4 5; do \
   apk add --no-cache --virtual .gyp-deps python3 make g++ && break; \
