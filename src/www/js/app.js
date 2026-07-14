@@ -63,17 +63,7 @@ const UI_CHART_TYPES = [
   { type: 'bar', strokeWidth: 0 },
 ];
 
-// * Profile id -> label (order comes from API /signatures/profiles).
-const PROFILE_META = {
-  dns: { label: 'DNS' },
-  sip: { label: 'SIP' },
-  dtls: { label: 'DTLS' },
-  quic: { label: 'QUIC' },
-  quic_browser: { label: 'QUIC (browser)' },
-  stun: { label: 'STUN' },
-  webrtc: { label: 'WebRTC' },
-  stun_browser: { label: 'STUN (browser)' },
-};
+// Profile labels come from GET /api/signatures/profiles → profiles[].label
 
 const CHART_COLORS = {
   rx: { light: 'rgba(128,128,128,0.3)', dark: 'rgba(255,255,255,0.3)' },
@@ -117,13 +107,16 @@ new Vue({
 
     clientLevels: {},
     clientProfiles: {},
+    clientSignatures: {},
     /** Per-client download format for configuration link: 'conf' | 'amnezia' */
     clientDownloadFormat: {},
     clientUseServerDns: {},
     profileIds: [],
+    profileCatalog: [],
     defaultProfile: 'dns',
-    amneziaDnsAvailable: false,
+    signaturesBankError: null,
     regeneratingSignatures: false,
+    amneziaDnsAvailable: false,
     ruleProfiles: [],
     globalFirewallRules: [],
     globalRuleEdit: null,
@@ -265,29 +258,100 @@ new Vue({
         });
     },
     getClientProfile(client) {
-      return this.clientProfiles[client.id] ?? this.defaultProfile;
+      return this.clientProfiles[client.id] ?? client.defaultProfile ?? this.defaultProfile;
+    },
+    getClientSignature(client) {
+      return this.clientSignatures[client.id] ?? client.defaultSignature ?? null;
     },
     getClientProfileLabel(client) {
       const id = this.getClientProfile(client);
-      return this.getProfileLabel(id);
+      const sig = this.getClientSignature(client);
+      const base = this.getProfileLabel(id);
+      return sig ? `${base} #${sig}` : base;
     },
     getProfileLabel(profileId) {
-      const meta = PROFILE_META[profileId];
-      return meta ? meta.label : profileId;
+      const row = (this.profileCatalog || []).find((p) => (p.id || p.profile_id) === profileId);
+      if (row && row.label) return row.label;
+      return profileId;
+    },
+    getProfileHint(profileId) {
+      const row = (this.profileCatalog || []).find((p) => (p.id || p.profile_id) === profileId);
+      if (!row || row.count == null) return '';
+      return this.$t('signatureVariants', { count: row.count });
     },
     cycleClientProfile(client) {
+      if (this.signaturesBankError) {
+        alert(this.signaturesBankError);
+        return;
+      }
       const list = this.profileIds.length ? this.profileIds : [this.defaultProfile || 'dns'];
       const current = this.getClientProfile(client);
       let idx = list.indexOf(current);
       if (idx < 0) idx = 0;
       const next = list[(idx + 1) % list.length];
-      const prev = current;
+      const prevProfile = current;
+      const prevSig = this.getClientSignature(client);
       this.$set(this.clientProfiles, client.id, next);
       this.api.updateClientObfuscation({ clientId: client.id, profile: next })
+        .then((r) => {
+          if (r && r.signature != null) this.$set(this.clientSignatures, client.id, String(r.signature));
+          if (r && r.profile) this.$set(this.clientProfiles, client.id, r.profile);
+        })
         .catch((err) => {
-          this.$set(this.clientProfiles, client.id, prev);
+          this.$set(this.clientProfiles, client.id, prevProfile);
+          if (prevSig != null) this.$set(this.clientSignatures, client.id, prevSig);
           alert(err.message || err.toString());
         });
+    },
+    onObfuscationProfileChange(client, ev) {
+      const profile = ev.target.value;
+      const prev = this.getClientProfile(client);
+      const prevSig = this.getClientSignature(client);
+      this.$set(this.clientProfiles, client.id, profile);
+      this.api.updateClientObfuscation({ clientId: client.id, profile })
+        .then((r) => {
+          if (r && r.signature != null) this.$set(this.clientSignatures, client.id, String(r.signature));
+        })
+        .catch((err) => {
+          this.$set(this.clientProfiles, client.id, prev);
+          if (prevSig != null) this.$set(this.clientSignatures, client.id, prevSig);
+          ev.target.value = prev;
+          alert(err.message || err.toString());
+        });
+    },
+    async refreshClientSignature(client) {
+      if (this.regeneratingSignatures) return;
+      if (this.signaturesBankError) {
+        alert(this.signaturesBankError);
+        return;
+      }
+      this.regeneratingSignatures = true;
+      try {
+        const result = await this.api.refreshClientSignature({ clientId: client.id });
+        if (result && result.signature != null) {
+          this.$set(this.clientSignatures, client.id, String(result.signature));
+        }
+        if (result && result.profile) {
+          this.$set(this.clientProfiles, client.id, result.profile);
+        }
+      } catch (err) {
+        alert(err.message || this.$t('signaturesRefreshFailed') || 'Refresh failed.');
+      } finally {
+        this.regeneratingSignatures = false;
+      }
+    },
+    async reloadSignatureProfiles() {
+      try {
+        const r = await this.api.getSignaturesProfiles();
+        this.signaturesBankError = null;
+        this.profileIds = r && Array.isArray(r.profileIds) ? r.profileIds : [];
+        this.profileCatalog = r && Array.isArray(r.protocols) ? r.protocols : [];
+        this.defaultProfile = (r && (r.defaultProtocol || r.defaultProfile)) || (this.profileIds[0] || 'dns');
+      } catch (err) {
+        this.signaturesBankError = (err && err.message) || this.$t('signaturesBankUnavailable') || 'signatures.json unavailable';
+        this.profileIds = [];
+        this.profileCatalog = [];
+      }
     },
     getClientUseServerDns(client) {
       return this.clientUseServerDns[client.id] !== false;
@@ -338,32 +402,6 @@ new Vue({
       const fmt = (map && map[client.id]) || 'conf';
       const base = safe || 'configuration';
       return fmt === 'amnezia' ? `${base}.vpn` : `${base}.conf`;
-    },
-    onObfuscationProfileChange(client, ev) {
-      const profile = ev.target.value;
-      const prev = this.getClientProfile(client);
-      this.$set(this.clientProfiles, client.id, profile);
-      this.api.updateClientObfuscation({ clientId: client.id, profile })
-        .catch((err) => {
-          this.$set(this.clientProfiles, client.id, prev);
-          ev.target.value = prev;
-          alert(err.message || err.toString());
-        });
-    },
-    async regenerateSignatures() {
-      if (this.regeneratingSignatures) return;
-      this.regeneratingSignatures = true;
-      try {
-        const result = await this.api.regenerateSignatures();
-        if (!result || (!result.started && !result.success)) {
-          const msg = (result && result.message) || this.$t('signaturesRegenerateFailed') || 'Regeneration failed.';
-          alert(msg);
-        }
-      } catch (err) {
-        alert(err.message || this.$t('signaturesRegenerateFailed') || 'Regeneration failed.');
-      } finally {
-        this.regeneratingSignatures = false;
-      }
     },
     async copyConfig(client) {
       try {
@@ -456,6 +494,9 @@ new Vue({
         this.clients = list.map((client) => {
         this.$set(this.clientLevels, client.id, client.defaultLevel != null ? client.defaultLevel : 1);
         this.$set(this.clientProfiles, client.id, client.defaultProfile || this.defaultProfile || 'dns');
+        if (client.defaultSignature != null) {
+          this.$set(this.clientSignatures, client.id, String(client.defaultSignature));
+        }
         if (this.amneziaDnsAvailable) {
           this.$set(this.clientUseServerDns, client.id, client.useServerDns !== false);
         }
@@ -1030,15 +1071,7 @@ new Vue({
       .then((session) => {
         this.authenticated = session.authenticated;
         this.syncPanelUserFromSession(session);
-        this.api.getSignaturesProfiles()
-          .then((r) => {
-            this.profileIds = r && Array.isArray(r.profileIds) ? r.profileIds : [];
-            this.defaultProfile = (r && r.defaultProfile) || 'dns';
-          })
-          .catch(() => {
-            this.profileIds = [];
-            this.defaultProfile = 'dns';
-          });
+        this.reloadSignatureProfiles();
         this.loadGlobalFirewallRules();
         return this.ensureRuleProfiles();
       })

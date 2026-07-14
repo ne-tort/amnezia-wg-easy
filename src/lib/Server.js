@@ -25,8 +25,13 @@ const {
 const db = require('./db');
 const auth = require('./auth');
 const WireGuard = require('./WireGuard');
-const { isKnownProfile, getProfileIds, DEFAULT_PROFILE_ID, getProfilesMeta } = require('./obfuscationProfiles');
-const { runSignatureGeneration, captureProfileForPanel } = require('./signatures');
+const {
+  isKnownProfile,
+  getProfileIds,
+  DEFAULT_PROFILE_ID,
+  getProfilesCatalog,
+} = require('./obfuscationProfiles');
+const { BankError } = require('./signaturesBank');
 const { applyFirewall } = require('./firewall');
 const {
   normalizeCidr,
@@ -230,12 +235,14 @@ module.exports = class Server {
         }
         let profile;
         if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
+        let signature;
+        if (query.signature !== undefined && query.signature !== '') signature = String(query.signature);
         if (query.encoding === 'amnezia') {
-          const svgs = await WireGuard.getClientAmneziaQRCodeSvgs({ clientId, level, profile });
+          const svgs = await WireGuard.getClientAmneziaQRCodeSvgs({ clientId, level, profile, signature });
           setHeader(event, 'Content-Type', 'application/json');
           return JSON.stringify({ svgs, chunkCount: svgs.length });
         }
-        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile });
+        const svg = await WireGuard.getClientQRCodeSVG({ clientId, level, profile, signature });
         setHeader(event, 'Content-Type', 'image/svg+xml');
         return svg;
       }))
@@ -249,10 +256,12 @@ module.exports = class Server {
         }
         let profile;
         if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
+        let signature;
+        if (query.signature !== undefined && query.signature !== '') signature = String(query.signature);
         const amneziaExport =
           query.format === 'amnezia' || query.format === 'vpn';
         const client = await WireGuard.getClient({ clientId });
-        const config = await WireGuard.getClientConfiguration({ clientId, level, profile });
+        const config = await WireGuard.getClientConfiguration({ clientId, level, profile, signature });
         const serverRow = db.serverConfig.get();
         if (serverRow) {
           const now = Math.floor(Date.now() / 1000);
@@ -278,7 +287,7 @@ module.exports = class Server {
           .replace(/-$/, '')
           .substring(0, 32);
         if (amneziaExport) {
-          const vpnText = await WireGuard.getClientAmneziaVpnExport({ clientId, level, profile });
+          const vpnText = await WireGuard.getClientAmneziaVpnExport({ clientId, level, profile, signature });
           setHeader(
             event,
             'Content-Disposition',
@@ -335,7 +344,14 @@ module.exports = class Server {
       .post('/api/wireguard/client', defineEventHandler(async (event) => {
         requireRoles(event, ['admin', 'moderator']);
         const { name } = await readBody(event);
-        await WireGuard.createClient({ name });
+        try {
+          await WireGuard.createClient({ name });
+        } catch (err) {
+          if (err instanceof BankError || err.name === 'BankError') {
+            throw createError({ status: err.status || 503, message: err.message });
+          }
+          throw err;
+        }
         return { success: true };
       }))
       .delete('/api/wireguard/client/:clientId', defineEventHandler(async (event) => {
@@ -388,11 +404,35 @@ module.exports = class Server {
         if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
           throw createError({ status: 403 });
         }
-        const body = await readBody(event);
-        const profile = typeof body.profile === 'string' ? body.profile : undefined;
-        const level = typeof body.level === 'number' ? body.level : (typeof body.level === 'string' ? parseInt(body.level, 10) : undefined);
-        await WireGuard.updateClientObfuscation({ clientId, profile, level });
-        return { success: true };
+        try {
+          const body = await readBody(event);
+          const profile = typeof body.profile === 'string' ? body.profile : undefined;
+          const signature = body.signature != null ? String(body.signature) : undefined;
+          const level = typeof body.level === 'number' ? body.level : (typeof body.level === 'string' ? parseInt(body.level, 10) : undefined);
+          const result = await WireGuard.updateClientObfuscation({ clientId, profile, signature, level });
+          return { success: true, ...result };
+        } catch (err) {
+          if (err instanceof BankError || err.name === 'BankError') {
+            throw createError({ status: err.status || 503, message: err.message });
+          }
+          throw err;
+        }
+      }))
+      .post('/api/wireguard/client/:clientId/obfuscation/refresh', defineEventHandler(async (event) => {
+        requireRoles(event, ['admin', 'moderator']);
+        const clientId = getRouterParam(event, 'clientId');
+        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
+          throw createError({ status: 403 });
+        }
+        try {
+          const result = await WireGuard.refreshClientSignature({ clientId });
+          return { success: true, ...result };
+        } catch (err) {
+          if (err instanceof BankError || err.name === 'BankError') {
+            throw createError({ status: err.status || 503, message: err.message });
+          }
+          throw err;
+        }
       }))
       .put('/api/wireguard/client/:clientId/dns', defineEventHandler(async (event) => {
         requireRoles(event, ['admin', 'moderator']);
@@ -575,30 +615,17 @@ module.exports = class Server {
         return db.traffic.deltas.sumByPeriod(tsFrom);
       }))
       .get('/api/signatures/profiles', defineEventHandler(() => {
-        const meta = getProfilesMeta();
-        return {
-          profileIds: getProfileIds(),
-          defaultProfile: DEFAULT_PROFILE_ID,
-          browserEnabled: meta?.browser_enabled ?? false,
-          availableProfileIds: meta?.available_profile_ids ?? getProfileIds(),
-        };
-      }))
-      .get('/api/signatures/capabilities', defineEventHandler(() => {
-        const meta = getProfilesMeta();
-        return meta || { profile_ids: getProfileIds(), default_profile: DEFAULT_PROFILE_ID };
-      }))
-      .post('/api/signatures/capture/:profile', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
-        const profile = String(getRouterParam(event, 'profile') || '').trim();
-        if (!profile || !isKnownProfile(profile)) {
-          throw createError({ status: 400, message: 'Unknown or unavailable profile' });
+        const meta = getProfilesCatalog();
+        if (meta.ok === false) {
+          throw createError({ status: 503, message: meta.error || 'signatures.json unavailable' });
         }
-        return captureProfileForPanel(profile);
-      }))
-      .post('/api/signatures/regenerate', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator']);
-        runSignatureGeneration();
-        return { success: true, started: true, message: 'Regeneration started in background.' };
+        return {
+          ok: true,
+          profileIds: meta.profileIds || getProfileIds(),
+          protocols: meta.protocols || [],
+          defaultProtocol: meta.defaultProtocol || DEFAULT_PROFILE_ID,
+          defaultProfile: meta.defaultProtocol || DEFAULT_PROFILE_ID,
+        };
       }))
       .get('/api/rule-profiles', defineEventHandler(() => {
         return db.ruleProfiles.getAll();

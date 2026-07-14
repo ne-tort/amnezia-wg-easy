@@ -1,16 +1,41 @@
 #!/bin/bash
-# Amnezia WG-Easy — custom build (DPI patches, UI: no QR, Copy button)
-# Clone + ./deploy.sh or docker compose up -d --build
+# Deploy Amnezia WG-Easy (Docker Compose).
+# Usage: ./deploy.sh
 #
-# Env layout:
-#   .env.example = template (original, committed). Placeholders only; never modified by deploy.
-#   .env         = working copy (generated). Used by docker compose. Delete to start from scratch.
+#   .env.example — committed template
+#   .env         — working copy for compose (created from template if missing)
 
 set -e
 cd "$(dirname "$0")"
 
+# Optional submodule (signature bank tooling); panel image does not need it at build time.
+if [ -f .gitmodules ] && [ -d .git ]; then
+  if [ ! -f capture_udp_sig/README.md ]; then
+    echo "[deploy] Initializing git submodules (capture_udp_sig)..."
+    git submodule update --init --recursive || true
+  fi
+fi
+
 ENV_TEMPLATE=".env.example"
 ENV_WORKING=".env"
+if [ ! -f "$ENV_TEMPLATE" ]; then
+  echo "[deploy] ERROR: missing $ENV_TEMPLATE" >&2
+  exit 1
+fi
+
+# Portable in-place replace (GNU sed / Git Bash / BSD sed).
+env_set() {
+  local key="$1" val="$2"
+  if grep -qE "^${key}=" "$ENV_WORKING" 2>/dev/null; then
+    if sed --version >/dev/null 2>&1; then
+      sed -i "s|^${key}=.*|${key}=${val}|" "$ENV_WORKING"
+    else
+      sed -i '' "s|^${key}=.*|${key}=${val}|" "$ENV_WORKING"
+    fi
+  else
+    echo "${key}=${val}" >> "$ENV_WORKING"
+  fi
+}
 
 # Working env: create from template if missing (so deleting .env and re-running deploy = fresh start)
 if [ ! -f "$ENV_WORKING" ]; then
@@ -47,11 +72,7 @@ fi
 if [ "$NEED_WG_HOST_DETECT" -eq 1 ]; then
   WG_HOST_NEW=$(curl -s -4 --max-time 5 ifconfig.me 2>/dev/null || true)
   if [ -n "$WG_HOST_NEW" ]; then
-    if grep -qE "^WG_HOST=" "$ENV_WORKING" 2>/dev/null; then
-      sed -i "s|^WG_HOST=.*|WG_HOST=${WG_HOST_NEW}|" "$ENV_WORKING"
-    else
-      echo "WG_HOST=${WG_HOST_NEW}" >> "$ENV_WORKING"
-    fi
+    env_set WG_HOST "$WG_HOST_NEW"
     echo "[deploy] WG_HOST set to ${WG_HOST_NEW}"
   else
     echo "[deploy] WARNING: Could not detect public IP; set WG_HOST in $ENV_WORKING (IP or domain)"
@@ -63,30 +84,22 @@ ADMIN_USER_VAL=$(grep -E "^ADMIN_USERNAME=" "$ENV_WORKING" 2>/dev/null | cut -d=
 ADMIN_PWD_VAL=$(grep -E "^ADMIN_PASSWORD=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
 if [ -z "$ADMIN_USER_VAL" ] || [ "$ADMIN_USER_VAL" = "your_admin_username" ]; then
   ADMIN_USER_VAL=admin
-  if grep -qE "^ADMIN_USERNAME=" "$ENV_WORKING" 2>/dev/null; then
-    sed -i "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=admin|" "$ENV_WORKING"
-  else
-    echo "ADMIN_USERNAME=admin" >> "$ENV_WORKING"
-  fi
+  env_set ADMIN_USERNAME admin
 fi
 if [ -z "$ADMIN_PWD_VAL" ] || [ "$ADMIN_PWD_VAL" = "your_admin_password" ]; then
   ADMIN_PWD_VAL=admin
-  if grep -qE "^ADMIN_PASSWORD=" "$ENV_WORKING" 2>/dev/null; then
-    sed -i "s|^ADMIN_PASSWORD=.*|ADMIN_PASSWORD=${ADMIN_PWD_VAL}|" "$ENV_WORKING"
-  else
-    echo "ADMIN_PASSWORD=${ADMIN_PWD_VAL}" >> "$ENV_WORKING"
-  fi
+  env_set ADMIN_PASSWORD "$ADMIN_PWD_VAL"
 fi
 
 # Session secret: required for stable/auth-safe sessions; generate if missing.
 SESSION_SECRET_VAL=$(grep -E "^SESSION_SECRET=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
 if [ -z "$SESSION_SECRET_VAL" ] || [ "$SESSION_SECRET_VAL" = "change-me-in-production" ]; then
-  SESSION_SECRET_VAL=$(openssl rand -base64 32)
-  if grep -qE "^SESSION_SECRET=" "$ENV_WORKING" 2>/dev/null; then
-    sed -i "s|^SESSION_SECRET=.*|SESSION_SECRET=${SESSION_SECRET_VAL}|" "$ENV_WORKING"
+  if command -v openssl >/dev/null 2>&1; then
+    SESSION_SECRET_VAL=$(openssl rand -base64 32)
   else
-    echo "SESSION_SECRET=${SESSION_SECRET_VAL}" >> "$ENV_WORKING"
+    SESSION_SECRET_VAL=$(head -c 32 /dev/urandom | base64 | tr -d '\n')
   fi
+  env_set SESSION_SECRET "$SESSION_SECRET_VAL"
   echo "[deploy] Generated SESSION_SECRET (saved in $ENV_WORKING)"
 fi
 
@@ -96,11 +109,7 @@ WG_ADDR=${WG_ADDR:-10.8.0.x}
 WG_GW="${WG_ADDR%x}1"
 CURRENT_DNS=$(grep -E "^WG_DEFAULT_DNS=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
 if [ -z "$CURRENT_DNS" ]; then
-  if grep -qE "^WG_DEFAULT_DNS=" "$ENV_WORKING" 2>/dev/null; then
-    sed -i "s|^WG_DEFAULT_DNS=.*|WG_DEFAULT_DNS=${WG_GW}|" "$ENV_WORKING"
-  else
-    echo "WG_DEFAULT_DNS=${WG_GW}" >> "$ENV_WORKING"
-  fi
+  env_set WG_DEFAULT_DNS "$WG_GW"
   echo "[deploy] WG_DEFAULT_DNS set to ${WG_GW} (Amnezia DNS enabled)"
 fi
 

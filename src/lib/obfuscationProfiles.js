@@ -1,67 +1,80 @@
 'use strict';
 
-const { getI1ForProfile, getProfileSignatures } = require('./signatures');
-const { listProfilesMeta } = require('./siglabBridge');
+/**
+ * Thin catalog helpers over the static signature bank.
+ */
 
-let _profileIds = null;
-let _defaultProfileId = 'dns';
-let _meta = null;
+const {
+  loadBankSync,
+  listProtocols,
+  getDefaultProtocol,
+  getProfilesCatalog: buildCatalog,
+  getEntry,
+  invalidateCache,
+  BankError,
+} = require('./signaturesBank');
 
-function _ensureLoaded() {
-  if (_profileIds !== null) return;
-  _meta = listProfilesMeta();
-  if (_meta && Array.isArray(_meta.profile_ids) && _meta.profile_ids.length) {
-    _profileIds = _meta.profile_ids;
-    _defaultProfileId = _meta.default_profile || (_profileIds.includes('dns') ? 'dns' : _profileIds[0]);
-    return;
+function getProfilesCatalog() {
+  try {
+    return buildCatalog(loadBankSync());
+  } catch (err) {
+    const message = err instanceof BankError ? err.message : err.message;
+    return {
+      ok: false,
+      error: message,
+      profileIds: [],
+      protocols: [],
+      defaultProtocol: null,
+      defaultProfile: null,
+    };
   }
-  console.error('obfuscationProfiles: siglab list unavailable; profile list empty');
-  _profileIds = [];
-  _defaultProfileId = 'dns';
-}
-
-function getProfilesMeta() {
-  _ensureLoaded();
-  return _meta;
 }
 
 function getProfileIds() {
-  _ensureLoaded();
-  return _profileIds;
+  try {
+    return listProtocols(loadBankSync());
+  } catch {
+    return [];
+  }
 }
 
 function getDefaultProfileId() {
-  _ensureLoaded();
-  return _defaultProfileId;
+  try {
+    return getDefaultProtocol(loadBankSync()) || null;
+  } catch {
+    return null;
+  }
 }
 
-function getProfileI1(profileId) {
-  return getI1ForProfile(profileId);
+function refreshCatalog() {
+  invalidateCache();
+  return getProfilesCatalog();
 }
 
 function isKnownProfile(profileId) {
   return typeof profileId === 'string' && getProfileIds().includes(profileId);
 }
 
+function getProfileSignatures(protocol, variant) {
+  const slots = getEntry(protocol, variant, loadBankSync());
+  if (!slots) {
+    throw new BankError(`signature not found: ${protocol}#${variant}`, { status: 400 });
+  }
+  return slots;
+}
+
 module.exports = {
-  getProfileI1,
   getProfileSignatures,
   getProfileIds,
   getDefaultProfileId,
-  getProfilesMeta,
+  getProfilesCatalog,
+  refreshCatalog,
   isKnownProfile,
 };
-
-Object.defineProperty(module.exports, 'PROFILE_IDS', {
-  enumerable: true,
-  get() {
-    return getProfileIds();
-  },
-});
 
 Object.defineProperty(module.exports, 'DEFAULT_PROFILE_ID', {
   enumerable: true,
   get() {
-    return getDefaultProfileId();
+    return getDefaultProfileId() || 'dns';
   },
 });

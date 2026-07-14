@@ -11,8 +11,15 @@ const Util = require('./Util');
 const ServerError = require('./ServerError');
 const db = require('./db');
 const { migrateAwgToDb } = require('./migrateAwgToDb');
-const { isKnownProfile, DEFAULT_PROFILE_ID } = require('./obfuscationProfiles');
-const { loadSignatures, runSignatureGeneration, getProfileSignatures } = require('./signatures');
+const {
+  loadBank,
+  ensureBinding,
+  assignNewClientBinding,
+  pickRandomVariant,
+  listVariants,
+  BankError,
+} = require('./signaturesBank');
+const { isKnownProfile } = require('./obfuscationProfiles');
 const { isAmneziaDnsAvailable } = require('./amneziaDns');
 const { generateAmneziaClientQrSvgs, buildAmneziaVpnExport, parseEndpoint } = require('./amneziaClientQr');
 
@@ -282,6 +289,7 @@ const WireGuard = class {
         expiresAt: c.expires_at ? new Date(c.expires_at * 1000) : null,
         ruleProfileId: c.rule_profile_id ?? undefined,
         defaultProfile: c.default_profile || undefined,
+        defaultSignature: c.default_signature || undefined,
         defaultLevel: c.default_level ?? undefined,
         useServerDns: c.use_server_dns !== 0,
       };
@@ -575,6 +583,7 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
       expires_at: c.expiresAt ? Math.floor(new Date(c.expiresAt).getTime() / 1000) : null,
       rule_profile_id: c.ruleProfileId ?? null,
       default_profile: c.defaultProfile || null,
+      default_signature: c.defaultSignature || null,
       default_level: c.defaultLevel ?? null,
       use_server_dns: c.useServerDns !== false ? 1 : 0,
     }));
@@ -707,13 +716,36 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     return client;
   }
 
-  async getClientConfiguration({ clientId, forQR = false, forceOmitI1ForCapacity = false, level, profile }) {
-    await loadSignatures();
+  async getClientConfiguration({ clientId, forQR = false, forceOmitI1ForCapacity = false, level, profile, signature }) {
+    const bank = await loadBank();
     const config = await this.getConfig();
     const client = await this.getClient({ clientId });
 
-    const profileId = (profile != null && isKnownProfile(profile)) ? profile : DEFAULT_PROFILE_ID;
-    const prof = getProfileSignatures(profileId);
+    const preferredProfile = (profile != null && typeof profile === 'string' && profile.trim())
+      ? profile.trim()
+      : (client.defaultProfile || null);
+    const preferredSignature = (signature != null && String(signature).trim())
+      ? String(signature).trim()
+      : (client.defaultSignature || null);
+
+    const binding = ensureBinding(preferredProfile, preferredSignature, bank);
+    if (binding.changed) {
+      const row = db.clients.getById(clientId);
+      if (row) {
+        row.default_profile = binding.profile;
+        row.default_signature = binding.signature;
+        row.updated_at = Math.floor(Date.now() / 1000);
+        db.clients.update(row);
+        this.__config = null;
+        client.defaultProfile = binding.profile;
+        client.defaultSignature = binding.signature;
+      }
+    }
+
+    const prof = binding.slots;
+    if (!prof || !prof.i1) {
+      throw new BankError(`signature not found: ${binding.profile}#${binding.signature}`, { status: 400 });
+    }
 
     const omitI1 = (forQR && WG_QR_COMPACT) || forceOmitI1ForCapacity;
 
@@ -814,7 +846,7 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     return rewriteIniEndpointHostToIp(iniText);
   }
 
-  async getClientQRCodeSVG({ clientId, level, profile }) {
+  async getClientQRCodeSVG({ clientId, level, profile, signature }) {
     // When level is provided, build config by level (may be large for L5). Otherwise compact (no I1).
     const config = await this.getClientConfiguration({
       clientId,
@@ -822,6 +854,7 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       forceOmitI1ForCapacity: level === undefined || level === null,
       level,
       profile,
+      signature,
     });
     return QRCode.toString(config, {
       type: 'svg',
@@ -834,13 +867,14 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
    * AmneziaVPN app: chunked Base64URL QR payloads (see amneziaClientQr.js).
    * @returns {Promise<string[]>} One SVG per chunk
    */
-  async getClientAmneziaQRCodeSvgs({ clientId, level, profile }) {
+  async getClientAmneziaQRCodeSvgs({ clientId, level, profile, signature }) {
     const config = await this.getClientConfiguration({
       clientId,
       forQR: level === undefined || level === null,
       forceOmitI1ForCapacity: level === undefined || level === null,
       level,
       profile,
+      signature,
     });
     const client = await this.getClient({ clientId });
     const description = client.name && String(client.name).trim() ? client.name : 'AmneziaWG';
@@ -875,13 +909,14 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
    * AmneziaVPN import string (vpn:// + Base64URL(qCompress(JSON))), same as official ExportController.
    * @returns {Promise<string>}
    */
-  async getClientAmneziaVpnExport({ clientId, level, profile }) {
+  async getClientAmneziaVpnExport({ clientId, level, profile, signature }) {
     const config = await this.getClientConfiguration({
       clientId,
       forQR: level === undefined || level === null,
       forceOmitI1ForCapacity: level === undefined || level === null,
       level,
       profile,
+      signature,
     });
     return this.buildAmneziaVpnFromIni(config, clientId);
   }
@@ -891,7 +926,8 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       throw new Error('Missing: Name');
     }
 
-    runSignatureGeneration();
+    const bank = await loadBank();
+    const binding = assignNewClientBinding(bank);
 
     const privateKey = await Util.exec('wg genkey');
     const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`);
@@ -923,8 +959,9 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       updated_at: now,
       expires_at: null,
       rule_profile_id: 1,
-      default_profile: null,
-      default_level: null,
+      default_profile: binding.profile,
+      default_signature: binding.signature,
+      default_level: 1,
       use_server_dns: 1,
     });
 
@@ -943,6 +980,9 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       createdAt: new Date(now * 1000),
       updatedAt: new Date(now * 1000),
       enabled: true,
+      defaultProfile: binding.profile,
+      defaultSignature: binding.signature,
+      defaultLevel: 1,
     };
   }
 
@@ -1015,15 +1055,69 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     applyFirewall();
   }
 
-  async updateClientObfuscation({ clientId, profile, level }) {
+  async updateClientObfuscation({ clientId, profile, signature, level }) {
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
-    if (profile !== undefined) client.default_profile = profile;
+
+    const bank = await loadBank();
+
+    if (profile !== undefined) {
+      const pid = typeof profile === 'string' ? profile.trim() : '';
+      if (!pid || !isKnownProfile(pid)) {
+        throw new ServerError(`Unknown protocol: ${profile}`, 400);
+      }
+      client.default_profile = pid;
+      if (signature === undefined) {
+        const next = pickRandomVariant(pid, bank);
+        if (!next) throw new ServerError(`No signature variants for ${pid}`, 400);
+        client.default_signature = next;
+      }
+    }
+
+    if (signature !== undefined) {
+      const pid = client.default_profile;
+      const variants = listVariants(pid, bank);
+      const vk = String(signature).trim();
+      if (!variants.includes(vk)) {
+        throw new ServerError(`Unknown signature variant ${vk} for ${pid}`, 400);
+      }
+      client.default_signature = vk;
+    }
+
     if (level !== undefined) client.default_level = level;
     client.updated_at = Math.floor(Date.now() / 1000);
     db.clients.update(client);
     this.__config = null;
     await this.saveConfig();
+    return {
+      profile: client.default_profile,
+      signature: client.default_signature,
+      level: client.default_level,
+    };
+  }
+
+  async refreshClientSignature({ clientId }) {
+    const client = db.clients.getById(clientId);
+    if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    const bank = await loadBank();
+    const binding = ensureBinding(client.default_profile, client.default_signature, bank);
+    const next = pickRandomVariant(binding.profile, bank, { exclude: binding.signature });
+    if (!next) {
+      throw new ServerError('No alternative signatures for this protocol', 400);
+    }
+    if (binding.changed) {
+      client.default_profile = binding.profile;
+    }
+    client.default_signature = next;
+    client.updated_at = Math.floor(Date.now() / 1000);
+    db.clients.update(client);
+    this.__config = null;
+    await this.saveConfig();
+    return {
+      profile: client.default_profile,
+      signature: client.default_signature,
+      level: client.default_level,
+    };
   }
 
   async updateClientDns({ clientId, useServerDns }) {

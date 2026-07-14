@@ -232,11 +232,18 @@ class API {
     });
   }
 
-  async updateClientObfuscation({ clientId, profile, level }) {
+  async updateClientObfuscation({ clientId, profile, signature, level }) {
     return this.call({
       method: 'put',
       path: `/wireguard/client/${clientId}/obfuscation`,
-      body: { profile, level },
+      body: { profile, signature, level },
+    });
+  }
+
+  async refreshClientSignature({ clientId }) {
+    return this.call({
+      method: 'post',
+      path: `/wireguard/client/${clientId}/obfuscation/refresh`,
     });
   }
 
@@ -314,10 +321,6 @@ class API {
 
   async getSignaturesProfiles() {
     return this.call({ method: 'get', path: '/signatures/profiles' });
-  }
-
-  async regenerateSignatures() {
-    return this.call({ method: 'post', path: '/signatures/regenerate' });
   }
 
   async getTrafficClient(clientId, period) {

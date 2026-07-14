@@ -1,20 +1,24 @@
 .env
 **/__pycache__/
 *.pyc
-/modules/sui/deploy/deploy.config.yaml
-/wg0.conf
-/wg0.json
-/vpn-client-test/wg0.conf
-/vpn-client-smb/wg0.conf
-/synology/
-/src/node_modules
 .DS_Store
 *.swp
 
-# Amnezia xray core submodule (optional)
-/amnezia-xray-core/
+/src/node_modules
+/wg0.conf
+/wg0.json
+/1.conf
+/tmp_smb.conf
 
-# capture_udp_sig is a git submodule (see capture_udp_sig/)
-
-# Legacy local copy (optional, not tracked)
+# Local / optional worktrees (not part of the panel image)
 /signature-lab/
+/amnezia-xray-core/
+/synology/
+/exit-core/
+/xray/
+/vpn-client-smb/
+/vpn-client-test/
+/modules/
+/remote-deploy-cascade/
+
+# capture_udp_sig is a git submodule

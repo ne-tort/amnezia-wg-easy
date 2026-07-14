@@ -1,5 +1,4 @@
-# Amnezia WG-Easy — custom build (DPI patches, UI: no QR, Copy button)
-# Run: ./deploy.sh or docker compose up -d --build
+# Amnezia WG-Easy — ./deploy.sh or: docker compose up -d --build
 
 services:
   amnezia-dns:

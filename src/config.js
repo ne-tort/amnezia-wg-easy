@@ -111,9 +111,6 @@ module.exports.H2 = process.env.H2 || WG_HEADER_RANGE_DEFAULT;
 module.exports.H3 = process.env.H3 || WG_HEADER_RANGE_DEFAULT;
 module.exports.H4 = process.env.H4 || WG_HEADER_RANGE_DEFAULT;
 
-// * Default size for <r N> in I4/I5 when signatures.json omits those keys (must match OBFS_R_BYTES in Python run_all).
-module.exports.OBFS_R_BYTES = parseInt(process.env.OBFS_R_BYTES || '48', 10);
-
 // WG_QR_COMPACT: when true, QR encodes config without I1 (smaller, easier to scan).
 // AmneziaWG works without I1 (AmneziaWG 1.0 mode). Use file download for full DPI config.
 module.exports.WG_QR_COMPACT = process.env.WG_QR_COMPACT
