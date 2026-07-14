@@ -226,7 +226,7 @@ function clientConfigVersionsInsert(row) {
   return nextVersion;
 }
 
-// * Rule profiles (Synology first via sort_order)
+// * Rule profiles (ordered by sort_order)
 function ruleProfilesGetAll() {
   return getDb().prepare('SELECT * FROM rule_profiles ORDER BY sort_order ASC, id ASC').all();
 }
