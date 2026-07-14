@@ -15,6 +15,10 @@ const crypto = require('node:crypto');
 const { WG_PATH } = require('../config');
 
 const SIGNATURES_PATH = path.join(WG_PATH, 'signatures.json');
+const SEED_CANDIDATES = [
+  path.join(__dirname, '..', 'config', 'signatures.seed.json'), // Docker: /app/config/...
+  path.join(__dirname, '..', '..', 'config', 'signatures.seed.json'), // local: repo/config/...
+];
 const SLOT_KEYS = ['i1', 'i2', 'i3', 'i4', 'i5'];
 
 class BankError extends Error {
@@ -23,6 +27,51 @@ class BankError extends Error {
     this.name = 'BankError';
     this.status = status;
   }
+}
+
+function resolveSeedPath() {
+  for (const p of SEED_CANDIDATES) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).size > 0) return p;
+    } catch {
+      // continue
+    }
+  }
+  return null;
+}
+
+/**
+ * Copy packaged seed into WG_PATH when signatures.json is missing or unusable.
+ * Returns true if a seed was written.
+ */
+function ensureSeedBank() {
+  let needsSeed = false;
+  try {
+    if (!fs.existsSync(SIGNATURES_PATH) || fs.statSync(SIGNATURES_PATH).size === 0) {
+      needsSeed = true;
+    } else {
+      try {
+        parseBankObject(JSON.parse(fs.readFileSync(SIGNATURES_PATH, 'utf8')));
+      } catch {
+        needsSeed = true;
+      }
+    }
+  } catch {
+    needsSeed = true;
+  }
+
+  if (!needsSeed) return false;
+  const seedPath = resolveSeedPath();
+  if (!seedPath) {
+    throw new BankError('signatures.json missing and no packaged seed available');
+  }
+
+  fs.mkdirSync(path.dirname(SIGNATURES_PATH), { recursive: true });
+  fs.copyFileSync(seedPath, SIGNATURES_PATH);
+  invalidateCache();
+  // eslint-disable-next-line no-console
+  console.log(`[signaturesBank] seeded ${SIGNATURES_PATH} from ${seedPath}`);
+  return true;
 }
 
 /** @type {{ mtimeMs: number, bank: object } | null} */
@@ -240,8 +289,10 @@ function getProfilesCatalog(bank) {
 
 module.exports = {
   SIGNATURES_PATH,
+  SEED_CANDIDATES,
   SLOT_KEYS,
   BankError,
+  ensureSeedBank,
   invalidateCache,
   loadBank,
   loadBankSync,

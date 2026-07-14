@@ -51,7 +51,6 @@ RUN mkdir -p /var/run/amneziawg && \
 		i=0; while [ \$i -lt 120 ]; do [ -S /var/run/amneziawg/\$INTERFACE.sock ] \&\& break; sleep 0.5; i=\$((i+1)); done' /usr/bin/awg-quick
 
 COPY config/dnsmasq-amnezia.conf /etc/dnsmasq-amnezia.conf
-COPY config/signatures.seed.json /app/config/signatures.seed.json
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -59,6 +58,8 @@ COPY migrations /migrations
 
 COPY --from=build_node_modules /app /app
 COPY --from=build_node_modules /node_modules /app/node_modules
+# Seed after app copy so it is never wiped by the build stage overlay.
+COPY config/signatures.seed.json /app/config/signatures.seed.json
 
 COPY scripts/cascade-in-container-postup.sh scripts/cascade-in-container-predown.sh /app/scripts/
 RUN chmod +x /app/scripts/cascade-in-container-postup.sh /app/scripts/cascade-in-container-predown.sh

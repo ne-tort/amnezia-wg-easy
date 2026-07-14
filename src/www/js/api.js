@@ -48,7 +48,12 @@ class API {
     }
 
     if (!res.ok) {
-      const msg = json.error || json.message || json.statusMessage || res.statusText;
+      const msg = json.error
+        || json.message
+        || json.statusMessage
+        || (json.data && (json.data.error || json.data.message))
+        || res.statusText
+        || `HTTP ${res.status}`;
       const err = new Error(msg);
       err.status = res.status;
       err.code = json.code || (json.data && json.data.code);

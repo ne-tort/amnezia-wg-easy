@@ -11,6 +11,10 @@ const { startAmneziaDns, stopAmneziaDns } = require('./lib/amneziaDns');
 const { startTrafficRecorder, stopTrafficRecorder } = require('./lib/trafficRecorder');
 
 async function main() {
+  // * Ensure static signature bank exists before any client/API code touches it.
+  const { ensureSeedBank } = require('./lib/signaturesBank');
+  ensureSeedBank();
+
   db.getDb();
 
   // * Sync endpoint from env to app_settings so client configs use current WG_HOST:WG_PORT after restart.

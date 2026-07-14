@@ -33,6 +33,22 @@ const {
 } = require('./obfuscationProfiles');
 const { BankError } = require('./signaturesBank');
 const { applyFirewall } = require('./firewall');
+
+/** h3 only exposes statusMessage (not message) to clients — always set both + data.error. */
+function httpError(statusCode, message) {
+  return createError({
+    statusCode,
+    statusMessage: message,
+    message,
+    data: { error: message },
+  });
+}
+
+function bankHttpError(err) {
+  const message = (err && err.message) || 'signatures.json unavailable';
+  const statusCode = (err && err.status) || 503;
+  return httpError(statusCode, message);
+}
 const {
   normalizeCidr,
   validateCidr,
@@ -134,19 +150,19 @@ module.exports = class Server {
         return { authenticated, role, username };
       }))
       .post('/api/session', defineEventHandler(async (event) => {
-        const body = await readBody(event);
+        const body = (await readBody(event)) || {};
         const username = typeof body.username === 'string' ? body.username.trim() : '';
         const password = typeof body.password === 'string' ? body.password : '';
         if (!username || !password) {
-          throw createError({ status: 401, message: 'Missing: username or password' });
+          throw httpError(401, 'Missing: username or password');
         }
         const user = db.panelUsers.findByUsername(username);
         if (!user) {
-          throw createError({ status: 401, message: 'Incorrect username or password' });
+          throw httpError(401, 'Incorrect username or password');
         }
         const ok = await auth.verifyPassword(user.password_hash, password);
         if (!ok) {
-          throw createError({ status: 401, message: 'Incorrect username or password' });
+          throw httpError(401, 'Incorrect username or password');
         }
         event.node.req.session.userId = user.id;
         event.node.req.session.role = user.role;
@@ -348,7 +364,7 @@ module.exports = class Server {
           await WireGuard.createClient({ name });
         } catch (err) {
           if (err instanceof BankError || err.name === 'BankError') {
-            throw createError({ status: err.status || 503, message: err.message });
+            throw bankHttpError(err);
           }
           throw err;
         }
@@ -413,7 +429,7 @@ module.exports = class Server {
           return { success: true, ...result };
         } catch (err) {
           if (err instanceof BankError || err.name === 'BankError') {
-            throw createError({ status: err.status || 503, message: err.message });
+            throw bankHttpError(err);
           }
           throw err;
         }
@@ -429,7 +445,7 @@ module.exports = class Server {
           return { success: true, ...result };
         } catch (err) {
           if (err instanceof BankError || err.name === 'BankError') {
-            throw createError({ status: err.status || 503, message: err.message });
+            throw bankHttpError(err);
           }
           throw err;
         }
@@ -617,7 +633,7 @@ module.exports = class Server {
       .get('/api/signatures/profiles', defineEventHandler(() => {
         const meta = getProfilesCatalog();
         if (meta.ok === false) {
-          throw createError({ status: 503, message: meta.error || 'signatures.json unavailable' });
+          throw httpError(503, meta.error || 'signatures.json unavailable');
         }
         return {
           ok: true,
