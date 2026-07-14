@@ -34,11 +34,21 @@ const {
 const { BankError } = require('./signaturesBank');
 const { applyFirewall } = require('./firewall');
 
-/** h3 only exposes statusMessage (not message) to clients — always set both + data.error. */
+/**
+ * h3 strips bare `message` from JSON bodies; clients read statusMessage / data.error.
+ * Keep statusMessage short (h3 may sanitize it); put the full text in data.error.
+ */
 function httpError(statusCode, message) {
+  const shortByStatus = {
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    403: 'Forbidden',
+    404: 'Not Found',
+    503: 'Service Unavailable',
+  };
   return createError({
     statusCode,
-    statusMessage: message,
+    statusMessage: shortByStatus[statusCode] || 'Error',
     message,
     data: { error: message },
   });
