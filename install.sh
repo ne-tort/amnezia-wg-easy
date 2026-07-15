@@ -77,11 +77,11 @@ prompt_or_default() {
   local __val=""
   if [[ -n "${__env}" && -n "${!__env+x}" && -n "${!__env}" ]]; then
     printf -v "$__var" '%s' "${!__env}"
-    retun 0
+    return 0
   fi
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     printf -v "$__var" '%s' "$__default"
-    retun 0
+    return 0
   fi
   read -rp "$__prompt" __val || true
   __val="${__val#"${__val%%[![:space:]]*}"}"
@@ -99,13 +99,13 @@ confirm_yn() {
   local ans=""
   if [[ -n "$envn" && -n "${!envn+x}" ]]; then
     case "${!envn}" in
-      1|y|Y|yes|YES|true|TRUE) CONFIRM_RESULT=1; retun 0 ;;
-      0|n|N|no|NO|false|FALSE) CONFIRM_RESULT=0; retun 0 ;;
+      1|y|Y|yes|YES|true|TRUE) CONFIRM_RESULT=1; return 0 ;;
+      0|n|N|no|NO|false|FALSE) CONFIRM_RESULT=0; return 0 ;;
     esac
   fi
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     [[ "$def" == "y" || "$def" == "Y" ]] && CONFIRM_RESULT=1 || CONFIRM_RESULT=0
-    retun 0
+    return 0
   fi
   if [[ "$def" == "y" || "$def" == "Y" ]]; then
     read -rp "${prompt} [Y/n]: " ans || true
@@ -161,7 +161,7 @@ install_packages() {
 install_docker() {
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     logi "Docker и Compose уже установлены"
-    retun 0
+    return 0
   fi
   logi "Установка Docker..."
   curl -fsSL https://get.docker.com | sh
@@ -228,7 +228,7 @@ prompt_admin() {
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     ADMIN_USER="${AWG_ADMIN_USER:-$(gen_random_string 10)}"
     ADMIN_PASS="${AWG_ADMIN_PASSWORD:-$(gen_random_string 16)}"
-    retun 0
+    return 0
   fi
   confirm_yn "Задать логин/пароль admin вручную? (иначе случайные)" n
   if [[ "$CONFIRM_RESULT" -eq 1 ]]; then
@@ -246,7 +246,7 @@ prompt_admin() {
 
 install_acme() {
   if [[ -x "${ACME_HOME}/acme.sh" ]]; then
-    retun 0
+    return 0
   fi
   logi "Установка acme.sh..."
   curl -fsSL https://get.acme.sh | sh -s email="${CERTBOT_EMAIL_VAL:-admin@localhost}"
@@ -254,7 +254,7 @@ install_acme() {
   [[ -f "${ACME_HOME}/acme.sh.env" ]] && source "${ACME_HOME}/acme.sh.env" || true
   if [[ ! -x "${ACME_HOME}/acme.sh" ]]; then
     loge "acme.sh не установился"
-    retun 1
+    return 1
   fi
 }
 
@@ -265,12 +265,12 @@ acme_bin() {
 is_port_in_use() {
   local port="$1"
   if command -v ss >/dev/null 2>&1; then
-    ss -ltn "sport = :${port}" 2>/dev/null | grep -q LISTEN && retun 0
+    ss -ltn "sport = :${port}" 2>/dev/null | grep -q LISTEN && return 0
   fi
   if command -v lsof >/dev/null 2>&1; then
-    lsof -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && retun 0
+    lsof -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && return 0
   fi
-  retun 1
+  return 1
 }
 
 free_port_80() {
@@ -293,7 +293,7 @@ inject_certs_to_volume() {
   vol=$(volume_name_certbot)
   if [[ ! -f "${src_dir}/fullchain.pem" || ! -f "${src_dir}/privkey.pem" ]]; then
     loge "Нет файлов сертификата в ${src_dir}"
-    retun 1
+    return 1
   fi
   docker volume create "$vol" >/dev/null
   docker run --rm \
@@ -313,7 +313,7 @@ inject_certs_to_volume() {
 setup_domain_certificate() {
   local domain="$1"
   local email="$2"
-  install_acme || retun 1
+  install_acme || return 1
   free_port_80
   mkdir -p "${CERT_HOST_DIR}/${domain}"
   "$(acme_bin)" --set-default-ca --server letsencrypt --force >/dev/null 2>&1 || true
@@ -323,25 +323,25 @@ setup_domain_certificate() {
   logi "Выпуск LE-сертификата для домена ${domain}..."
   if ! "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 --force; then
     loge "Не удалось выпустить сертификат для ${domain} (порт 80 должен быть открыт)"
-    retun 1
+    return 1
   fi
   local reload_cmd="docker exec nginx nginx -s reload 2>/dev/null || true"
   "$(acme_bin)" --installcert --force -d "$domain" \
     --key-file "${CERT_HOST_DIR}/${domain}/privkey.pem" \
     --fullchain-file "${CERT_HOST_DIR}/${domain}/fullchain.pem" \
     --reloadcmd "$reload_cmd" || true
-  inject_certs_to_volume "$domain" "${CERT_HOST_DIR}/${domain}" || retun 1
+  inject_certs_to_volume "$domain" "${CERT_HOST_DIR}/${domain}" || return 1
   "$(acme_bin)" --upgrade --auto-upgrade >/dev/null 2>&1 || true
   SSL_MODE="acme"
   SSL_HOST="$domain"
   PANEL_DOMAIN_VAL="$domain"
-  retun 0
+  return 0
 }
 
 setup_ip_certificate() {
   local ipv4="$1"
   local ipv6="${2:-}"
-  install_acme || retun 1
+  install_acme || return 1
   free_port_80
   mkdir -p "${CERT_HOST_DIR}/ip"
   local domain_args="-d ${ipv4}"
@@ -362,19 +362,19 @@ setup_ip_certificate() {
     --httpport 80 \
     --force; then
     loge "Не удалось выпустить IP-сертификат (нужен открытый TCP/80 с интернета)"
-    retun 1
+    return 1
   fi
   local reload_cmd="docker exec nginx nginx -s reload 2>/dev/null || true"
   "$(acme_bin)" --installcert --force -d "$ipv4" \
     --key-file "${CERT_HOST_DIR}/ip/privkey.pem" \
     --fullchain-file "${CERT_HOST_DIR}/ip/fullchain.pem" \
     --reloadcmd "$reload_cmd" || true
-  inject_certs_to_volume "$ipv4" "${CERT_HOST_DIR}/ip" || retun 1
+  inject_certs_to_volume "$ipv4" "${CERT_HOST_DIR}/ip" || return 1
   "$(acme_bin)" --upgrade --auto-upgrade >/dev/null 2>&1 || true
   SSL_MODE="acme"
   SSL_HOST="$ipv4"
   PANEL_DOMAIN_VAL="$ipv4"
-  retun 0
+  return 0
 }
 
 setup_custom_certificate() {
@@ -384,16 +384,16 @@ setup_custom_certificate() {
   prompt_or_default key "Путь к privkey.pem: " "" AWG_SSL_KEY
   if [[ ! -f "$cert" || ! -f "$key" ]]; then
     loge "Файлы сертификата не найдены"
-    retun 1
+    return 1
   fi
   mkdir -p "${CERT_HOST_DIR}/custom"
   cp "$cert" "${CERT_HOST_DIR}/custom/fullchain.pem"
   cp "$key" "${CERT_HOST_DIR}/custom/privkey.pem"
-  inject_certs_to_volume "$domain" "${CERT_HOST_DIR}/custom" || retun 1
+  inject_certs_to_volume "$domain" "${CERT_HOST_DIR}/custom" || return 1
   SSL_MODE="acme"
   SSL_HOST="$domain"
   PANEL_DOMAIN_VAL="$domain"
-  retun 0
+  return 0
 }
 
 prompt_and_setup_ssl() {
@@ -433,7 +433,7 @@ prompt_and_setup_ssl() {
         SSL_MODE="selfsigned"
         SSL_HOST="${SERVER_IP:-127.0.0.1}"
         PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
-        retun 0
+        return 0
       fi
       CERTBOT_EMAIL_VAL="$email"
       if setup_domain_certificate "$domain" "$email"; then
@@ -465,7 +465,7 @@ prompt_and_setup_ssl() {
         SSL_MODE="selfsigned"
         SSL_HOST="127.0.0.1"
         PANEL_DOMAIN_VAL="127.0.0.1"
-        retun 0
+        return 0
       fi
       local ipv6=""
       prompt_or_default ipv6 "IPv6 (Enter = пропустить): " "" AWG_SSL_IPV6
@@ -548,7 +548,7 @@ install_cli() {
   local src="${INSTALL_DIR}/scripts/awg-easy.sh"
   if [[ ! -f "$src" ]]; then
     logw "Нет ${src} — CLI пропущен (обновите репозиторий)"
-    retun 0
+    return 0
   fi
   chmod +x "$src"
   install -m 755 "$src" /usr/local/bin/awg-easy
@@ -574,12 +574,12 @@ wait_panel() {
   for i in $(seq 1 60); do
     code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)
     case "$code" in
-      200|301|302|401) logi "Панель отвечает (HTTP ${code})"; retun 0 ;;
+      200|301|302|401) logi "Панель отвечает (HTTP ${code})"; return 0 ;;
     esac
     sleep 2
   done
   logw "Панель пока не ответила (последний код ${code})"
-  retun 1
+  return 1
 }
 
 api_curl() {
@@ -607,11 +607,11 @@ api_login() {
     code=$(curl -sk -b "${CONF_DIR}/session.cj" -o /dev/null -w '%{http_code}' --max-time 10 \
       "$(panel_probe_url | sed 's|/$||')/api/amnezia-xray" || true)
     if [[ "$code" == "200" || "$code" == "403" ]]; then
-      retun 0
+      return 0
     fi
   fi
   logw "Логин API не подтверждён: ${resp:0:200}"
-  retun 1
+  return 1
 }
 
 enable_dns() {
@@ -680,7 +680,7 @@ post_configure() {
   wait_panel || true
   if ! api_login; then
     logw "Не удалось войти в API — DNS/Xray включите в UI или: awg-easy"
-    retun 0
+    return 0
   fi
   if [[ "$ENABLE_DNS" -eq 1 ]]; then
     enable_dns || logw "DNS enable не удался"
