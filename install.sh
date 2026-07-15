@@ -193,7 +193,7 @@ detect_public_ip() {
 }
 
 clone_or_update_repo() {
-  mkdir -p "$(diname "$INSTALL_DIR")"
+  mkdir -p "$(dirname "$INSTALL_DIR")"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     logi "Обновление репозитория в ${INSTALL_DIR}..."
     git -C "$INSTALL_DIR" fetch --depth 1 origin "$GIT_REF" || git -C "$INSTALL_DIR" fetch origin
@@ -600,8 +600,8 @@ api_curl() {
 
 api_login() {
   local resp
-  resp=$(api_curl POST /api/session "{\"usename\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}" || true)
-  if echo "$resp" | grep -qi 'success\|usename\|true\|{}' || [[ -f "${CONF_DIR}/session.cj" ]]; then
+  resp=$(api_curl POST /api/session "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}" || true)
+  if echo "$resp" | grep -qi 'success\|username\|true\|{}' || [[ -f "${CONF_DIR}/session.cj" ]]; then
     # Verify with a capability-gated endpoint
     local code
     code=$(curl -sk -b "${CONF_DIR}/session.cj" -o /dev/null -w '%{http_code}' --max-time 10 \

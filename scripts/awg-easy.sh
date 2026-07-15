@@ -70,7 +70,7 @@ api() {
   mkdir -p "$CONF_DIR"
   curl -sk -c "$cookie" -b "$cookie" -X POST "${base}/api/session" \
     -H 'Content-Type: application/json' \
-    -d "{\"usename\":\"${user}\",\"password\":\"${pass}\"}" >/dev/null || true
+    -d "{\"username\":\"${user}\",\"password\":\"${pass}\"}" >/dev/null || true
   if [[ -n "$body" ]]; then
     curl -sk -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" \
       -H 'Content-Type: application/json' -d "$body" --max-time 180
