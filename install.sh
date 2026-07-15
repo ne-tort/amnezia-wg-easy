@@ -1,7 +1,7 @@
 #!/bin/bash
 # Amnezia WG-Easy — one-liner installer (3x-ui style).
 # Usage:
-#   bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/main/install.sh)
+#   bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
 #
 # Env overrides (non-interactive / CI):
 #   AWG_NONINTERACTIVE=1
@@ -9,7 +9,7 @@
 #   AWG_ADMIN_USER AWG_ADMIN_PASSWORD
 #   AWG_DOMAIN AWG_EMAIL AWG_SSL_IPV6
 #   AWG_ENABLE_DNS=1|0  AWG_ENABLE_XRAY=1|0
-#   AWG_INSTALL_DIR=/opt/amnezia-wg-easy  AWG_GIT_REF=main
+#   AWG_INSTALL_DIR=/opt/amnezia-wg-easy  AWG_GIT_REF=master
 #   AWG_REPO_URL=https://github.com/ne-tort/amnezia-wg-easy.git
 
 set -euo pipefail
@@ -21,7 +21,7 @@ yellow='\033[0;33m'
 plain='\033[0m'
 
 REPO_URL="${AWG_REPO_URL:-https://github.com/ne-tort/amnezia-wg-easy.git}"
-GIT_REF="${AWG_GIT_REF:-main}"
+GIT_REF="${AWG_GIT_REF:-master}"
 INSTALL_DIR="${AWG_INSTALL_DIR:-/opt/amnezia-wg-easy}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-amnezia-wg-easy}"
 CONF_DIR="/etc/amnezia-wg-easy"

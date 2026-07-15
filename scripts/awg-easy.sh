@@ -128,7 +128,7 @@ cmd_ssl() {
   echo -e "${yellow}Повторный SSL: перезапустите установщик${plain}"
   echo "  bash ${INSTALL_DIR}/install.sh"
   echo "или:"
-  echo "  bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/main/install.sh)"
+  echo "  bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)"
 }
 
 cmd_dns_on() { need_root; api POST /api/amnezia-dns/enable '{}'; }

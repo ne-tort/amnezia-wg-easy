@@ -15,7 +15,7 @@ Self-hosted панель AmneziaWG для **Linux VPS** (Docker Engine + Compose
 На чистом VPS от root:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/main/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
 ```
 
 Мастер спросит (Enter = default / skip):
@@ -31,7 +31,7 @@ bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/main/i
 
 ```bash
 AWG_NONINTERACTIVE=1 AWG_SSL_MODE=ip AWG_ENABLE_DNS=1 AWG_ENABLE_XRAY=1 \
-  bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/main/install.sh)
+  bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
 ```
 
 ## Ручной старт (`deploy.sh`)
