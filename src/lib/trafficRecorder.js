@@ -12,7 +12,10 @@ const AWG_IFACE = 'awg0';
 
 let sampleTimer = null;
 let flushTimer = null;
+/** @type {Map<string, { last_rx: number, last_tx: number }>|null} */
 let snapshotMap = null;
+/** @type {Map<string, { last_rx: number, last_tx: number }>|null} */
+let xraySnapshotMap = null;
 const buffer = [];
 
 function loadSnapshot() {
@@ -20,12 +23,26 @@ function loadSnapshot() {
   snapshotMap = new Map(rows.map((r) => [r.client_id, { last_rx: r.last_rx, last_tx: r.last_tx }]));
 }
 
+function loadXraySnapshot() {
+  try {
+    const rows = db.traffic.xraySnapshot.getAll();
+    xraySnapshotMap = new Map(rows.map((r) => [r.client_id, { last_rx: r.last_rx, last_tx: r.last_tx }]));
+  } catch {
+    xraySnapshotMap = new Map();
+  }
+}
+
 function getPublicKeyToClientId() {
   const clients = db.clients.getAll();
   return new Map(clients.map((c) => [c.public_key, c.id]));
 }
 
-async function sample() {
+function getNameToClientId() {
+  const clients = db.clients.getAll();
+  return new Map(clients.map((c) => [c.name, c.id]));
+}
+
+async function sampleAwg() {
   let dump;
   try {
     dump = await Util.exec(`wg show ${AWG_IFACE} dump`, { log: false });
@@ -57,12 +74,71 @@ async function sample() {
     const deltaTx = Math.max(0, transferTx - prev.last_tx);
 
     if (deltaRx > 0 || deltaTx > 0) {
-      buffer.push({ client_id: clientId, ts: now, rx_delta: deltaRx, tx_delta: deltaTx });
+      buffer.push({
+        client_id: clientId, ts: now, rx_delta: deltaRx, tx_delta: deltaTx, source: 'awg',
+      });
     }
 
     snapshotMap.set(clientId, { last_rx: transferRx, last_tx: transferTx });
   }
+}
 
+/**
+ * Xray Stats: uplink = client→server (map to rx), downlink = server→client (map to tx).
+ */
+async function sampleXray() {
+  let amneziaXray;
+  try {
+    // eslint-disable-next-line global-require
+    amneziaXray = require('./amneziaXray');
+  } catch {
+    return;
+  }
+  if (!amneziaXray.isAmneziaXrayAvailable || !amneziaXray.isAmneziaXrayAvailable()) {
+    return;
+  }
+
+  let statsMap;
+  try {
+    statsMap = await amneziaXray.queryUserTrafficStats();
+  } catch (err) {
+    if (process.env.NODE_ENV !== 'test') {
+      // eslint-disable-next-line no-console
+      console.error('Traffic recorder: xray stats failed', err.message);
+    }
+    return;
+  }
+  if (!statsMap || statsMap.size === 0) return;
+
+  if (xraySnapshotMap === null) loadXraySnapshot();
+
+  const nameToId = getNameToClientId();
+  const now = Math.floor(Date.now() / 1000);
+
+  for (const [email, counters] of statsMap.entries()) {
+    const clientId = nameToId.get(email);
+    if (!clientId) continue;
+    const transferRx = Number(counters.uplink) || 0;
+    const transferTx = Number(counters.downlink) || 0;
+    const prev = xraySnapshotMap.get(clientId) || { last_rx: 0, last_tx: 0 };
+    // Counter reset (container restart) → take absolute as new baseline without huge delta
+    let deltaRx = transferRx - prev.last_rx;
+    let deltaTx = transferTx - prev.last_tx;
+    if (deltaRx < 0) deltaRx = 0;
+    if (deltaTx < 0) deltaTx = 0;
+
+    if (deltaRx > 0 || deltaTx > 0) {
+      buffer.push({
+        client_id: clientId, ts: now, rx_delta: deltaRx, tx_delta: deltaTx, source: 'xray',
+      });
+    }
+    xraySnapshotMap.set(clientId, { last_rx: transferRx, last_tx: transferTx });
+  }
+}
+
+async function sample() {
+  await sampleAwg();
+  await sampleXray();
   if (buffer.length >= TRAFFIC_BUFFER_MAX) flush();
 }
 
@@ -76,12 +152,21 @@ function flush() {
     last_tx: v.last_tx,
     sampled_at: Math.floor(Date.now() / 1000),
   }));
+  const xrayRows = xraySnapshotMap === null ? [] : Array.from(xraySnapshotMap.entries()).map(([client_id, v]) => ({
+    client_id,
+    last_rx: v.last_rx,
+    last_tx: v.last_tx,
+    sampled_at: Math.floor(Date.now() / 1000),
+  }));
 
   const database = db.getDb();
   try {
     database.transaction(() => {
       db.traffic.deltas.insertBatch(toInsert);
       if (snapshotRows.length > 0) db.traffic.snapshot.upsertMany(snapshotRows);
+      if (xrayRows.length > 0 && db.traffic.xraySnapshot) {
+        db.traffic.xraySnapshot.upsertMany(xrayRows);
+      }
     })();
   } catch (err) {
     if (process.env.NODE_ENV !== 'test') {
@@ -96,6 +181,7 @@ function startTrafficRecorder() {
   if (sampleTimer != null) return;
 
   loadSnapshot();
+  loadXraySnapshot();
   sampleTimer = setInterval(sample, TRAFFIC_SAMPLE_INTERVAL_SEC * 1000);
   flushTimer = setInterval(flush, TRAFFIC_FLUSH_INTERVAL_SEC * 1000);
   sample().catch((err) => {
@@ -123,4 +209,13 @@ function updateSnapshotForClient(clientId, lastRx, lastTx) {
   if (snapshotMap !== null) snapshotMap.set(clientId, { last_rx: lastRx, last_tx: lastTx });
 }
 
-module.exports = { startTrafficRecorder, stopTrafficRecorder, updateSnapshotForClient };
+function updateXraySnapshotForClient(clientId, lastRx, lastTx) {
+  if (xraySnapshotMap !== null) xraySnapshotMap.set(clientId, { last_rx: lastRx, last_tx: lastTx });
+}
+
+module.exports = {
+  startTrafficRecorder,
+  stopTrafficRecorder,
+  updateSnapshotForClient,
+  updateXraySnapshotForClient,
+};

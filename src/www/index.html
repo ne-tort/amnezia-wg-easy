@@ -813,28 +813,10 @@
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
             </button>
-            <!-- Amnezia DNS install / remove -->
-            <button type="button" @click="toggleAmneziaDns()"
-              :disabled="amneziaDnsBusy"
-              class="dns-header-btn flex items-center justify-center w-8 h-8 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
-              :class="{
-                'is-warn': amneziaDnsPhase === 'error' || amneziaDnsPhase === 'degraded',
-                'is-on': (amneziaDnsPhase === 'running' || amneziaDnsAvailable) && amneziaDnsPhase !== 'error' && amneziaDnsPhase !== 'degraded',
-              }"
-              :title="amneziaDnsHeaderTitle()">
-              <svg v-if="amneziaDnsBusy || amneziaDnsPhase === 'installing' || amneziaDnsPhase === 'removing'"
-                class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
-              </svg>
-              <svg v-else class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-              </svg>
-            </button>
             <!-- Amnezia Xray VLESS Reality -->
             <button v-if="canManageXray" type="button" @click="toggleAmneziaXray()"
               :disabled="amneziaXrayBusy"
-              class="dns-header-btn flex items-center justify-center w-8 h-8 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
               :class="{
                 'is-warn': amneziaXrayPhase === 'error' || amneziaXrayPhase === 'degraded',
                 'is-on': (amneziaXrayPhase === 'running' || amneziaXrayAvailable) && amneziaXrayPhase !== 'error' && amneziaXrayPhase !== 'degraded',
@@ -845,9 +827,23 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
               </svg>
-              <svg v-else class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">XRay</span>
+            </button>
+            <!-- Amnezia DNS install / remove -->
+            <button type="button" @click="toggleAmneziaDns()"
+              :disabled="amneziaDnsBusy"
+              class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              :class="{
+                'is-warn': amneziaDnsPhase === 'error' || amneziaDnsPhase === 'degraded',
+                'is-on': (amneziaDnsPhase === 'running' || amneziaDnsAvailable) && amneziaDnsPhase !== 'error' && amneziaDnsPhase !== 'degraded',
+              }"
+              :title="amneziaDnsHeaderTitle()">
+              <svg v-if="amneziaDnsBusy || amneziaDnsPhase === 'installing' || amneziaDnsPhase === 'removing'"
+                class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
               </svg>
+              <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">DNS</span>
             </button>
             <!-- Language -->
             <select v-model="currentLocale" @change="setLocale(currentLocale)"
@@ -1191,9 +1187,24 @@
                     <template v-for="period in ['hour','day','week','month','year']">
                       <div :key="period" class="flex justify-between gap-2">
                         <span>{{ $t('trafficPeriod' + period.charAt(0).toUpperCase() + period.slice(1)) }}</span>
-                        <span class="tabular-nums">{{ formatTrafficShort((clientTrafficHistory[client.id] && clientTrafficHistory[client.id][period]) ? (clientTrafficHistory[client.id][period].rx || 0) + (clientTrafficHistory[client.id][period].tx || 0) : 0) }}</span>
+                        <span class="tabular-nums">{{ formatTrafficShort(clientTrafficTotal(client.id, period)) }}</span>
                       </div>
                     </template>
+                    <div class="traffic-split mt-1 pt-1 border-t border-gray-100 dark:border-neutral-600"
+                      v-if="clientTrafficSplit(client.id)">
+                      <div class="flex justify-between gap-2 text-[11px]">
+                        <span>AWG {{ clientTrafficSplit(client.id).awgPct }}%</span>
+                        <span class="tabular-nums">{{ formatTrafficShort(clientTrafficSplit(client.id).awgBytes) }}</span>
+                      </div>
+                      <div class="flex justify-between gap-2 text-[11px]">
+                        <span>XRay {{ clientTrafficSplit(client.id).xrayPct }}%</span>
+                        <span class="tabular-nums">{{ formatTrafficShort(clientTrafficSplit(client.id).xrayBytes) }}</span>
+                      </div>
+                      <div class="traffic-split-bar mt-1 flex h-1.5 rounded overflow-hidden bg-gray-200 dark:bg-neutral-600">
+                        <div class="bg-sky-500 h-full" :style="{ width: clientTrafficSplit(client.id).awgPct + '%' }"></div>
+                        <div class="bg-emerald-500 h-full" :style="{ width: clientTrafficSplit(client.id).xrayPct + '%' }"></div>
+                      </div>
+                    </div>
                   </div>
                   <div v-if="canAssignClients" class="flex flex-col gap-1" @click.stop>
                     <div class="flex items-center justify-between gap-2">

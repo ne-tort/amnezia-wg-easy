@@ -20,6 +20,8 @@ const DOCKERFILE_FOLDER = '/opt/amnezia/xray';
 const PANEL_CONTAINER = 'amnezia-awg';
 const XRAY_REL = 'xray';
 const SERVER_JSON = 'server.json';
+/** Loopback Stats API inside amnezia-xray (not published to host). */
+const XRAY_API_PORT = 10085;
 
 const DESIRED_KEY = 'amnezia_xray_desired';
 const SNI_KEY = 'amnezia_xray_sni';
@@ -303,8 +305,26 @@ function buildInboundClients(flow) {
 function buildServerConfigObject({ port, sni, privateKey, shortId, flow }) {
   return {
     log: { loglevel: 'error' },
+    stats: {},
+    api: {
+      tag: 'api',
+      services: ['StatsService'],
+    },
+    policy: {
+      levels: {
+        '0': {
+          statsUserUplink: true,
+          statsUserDownlink: true,
+        },
+      },
+      system: {
+        statsInboundUplink: true,
+        statsInboundDownlink: true,
+      },
+    },
     inbounds: [
       {
+        tag: 'vless-reality',
         listen: '0.0.0.0',
         port,
         protocol: 'vless',
@@ -323,8 +343,24 @@ function buildServerConfigObject({ port, sni, privateKey, shortId, flow }) {
           },
         },
       },
+      {
+        tag: 'api',
+        listen: '127.0.0.1',
+        port: XRAY_API_PORT,
+        protocol: 'dokodemo-door',
+        settings: { address: '127.0.0.1' },
+      },
     ],
-    outbounds: [{ protocol: 'freedom' }],
+    outbounds: [{ protocol: 'freedom', tag: 'direct' }],
+    routing: {
+      rules: [
+        {
+          type: 'field',
+          inboundTag: ['api'],
+          outboundTag: 'api',
+        },
+      ],
+    },
   };
 }
 
@@ -539,6 +575,83 @@ async function runSmoke() {
     at: Date.now(),
   };
   return lastSmoke;
+}
+
+/**
+ * Parse `xray api statsquery` stdout into Map(email → { uplink, downlink }).
+ * Accepts JSON or protobuf-ish text.
+ * @param {string} raw
+ * @returns {Map<string, { uplink: number, downlink: number }>}
+ */
+function parseStatsQueryOutput(raw) {
+  const out = new Map();
+  const text = String(raw || '');
+
+  const apply = (name, value) => {
+    const m = String(name).match(/^user>>>(.+)>>>traffic>>>(uplink|downlink)$/);
+    if (!m) return;
+    const email = m[1];
+    const kind = m[2];
+    const n = Number(value) || 0;
+    const cur = out.get(email) || { uplink: 0, downlink: 0 };
+    if (kind === 'uplink') cur.uplink = n;
+    else cur.downlink = n;
+    out.set(email, cur);
+  };
+
+  try {
+    const json = JSON.parse(text);
+    const list = (json && (json.stat || json.Stat || json.stats)) || [];
+    if (Array.isArray(list)) {
+      for (const s of list) {
+        apply(s.name || s.Name || '', s.value != null ? s.value : s.Value);
+      }
+      if (out.size) return out;
+    }
+  } catch {
+    /* fall through to regex */
+  }
+
+  const re = /user>>>(.+?)>>>traffic>>>(uplink|downlink)["'\s,}:]+(?:value|Value)["'\s:=]+"?(\d+)/g;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    apply(`user>>>${match[1]}>>>traffic>>>${match[2]}`, match[3]);
+  }
+  // Alternate: name on one line, value on next / "name":"...","value":"123"
+  if (!out.size) {
+    const re2 = /"name"\s*:\s*"([^"]+)"\s*,\s*"value"\s*:\s*"?(\d+)"?/gi;
+    while ((match = re2.exec(text)) !== null) {
+      apply(match[1], match[2]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Query per-user traffic from running amnezia-xray (by inbound email = client name).
+ * @returns {Promise<Map<string, { uplink: number, downlink: number }>>}
+ */
+async function queryUserTrafficStats() {
+  if (!(await dockerContainerRunning())) return new Map();
+  const r = await runCmd('docker', [
+    'exec', CONTAINER_NAME,
+    'xray', 'api', 'statsquery',
+    '--server', `127.0.0.1:${XRAY_API_PORT}`,
+    '-pattern', 'user>>>',
+  ], { timeout: 15_000 });
+  if (!r.ok) {
+    // Retry with -json if present on this build
+    const r2 = await runCmd('docker', [
+      'exec', CONTAINER_NAME,
+      'xray', 'api', 'statsquery',
+      '--server', `127.0.0.1:${XRAY_API_PORT}`,
+      '-pattern', 'user>>>',
+      '-json',
+    ], { timeout: 15_000 });
+    if (!r2.ok) return new Map();
+    return parseStatsQueryOutput(`${r2.stdout || ''}\n${r2.stderr || ''}`);
+  }
+  return parseStatsQueryOutput(`${r.stdout || ''}\n${r.stderr || ''}`);
 }
 
 function normalizePort(raw, fallback = config.XRAY_PORT) {
@@ -904,6 +1017,7 @@ function stopAmneziaXray() {
 module.exports = {
   CONTAINER_NAME,
   IMAGE_NAME,
+  XRAY_API_PORT,
   DEFAULT_SNI,
   DEFAULT_FP,
   DEFAULT_FLOW,
@@ -923,6 +1037,8 @@ module.exports = {
   buildClientJson,
   buildServerConfigObject,
   parseX25519Output,
+  parseStatsQueryOutput,
+  queryUserTrafficStats,
   probeListenInsideContainer,
   normalizePort,
   getPublicHost,

@@ -109,12 +109,35 @@ test('buildServerConfigObject lists enabled clients with email', () => {
     shortId: 'deadbeef',
     flow: 'xtls-rprx-vision',
   });
-  const list = obj.inbounds[0].settings.clients;
+  const vless = obj.inbounds.find((i) => i.protocol === 'vless');
+  assert.ok(vless);
+  const list = vless.settings.clients;
   assert.equal(list.length, 1);
   assert.equal(list[0].id, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
   assert.equal(list[0].email, 'Alice');
   assert.equal(list[0].flow, 'xtls-rprx-vision');
-  assert.equal(obj.inbounds[0].streamSettings.realitySettings.dest, 'www.example.com:443');
+  assert.equal(vless.streamSettings.realitySettings.dest, 'www.example.com:443');
+  assert.ok(obj.stats);
+  assert.ok(obj.api && obj.api.services.includes('StatsService'));
+  assert.equal(obj.policy.levels['0'].statsUserUplink, true);
+  const apiIn = obj.inbounds.find((i) => i.tag === 'api');
+  assert.ok(apiIn);
+  assert.equal(apiIn.port, amneziaXray.XRAY_API_PORT);
+});
+
+test('parseStatsQueryOutput maps user email uplink/downlink', () => {
+  const { amneziaXray } = loadAmneziaXray();
+  const map = amneziaXray.parseStatsQueryOutput(JSON.stringify({
+    stat: [
+      { name: 'user>>>Alice>>>traffic>>>uplink', value: '100' },
+      { name: 'user>>>Alice>>>traffic>>>downlink', value: '250' },
+      { name: 'user>>>Bob>>>traffic>>>uplink', value: '10' },
+    ],
+  }));
+  assert.equal(map.get('Alice').uplink, 100);
+  assert.equal(map.get('Alice').downlink, 250);
+  assert.equal(map.get('Bob').uplink, 10);
+  assert.equal(map.get('Bob').downlink, 0);
 });
 
 test('parseX25519Output accepts Private key / Public key lines', () => {

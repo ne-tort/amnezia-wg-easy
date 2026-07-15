@@ -626,6 +626,22 @@ function protocolTemplatesGetByProfileId(profileId) {
 }
 
 // * Traffic history: snapshot (last WG counters) and deltas (per-sample increments)
+function foldTrafficBySource(rows) {
+  const awg = { rx: 0, tx: 0 };
+  const xray = { rx: 0, tx: 0 };
+  for (const r of rows || []) {
+    const bucket = r.source === 'xray' ? xray : awg;
+    bucket.rx += Number(r.rx) || 0;
+    bucket.tx += Number(r.tx) || 0;
+  }
+  return {
+    rx: awg.rx + xray.rx,
+    tx: awg.tx + xray.tx,
+    awg,
+    xray,
+  };
+}
+
 function trafficSnapshotGetAll() {
   return getDb().prepare('SELECT client_id, last_rx, last_tx, sampled_at FROM traffic_snapshot').all();
 }
@@ -651,28 +667,63 @@ function trafficSnapshotUpsertMany(rows) {
   }
 }
 
+function trafficXraySnapshotGetAll() {
+  return getDb().prepare('SELECT client_id, last_rx, last_tx, sampled_at FROM traffic_xray_snapshot').all();
+}
+
+function trafficXraySnapshotUpsert(clientId, lastRx, lastTx, sampledAt) {
+  getDb().prepare(
+    `INSERT INTO traffic_xray_snapshot (client_id, last_rx, last_tx, sampled_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(client_id) DO UPDATE SET last_rx = excluded.last_rx, last_tx = excluded.last_tx, sampled_at = excluded.sampled_at`
+  ).run(clientId, lastRx, lastTx, sampledAt);
+}
+
+function trafficXraySnapshotUpsertMany(rows) {
+  const stmt = getDb().prepare(
+    `INSERT INTO traffic_xray_snapshot (client_id, last_rx, last_tx, sampled_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(client_id) DO UPDATE SET last_rx = excluded.last_rx, last_tx = excluded.last_tx, sampled_at = excluded.sampled_at`
+  );
+  for (const r of rows) {
+    stmt.run(r.client_id, r.last_rx, r.last_tx, r.sampled_at);
+  }
+}
+
 function trafficDeltasInsertBatch(rows) {
   if (rows.length === 0) return;
-  const stmt = getDb().prepare('INSERT INTO traffic_deltas (client_id, ts, rx_delta, tx_delta) VALUES (?, ?, ?, ?)');
+  const stmt = getDb().prepare(
+    'INSERT INTO traffic_deltas (client_id, ts, rx_delta, tx_delta, source) VALUES (?, ?, ?, ?, ?)'
+  );
   for (const r of rows) {
-    stmt.run(r.client_id, r.ts, r.rx_delta, r.tx_delta);
+    stmt.run(r.client_id, r.ts, r.rx_delta, r.tx_delta, r.source || 'awg');
   }
 }
 
 function trafficDeltasSumByClientAndPeriod(clientId, tsFrom) {
-  const row = getDb()
+  const rows = getDb()
     .prepare(
-      'SELECT COALESCE(SUM(rx_delta), 0) AS rx, COALESCE(SUM(tx_delta), 0) AS tx FROM traffic_deltas WHERE client_id = ? AND ts >= ?'
+      `SELECT COALESCE(source, 'awg') AS source,
+              COALESCE(SUM(rx_delta), 0) AS rx,
+              COALESCE(SUM(tx_delta), 0) AS tx
+       FROM traffic_deltas
+       WHERE client_id = ? AND ts >= ?
+       GROUP BY COALESCE(source, 'awg')`
     )
-    .get(clientId, tsFrom);
-  return { rx: row.rx ?? 0, tx: row.tx ?? 0 };
+    .all(clientId, tsFrom);
+  return foldTrafficBySource(rows);
 }
 
 function trafficDeltasSumByPeriod(tsFrom) {
-  const row = getDb()
-    .prepare('SELECT COALESCE(SUM(rx_delta), 0) AS rx, COALESCE(SUM(tx_delta), 0) AS tx FROM traffic_deltas WHERE ts >= ?')
-    .get(tsFrom);
-  return { rx: row.rx ?? 0, tx: row.tx ?? 0 };
+  const rows = getDb()
+    .prepare(
+      `SELECT COALESCE(source, 'awg') AS source,
+              COALESCE(SUM(rx_delta), 0) AS rx,
+              COALESCE(SUM(tx_delta), 0) AS tx
+       FROM traffic_deltas
+       WHERE ts >= ?
+       GROUP BY COALESCE(source, 'awg')`
+    )
+    .all(tsFrom);
+  return foldTrafficBySource(rows);
 }
 
 function trafficDeltasDeleteByClientId(clientId) {
@@ -1107,6 +1158,11 @@ module.exports = {
       getByClientId: trafficSnapshotGetByClientId,
       upsert: trafficSnapshotUpsert,
       upsertMany: trafficSnapshotUpsertMany,
+    },
+    xraySnapshot: {
+      getAll: trafficXraySnapshotGetAll,
+      upsert: trafficXraySnapshotUpsert,
+      upsertMany: trafficXraySnapshotUpsertMany,
     },
     deltas: {
       insertBatch: trafficDeltasInsertBatch,

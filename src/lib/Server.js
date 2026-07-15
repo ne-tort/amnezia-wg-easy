@@ -1325,14 +1325,33 @@ module.exports = class Server {
             }
           }
         } catch (_) {}
+
+        let xrayRx = 0;
+        let xrayTx = 0;
+        try {
+          const amneziaXray = require('./amneziaXray');
+          if (amneziaXray.isAmneziaXrayAvailable()) {
+            const stats = await amneziaXray.queryUserTrafficStats();
+            const counters = stats.get(client.name);
+            if (counters) {
+              xrayRx = Number(counters.uplink) || 0;
+              xrayTx = Number(counters.downlink) || 0;
+            }
+          }
+        } catch (_) {}
+
         const now = Math.floor(Date.now() / 1000);
         const database = db.getDb();
         database.transaction(() => {
           db.traffic.deltas.deleteByClientId(clientId);
           db.traffic.snapshot.upsert(clientId, lastRx, lastTx, now);
+          if (db.traffic.xraySnapshot) {
+            db.traffic.xraySnapshot.upsert(clientId, xrayRx, xrayTx, now);
+          }
         })();
-        const { updateSnapshotForClient } = require('./trafficRecorder');
+        const { updateSnapshotForClient, updateXraySnapshotForClient } = require('./trafficRecorder');
         updateSnapshotForClient(clientId, lastRx, lastTx);
+        if (updateXraySnapshotForClient) updateXraySnapshotForClient(clientId, xrayRx, xrayTx);
         return { success: true };
       }))
       .get('/api/traffic/aggregate', defineEventHandler((event) => {

@@ -1477,10 +1477,31 @@ new Vue({
       const periods = ['hour', 'day', 'week', 'month', 'year'];
       const result = {};
       await Promise.all(periods.map(async (period) => {
-        const data = await this.api.getTrafficClient(clientId, period).catch(() => ({ rx: 0, tx: 0 }));
+        const data = await this.api.getTrafficClient(clientId, period).catch(() => ({
+          rx: 0, tx: 0, awg: { rx: 0, tx: 0 }, xray: { rx: 0, tx: 0 },
+        }));
         result[period] = data;
       }));
       this.$set(this.clientTrafficHistory, clientId, result);
+    },
+    clientTrafficTotal(clientId, period) {
+      const row = this.clientTrafficHistory[clientId] && this.clientTrafficHistory[clientId][period];
+      if (!row) return 0;
+      return (row.rx || 0) + (row.tx || 0);
+    },
+    /** Year totals split AWG vs XRay for the bar under traffic history. */
+    clientTrafficSplit(clientId) {
+      const row = this.clientTrafficHistory[clientId] && this.clientTrafficHistory[clientId].year;
+      if (!row) return null;
+      const awgBytes = ((row.awg && row.awg.rx) || 0) + ((row.awg && row.awg.tx) || 0);
+      const xrayBytes = ((row.xray && row.xray.rx) || 0) + ((row.xray && row.xray.tx) || 0);
+      const total = awgBytes + xrayBytes;
+      if (total <= 0) {
+        return { awgBytes: 0, xrayBytes: 0, awgPct: 0, xrayPct: 0 };
+      }
+      const awgPct = Math.round((awgBytes * 1000) / total) / 10;
+      const xrayPct = Math.round((1000 - awgPct * 10)) / 10;
+      return { awgBytes, xrayBytes, awgPct, xrayPct };
     },
     async loadAggregateTraffic() {
       const data = await this.api.getTrafficAggregate('year').catch(() => ({ rx: 0, tx: 0 }));
