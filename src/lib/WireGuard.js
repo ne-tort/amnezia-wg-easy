@@ -21,7 +21,35 @@ const {
 } = require('./signaturesBank');
 const { isKnownProfile } = require('./obfuscationProfiles');
 const { isAmneziaDnsAvailable, getStatus: getAmneziaDnsStatus } = require('./amneziaDns');
-const { generateAmneziaClientQrSvgs, buildAmneziaVpnExport, parseEndpoint } = require('./amneziaClientQr');
+const {
+  isAmneziaXrayAvailable,
+  getStatus: getAmneziaXrayStatus,
+  syncClientsFromDb: syncAmneziaXrayClients,
+  ensureClientUuids: ensureAmneziaXrayClientUuids,
+} = require('./amneziaXray');
+
+function scheduleAmneziaXraySync() {
+  try {
+    const st = getAmneziaXrayStatus();
+    if (st.desired !== true && st.phase !== 'running' && st.phase !== 'degraded') return;
+    syncAmneziaXrayClients().catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('Amnezia Xray sync:', err && err.message ? err.message : err);
+    });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Amnezia Xray sync schedule:', err && err.message ? err.message : err);
+  }
+}
+const {
+  generateAmneziaClientQrSvgs,
+  buildAmneziaVpnExport,
+  countAmneziaQrChunks,
+  MAX_AMNEZIA_QR_CHUNKS,
+  parseEndpoint,
+} = require('./amneziaClientQr');
+const junkParams = require('./junkParams');
+const mtuProfiles = require('./mtuProfiles');
 
 const {
   WG_PATH,
@@ -34,8 +62,10 @@ const {
   WG_PERSISTENT_KEEPALIVE,
   WG_PRE_UP,
   WG_POST_UP,
+  WG_POST_UP_OVERRIDE,
   WG_PRE_DOWN,
   WG_POST_DOWN,
+  buildNatPostUp,
   JC,
   JMIN,
   JMAX,
@@ -54,8 +84,9 @@ const {
   WG_CASCADE_EXIT_TUNNEL_IP,
   WG_CASCADE_EXIT_PUBLIC_KEY,
   WG_CASCADE_EXIT_ENDPOINT,
-  WG_CASCADE_CLIENT_SUBNET,
+  resolveCascadeClientSubnet,
 } = require('../config');
+const vpnAddress = require('./vpnAddress');
 
 // * Official Amnezia client pattern: awg0.conf and interface awg0 in /opt/amnezia/awg/
 const AWG_JSON = 'awg0.json';
@@ -292,6 +323,10 @@ const WireGuard = class {
         defaultSignature: c.default_signature || undefined,
         defaultLevel: c.default_level ?? undefined,
         useServerDns: c.use_server_dns !== 0,
+        junkPins: junkParams.parseJunkPins(c.junk_pins),
+        mtuProfile: c.mtu_profile || undefined,
+        createdBy: c.created_by || null,
+        xrayUuid: c.xray_uuid || null,
       };
     }
     return { server, clients };
@@ -305,7 +340,8 @@ const WireGuard = class {
     const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`, {
       log: 'echo ***hidden*** | wg pubkey',
     });
-    const address = WG_DEFAULT_ADDRESS.replace('x', '1');
+    const primary = db.vpnPools.getPrimary();
+    const address = (primary && primary.gateway) || WG_DEFAULT_ADDRESS.replace('x', '1');
     const now = Math.floor(Date.now() / 1000);
     db.serverConfig.upsert({
       private_key: privateKey,
@@ -447,8 +483,8 @@ const WireGuard = class {
       return;
     }
     const priv = await this.__ensureCascadeLinkPrivateKey();
-    const mtuLine = WG_MTU ? `MTU = ${WG_MTU}\n` : '';
-    const cidrEsc = WG_CASCADE_CLIENT_SUBNET.replace(/"/g, '\\"');
+    const mtuLine = this.__serverMtuConfLine();
+    const cidrEsc = resolveCascadeClientSubnet().replace(/"/g, '\\"');
     const exitHost = cascadeExitPublicHostFromEndpoint(endpoint);
     const exitArg = exitHost ? ` "${exitHost}"` : '';
     const postUp = `/bin/sh -c '/app/scripts/cascade-in-container-postup.sh ${WG_CASCADE_EXIT_TUNNEL_IP} "${cidrEsc}"${exitArg}'`;
@@ -490,7 +526,7 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
    */
   async __applyCascadePostUp() {
     if (!WG_CASCADE_ENABLED) return;
-    const cidrEsc = String(WG_CASCADE_CLIENT_SUBNET).replace(/"/g, '\\"');
+    const cidrEsc = String(resolveCascadeClientSubnet()).replace(/"/g, '\\"');
     const ep = await this.__readCascadeExitEndpoint();
     const exitHost = cascadeExitPublicHostFromEndpoint(ep);
     const exitArg = exitHost ? ` "${exitHost}"` : '';
@@ -547,6 +583,11 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
     const h4 = this.__hToSingle(config.server.h4);
     const now = Math.floor(Date.now() / 1000);
 
+    const pools = db.vpnPools.list();
+    if (pools[0] && pools[0].gateway) {
+      config.server.address = pools[0].gateway;
+    }
+
     db.serverConfig.upsert({
       private_key: config.server.privateKey,
       public_key: config.server.publicKey,
@@ -586,9 +627,26 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
       default_signature: c.defaultSignature || null,
       default_level: c.defaultLevel ?? null,
       use_server_dns: c.useServerDns !== false ? 1 : 0,
+      junk_pins: junkParams.stringifyJunkPins(c.junkPins),
+      mtu_profile: c.mtuProfile || null,
+      created_by: c.createdBy || null,
+      xray_uuid: c.xrayUuid || null,
     }));
     db.clients.replaceAll(clientRows);
 
+    const addressLines = pools.length
+      ? pools.map((p) => {
+        const parsed = vpnAddress.parseCidr(p.cidr);
+        const pfx = parsed ? parsed.prefixLen : 24;
+        return `Address = ${p.gateway}/${pfx}`;
+      }).join('\n')
+      : `Address = ${config.server.address}/24`;
+    const postUp = WG_POST_UP_OVERRIDE
+      ? WG_POST_UP
+      : buildNatPostUp(pools.map((p) => p.cidr));
+    const postDown = WG_POST_DOWN;
+
+    const serverMtuLine = this.__serverMtuConfLine();
     let result = `
 # Note: Do not edit this file directly.
 # Your changes will be overwritten!
@@ -596,12 +654,12 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
 # Server
 [Interface]
 PrivateKey = ${config.server.privateKey}
-Address = ${config.server.address}/24
+${addressLines}
 ListenPort = ${WG_PORT}
-${WG_MTU ? `MTU = ${WG_MTU}\n` : ''}PreUp = ${WG_PRE_UP}
-PostUp = ${WG_POST_UP}
+${serverMtuLine}PreUp = ${WG_PRE_UP}
+PostUp = ${postUp}
 PreDown = ${WG_PRE_DOWN}
-PostDown = ${WG_POST_DOWN}
+PostDown = ${postDown}
 Jc = ${config.server.jc}
 Jmin = ${config.server.jmin}
 Jmax = ${config.server.jmax}
@@ -652,25 +710,34 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     const config = await this.getConfig();
     const amneziaDnsStatus = getAmneziaDnsStatus();
     const amneziaDnsAvailable = amneziaDnsStatus.available === true;
+    const amneziaXrayStatus = getAmneziaXrayStatus();
+    const amneziaXrayAvailable = amneziaXrayStatus.available === true;
+    const poolCidrs = db.vpnPools.list().map((p) => p.cidr);
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
       name: client.name,
       enabled: client.enabled,
       address: client.address,
+      addressInPool: !!(client.address && vpnAddress.ipInAnyPool(client.address, poolCidrs)),
       publicKey: client.publicKey,
       createdAt: new Date(client.createdAt),
       updatedAt: new Date(client.updatedAt),
       expiresAt: client.expiresAt ?? null,
+      createdBy: client.createdBy || null,
       ruleProfileId: client.ruleProfileId ?? null,
       allowedIPs: getAllowedIPsForClient(client),
       defaultProfile: client.defaultProfile || undefined,
+      defaultSignature: client.defaultSignature || undefined,
       defaultLevel: client.defaultLevel ?? undefined,
+      junkPins: client.junkPins || {},
+      mtuProfile: client.mtuProfile || undefined,
       useServerDns: client.useServerDns !== false,
       downloadableConfig: 'privateKey' in client,
       persistentKeepalive: null,
       latestHandshakeAt: null,
       transferRx: null,
       transferTx: null,
+      xrayUuid: client.xrayUuid || null,
     }));
 
     // Loop WireGuard status
@@ -704,6 +771,13 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
         client.persistentKeepalive = persistentKeepalive;
       });
 
+    const creatorMap = db.clients.mapCreatedByUsernames(clients.map((c) => c.id));
+    for (const c of clients) {
+      c.createdByUsername = creatorMap[c.id] || null;
+    }
+
+    const serverJunk = junkParams.readServerJunk(config.server);
+
     return {
       clients,
       serverCapabilities: {
@@ -717,7 +791,23 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
           profileId: amneziaDnsStatus.profileId,
           profile: amneziaDnsStatus.profile,
         },
+        xrayAvailable: amneziaXrayAvailable,
+        xray: {
+          phase: amneziaXrayStatus.phase,
+          desired: amneziaXrayStatus.desired,
+          lastError: amneziaXrayStatus.lastError,
+          busy: amneziaXrayStatus.busy,
+          updatedAt: amneziaXrayStatus.updatedAt,
+          address: amneziaXrayStatus.address,
+          addressStored: amneziaXrayStatus.addressStored,
+          sni: amneziaXrayStatus.sni,
+          sniStored: amneziaXrayStatus.sniStored,
+          fingerprint: amneziaXrayStatus.fingerprint,
+          flow: amneziaXrayStatus.flow,
+          port: amneziaXrayStatus.port,
+        },
       },
+      serverJunk,
     };
   }
 
@@ -743,19 +833,8 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       ? String(signature).trim()
       : (client.defaultSignature || null);
 
+    // Do not silently persist binding healing — only apply() may write clients.
     const binding = ensureBinding(preferredProfile, preferredSignature, bank);
-    if (binding.changed) {
-      const row = db.clients.getById(clientId);
-      if (row) {
-        row.default_profile = binding.profile;
-        row.default_signature = binding.signature;
-        row.updated_at = Math.floor(Date.now() / 1000);
-        db.clients.update(row);
-        this.__config = null;
-        client.defaultProfile = binding.profile;
-        client.defaultSignature = binding.signature;
-      }
-    }
 
     const prof = binding.slots;
     if (!prof || !prof.i1) {
@@ -773,9 +852,9 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       if (l === 0) {
         iLines = [];
       } else if (l === 1) {
-        pushSlot('i1', 'I1');
+        if (!omitI1) pushSlot('i1', 'I1');
       } else if (l >= 2 && l <= 5) {
-        pushSlot('i1', 'I1');
+        if (!omitI1) pushSlot('i1', 'I1');
         if (l >= 2) pushSlot('i2', 'I2');
         if (l >= 3) pushSlot('i3', 'I3');
         if (l >= 4) pushSlot('i4', 'I4');
@@ -800,11 +879,21 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     const useServerDns = dnsAvailable && (client.useServerDns !== false);
     const dnsValue = useServerDns ? WG_DEFAULT_DNS : WG_DIRECT_DNS;
 
+    let clientMtu = null;
+    try {
+      mtuProfiles.ensureSeedBank();
+      clientMtu = mtuProfiles.resolveMtuValue(client.mtuProfile);
+    } catch {
+      clientMtu = WG_MTU != null ? Number(WG_MTU) : null;
+      if (!Number.isFinite(clientMtu)) clientMtu = null;
+    }
+    const mtuLine = clientMtu != null ? `MTU = ${clientMtu}\n` : '';
+
     return `[Interface]
 PrivateKey = ${client.privateKey ? `${client.privateKey}` : 'REPLACE_ME'}
 Address = ${client.address}
 ${dnsValue ? `DNS = ${dnsValue}\n` : ''}\
-${WG_MTU ? `MTU = ${WG_MTU}\n` : ''}\
+${mtuLine}\
 Jc = ${config.server.jc}
 Jmin = ${config.server.jmin}
 Jmax = ${config.server.jmax}
@@ -861,44 +950,210 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     return rewriteIniEndpointHostToIp(iniText);
   }
 
-  async getClientQRCodeSVG({ clientId, level, profile, signature }) {
-    // When level is provided, build config by level (may be large for L5). Otherwise compact (no I1).
-    const config = await this.getClientConfiguration({
-      clientId,
-      forQR: level === undefined || level === null,
-      forceOmitI1ForCapacity: level === undefined || level === null,
-      level,
-      profile,
-      signature,
-    });
-    const svg = await QRCode.toString(config, {
+  async __configToQrSvg(config) {
+    return QRCode.toString(config, {
       type: 'svg',
       width: 512,
       errorCorrectionLevel: 'L',
     });
-    return { svg, payload: config };
+  }
+
+  /** Highest I{n} line present in ini (0 = none). */
+  __maxILevelInConfig(configText) {
+    const text = String(configText || '');
+    let max = 0;
+    for (let i = 1; i <= 5; i += 1) {
+      if (new RegExp(`^I${i}\\s*=`, 'm').test(text)) max = i;
+    }
+    return max;
+  }
+
+  /**
+   * @param {number|null|undefined} requestedLevel - UI level (undefined ≈ full I1–I5)
+   * @param {string} configText - payload actually encoded in QR
+   * @param {{ forceOmitI1?: boolean, attemptLevel?: number|null }} [opts]
+   */
+  __buildILimitMeta(requestedLevel, configText, opts = {}) {
+    const requested = requestedLevel != null && Number.isFinite(Number(requestedLevel))
+      ? Number(requestedLevel)
+      : 5;
+    const text = String(configText || '');
+    const effective = this.__maxILevelInConfig(text);
+    const hasI1 = /^I1\s*=/m.test(text);
+    const forceOmitI1 = !!opts.forceOmitI1;
+    const attemptLevel = opts.attemptLevel != null && Number.isFinite(Number(opts.attemptLevel))
+      ? Number(opts.attemptLevel)
+      : null;
+
+    // Notice when capacity forced a cut: lower level, or drop I1 while user wanted I≥1.
+    let limited = false;
+    if (requested > 0) {
+      if (effective < requested) limited = true;
+      else if (forceOmitI1 && !hasI1) limited = true;
+      else if (attemptLevel != null && attemptLevel < requested) limited = true;
+    }
+    const excluded = limited && effective === 0;
+    return { requested, effective, limited, excluded };
+  }
+
+  /**
+   * Reject QR versions that technically encode but are too dense for reliable phone scanning.
+   * Version 18 ≈ 1.9KB binary @ ECC L — still practical at ~560px display size.
+   */
+  __assertTextQrScannable(config) {
+    const qr = QRCode.create(config, { errorCorrectionLevel: 'L' });
+    const version = Math.floor((qr.modules.size - 21) / 4) + 1;
+    const maxVersion = 18;
+    if (version > maxVersion) {
+      const err = new Error(`QR Code version ${version} exceeds scannable limit ${maxVersion}`);
+      err.code = 'QR_TOO_DENSE';
+      throw err;
+    }
+  }
+
+  __isTextQrCapacityError(err) {
+    const msg = String((err && err.message) || err || '');
+    return err && err.code === 'QR_TOO_DENSE'
+      || /too big to be stored in a QR Code/i.test(msg)
+      || /exceeds scannable limit/i.test(msg);
+  }
+
+  __buildQrCapacityAttempts(level) {
+    const attempts = [];
+    const requested = level === undefined || level === null ? null : Number(level);
+    if (requested != null && Number.isFinite(requested)) {
+      attempts.push({ level: requested, forceOmitI1ForCapacity: false });
+      attempts.push({ level: requested, forceOmitI1ForCapacity: true });
+      for (let l = requested - 1; l >= 0; l -= 1) {
+        attempts.push({ level: l, forceOmitI1ForCapacity: true });
+      }
+    } else {
+      attempts.push({ level: undefined, forceOmitI1ForCapacity: false });
+      attempts.push({ level: undefined, forceOmitI1ForCapacity: true });
+      for (let l = 5; l >= 0; l -= 1) {
+        attempts.push({ level: l, forceOmitI1ForCapacity: true });
+      }
+    }
+    return { requested: requested != null && Number.isFinite(requested) ? requested : null, attempts };
+  }
+
+  /**
+   * Single text QR. Prefer limiting I params over packing an unscannable dense QR.
+   */
+  async getClientQRCodeSVG({ clientId, level, profile, signature }) {
+    const { requested, attempts } = this.__buildQrCapacityAttempts(level);
+
+    for (const attempt of attempts) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const config = await this.getClientConfiguration({
+          clientId,
+          forQR: true,
+          forceOmitI1ForCapacity: attempt.forceOmitI1ForCapacity,
+          level: attempt.level,
+          profile,
+          signature,
+        });
+        this.__assertTextQrScannable(config);
+        // eslint-disable-next-line no-await-in-loop
+        const svg = await this.__configToQrSvg(config);
+        return {
+          svg,
+          payload: config,
+          iLimit: this.__buildILimitMeta(requested, config, {
+            forceOmitI1: attempt.forceOmitI1ForCapacity,
+            attemptLevel: attempt.level,
+          }),
+        };
+      } catch (err) {
+        if (!this.__isTextQrCapacityError(err)) throw err;
+      }
+    }
+    throw new ServerError(
+      'Config too large for a single text QR. Use AmneziaClient tab or Preview/Download.',
+      413,
+    );
+  }
+
+  /** MTU line for awg0 / cascade Interface (app_settings → profile bank → WG_MTU). */
+  __serverMtuConfLine() {
+    try {
+      mtuProfiles.ensureSeedBank();
+      const stored = db.appSettings.get('mtu_profile');
+      const pid = stored && mtuProfiles.isKnownProfile(stored)
+        ? String(stored).trim()
+        : mtuProfiles.getDefaultProfileId();
+      const mtu = mtuProfiles.resolveMtuValue(pid);
+      return mtu != null ? `MTU = ${mtu}\n` : '';
+    } catch {
+      return WG_MTU ? `MTU = ${WG_MTU}\n` : '';
+    }
+  }
+
+  __persistServerMtuProfile(profileId) {
+    mtuProfiles.ensureSeedBank();
+    const pid = profileId != null ? String(profileId).trim() : '';
+    if (!mtuProfiles.isKnownProfile(pid)) {
+      throw new ServerError(`Unknown MTU profile: ${profileId}`, 400);
+    }
+    db.appSettings.set('mtu_profile', pid);
+    return pid;
   }
 
   /**
    * AmneziaVPN app: chunked Base64URL QR payloads (see amneziaClientQr.js).
-   * @returns {Promise<{ svgs: string[], payloads: string[] }>}
+   * Caps at MAX_AMNEZIA_QR_CHUNKS (1×3 UI) by omitting I1 / lowering level when needed.
+   * @returns {Promise<{ svgs: string[], payloads: string[], iLimit: object }>}
    */
   async getClientAmneziaQRCodeSvgs({ clientId, level, profile, signature }) {
-    const config = await this.getClientConfiguration({
-      clientId,
-      forQR: level === undefined || level === null,
-      forceOmitI1ForCapacity: level === undefined || level === null,
-      level,
-      profile,
-      signature,
-    });
     const client = await this.getClient({ clientId });
     const description = client.name && String(client.name).trim() ? client.name : 'AmneziaWG';
     const dnsAvailable = isAmneziaDnsAvailable();
     const useServerDns = dnsAvailable && client.useServerDns !== false;
-    return generateAmneziaClientQrSvgs(config, description, {
+    const qrOpts = {
       includeAmneziaDns: dnsAvailable && useServerDns,
-    });
+      includeAmneziaXray: isAmneziaXrayAvailable(),
+      xrayClient: db.clients.getById(clientId) || null,
+    };
+
+    const { requested, attempts } = this.__buildQrCapacityAttempts(level);
+
+    let lastConfig = null;
+    let lastAttempt = null;
+    for (const attempt of attempts) {
+      // eslint-disable-next-line no-await-in-loop
+      const config = await this.getClientConfiguration({
+        clientId,
+        forQR: true,
+        forceOmitI1ForCapacity: attempt.forceOmitI1ForCapacity,
+        level: attempt.level,
+        profile,
+        signature,
+      });
+      lastConfig = config;
+      lastAttempt = attempt;
+      const chunks = countAmneziaQrChunks(config, description, qrOpts);
+      if (chunks <= MAX_AMNEZIA_QR_CHUNKS) {
+        // eslint-disable-next-line no-await-in-loop
+        const out = await generateAmneziaClientQrSvgs(config, description, qrOpts);
+        return {
+          ...out,
+          iLimit: this.__buildILimitMeta(requested, config, {
+            forceOmitI1: attempt.forceOmitI1ForCapacity,
+            attemptLevel: attempt.level,
+          }),
+        };
+      }
+    }
+    // Extreme case: still over cap after level 0 — emit anyway (UI grid still wraps).
+    const out = await generateAmneziaClientQrSvgs(lastConfig, description, qrOpts);
+    return {
+      ...out,
+      iLimit: this.__buildILimitMeta(requested, lastConfig, {
+        forceOmitI1: lastAttempt && lastAttempt.forceOmitI1ForCapacity,
+        attemptLevel: lastAttempt && lastAttempt.level,
+      }),
+    };
   }
 
   /**
@@ -918,6 +1173,8 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     const useServerDns = dnsAvailable && client.useServerDns !== false;
     return buildAmneziaVpnExport(normalized, description, {
       includeAmneziaDns: dnsAvailable && useServerDns,
+      includeAmneziaXray: isAmneziaXrayAvailable(),
+      xrayClient: db.clients.getById(clientId) || null,
     });
   }
 
@@ -937,9 +1194,17 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     return this.buildAmneziaVpnFromIni(config, clientId);
   }
 
-  async createClient({ name }) {
+  async createClient({ name, createdBy, addressRanges }) {
     if (!name) {
       throw new Error('Missing: Name');
+    }
+    const trimmedName = String(name).trim();
+    if (!trimmedName) {
+      throw new Error('Missing: Name');
+    }
+    const nameTaken = db.clients.getAll().some((c) => c.name === trimmedName);
+    if (nameTaken) {
+      throw new ServerError('Client name already exists', 409);
     }
 
     const bank = await loadBank();
@@ -949,22 +1214,38 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     const publicKey = await Util.exec(`echo ${privateKey} | wg pubkey`);
     const preSharedKey = await Util.exec('wg genpsk');
 
-    const allClients = db.clients.getAll();
-    let address;
-    for (let i = 2; i < 255; i++) {
-      const candidate = WG_DEFAULT_ADDRESS.replace('x', i);
-      if (!allClients.some((c) => c.address === candidate)) {
-        address = candidate;
-        break;
-      }
+    const pools = db.vpnPools.list();
+    const ranges = Array.isArray(addressRanges) ? addressRanges.filter(Boolean) : [];
+    if (!ranges.length) {
+      throw new ServerError('No VPN CIDRs assigned to this user', 400);
     }
+    const usedSet = db.clients.usedAddresses();
+    const reservedGateways = pools.map((p) => p.gateway).filter(Boolean);
+    const address = vpnAddress.allocateAddress({ ranges, usedSet, reservedGateways });
     if (!address) throw new Error('Maximum number of clients reached.');
 
     const id = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
+    await this.__ensureServerConfig();
+    let pinJunk = junkParams.readServerJunk(this.__buildConfigFromDb().server);
+    if (!pinJunk) {
+      try {
+        pinJunk = junkParams.generateJunk(binding.profile);
+      } catch {
+        pinJunk = null;
+      }
+    }
+    const junkPins = pinJunk ? { [binding.profile]: pinJunk } : {};
+    let mtuProfileId = null;
+    try {
+      mtuProfiles.ensureSeedBank();
+      mtuProfileId = mtuProfiles.getDefaultProfileId();
+    } catch {
+      mtuProfileId = '1280';
+    }
     db.clients.create({
       id,
-      name,
+      name: trimmedName,
       address,
       public_key: publicKey,
       private_key: privateKey,
@@ -979,16 +1260,25 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       default_signature: binding.signature,
       default_level: 1,
       use_server_dns: 1,
+      junk_pins: junkParams.stringifyJunkPins(junkPins),
+      mtu_profile: mtuProfileId,
+      created_by: createdBy || null,
     });
+    try {
+      ensureAmneziaXrayClientUuids();
+    } catch {
+      /* xray optional */
+    }
 
     this.__config = null;
     await this.saveConfig();
     const { applyFirewall } = require('./firewall');
     applyFirewall();
+    scheduleAmneziaXraySync();
 
     return {
       id,
-      name,
+      name: trimmedName,
       address,
       privateKey,
       publicKey,
@@ -1011,11 +1301,17 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     await this.saveConfig();
     const { applyFirewall } = require('./firewall');
     applyFirewall();
+    scheduleAmneziaXraySync();
   }
 
   async enableClient({ clientId }) {
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    const pools = db.vpnPools.list();
+    const poolCidrs = pools.map((p) => p.cidr);
+    if (!client.address || !vpnAddress.ipInAnyPool(client.address, poolCidrs)) {
+      throw new ServerError('Client address is outside configured VPN pools; assign a valid IP first', 400);
+    }
     const now = Math.floor(Date.now() / 1000);
     if (client.expires_at != null && client.expires_at < now) {
       client.expires_at = null;
@@ -1027,6 +1323,7 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     await this.saveConfig();
     const { applyFirewall } = require('./firewall');
     applyFirewall();
+    scheduleAmneziaXraySync();
   }
 
   async disableClient({ clientId }) {
@@ -1039,27 +1336,54 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     await this.saveConfig();
     const { applyFirewall } = require('./firewall');
     applyFirewall();
+    scheduleAmneziaXraySync();
   }
 
   async updateClientName({ clientId, name }) {
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    if (!trimmedName) {
+      throw new ServerError('Missing: Name', 400);
+    }
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
-    client.name = name;
+    const nameTaken = db.clients.getAll().some((c) => c.id !== clientId && c.name === trimmedName);
+    if (nameTaken) {
+      throw new ServerError('Client name already exists', 409);
+    }
+    client.name = trimmedName;
     client.updated_at = Math.floor(Date.now() / 1000);
     db.clients.update(client);
     this.__config = null;
     await this.saveConfig();
+    scheduleAmneziaXraySync();
   }
 
-  async updateClientAddress({ clientId, address }) {
+  async updateClientAddress({ clientId, address, allowedRanges }) {
     if (!Util.isValidIPv4(address)) {
       throw new ServerError(`Invalid Address: ${address}`, 400);
     }
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
-    const allClients = db.clients.getAll();
-    const alreadyUsed = allClients.some((c) => c.id !== clientId && c.address === address);
-    if (alreadyUsed) {
+    const pools = db.vpnPools.list();
+    const poolCidrs = pools.map((p) => p.cidr);
+    if (!vpnAddress.ipInAnyPool(address, poolCidrs)) {
+      throw new ServerError('Address is outside configured VPN pools', 400);
+    }
+    const gateways = new Set(pools.map((p) => p.gateway).filter(Boolean));
+    if (gateways.has(address)) {
+      throw new ServerError('Address is reserved as a pool gateway', 400);
+    }
+    if (Array.isArray(allowedRanges)) {
+      if (!allowedRanges.length) {
+        throw new ServerError('No VPN address ranges available for this user', 403);
+      }
+      const inRange = allowedRanges.some((cidr) => vpnAddress.ipInCidr(address, cidr));
+      if (!inRange) {
+        throw new ServerError('Address is outside your assigned CIDRs', 403);
+      }
+    }
+    const used = db.clients.usedAddresses(clientId);
+    if (used.has(address)) {
       throw new ServerError('Address already in use', 409);
     }
     client.address = address;
@@ -1071,6 +1395,9 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     applyFirewall();
   }
 
+  /**
+   * Legacy immediate persist (scripts). UI must use preview + apply instead.
+   */
   async updateClientObfuscation({ clientId, profile, signature, level }) {
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
@@ -1112,12 +1439,14 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     };
   }
 
+  /**
+   * Legacy immediate persist. Prefer previewClientObfuscation (no write).
+   */
   async refreshClientSignature({ clientId }) {
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
     const bank = await loadBank();
     const binding = ensureBinding(client.default_profile, client.default_signature, bank);
-    // Do not fall back to the current variant — refresh must change the binding.
     const alternatives = listVariants(binding.profile, bank)
       .filter((v) => v !== String(binding.signature));
     if (!alternatives.length) {
@@ -1139,6 +1468,178 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     };
   }
 
+  async getClientObfuscation({ clientId }) {
+    const client = db.clients.getById(clientId);
+    if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    junkParams.ensureSeedBank();
+    const config = await this.getConfig();
+    return {
+      level: client.default_level ?? 1,
+      profile: client.default_profile || null,
+      signature: client.default_signature != null ? String(client.default_signature) : null,
+      junkPins: junkParams.parseJunkPins(client.junk_pins),
+      serverJunk: junkParams.readServerJunk(config.server),
+    };
+  }
+
+  /**
+   * Build draft values without writing DB / awg.
+   * @param {{ clientId: string, profile?: string, level?: number, signature?: string,
+   *           refreshSignature?: boolean, regenerateJunk?: boolean }} opts
+   */
+  async previewClientObfuscation(opts = {}) {
+    const { clientId } = opts;
+    const client = db.clients.getById(clientId);
+    if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+
+    junkParams.ensureSeedBank();
+    const bank = await loadBank();
+    const pins = junkParams.parseJunkPins(client.junk_pins);
+
+    let profile = opts.profile != null
+      ? String(opts.profile).trim()
+      : (client.default_profile || null);
+    if (!profile || !isKnownProfile(profile)) {
+      throw new ServerError(`Unknown protocol: ${profile}`, 400);
+    }
+
+    let level = opts.level !== undefined
+      ? Number(opts.level)
+      : (client.default_level ?? 1);
+    if (!Number.isInteger(level) || level < 0 || level > 5) {
+      throw new ServerError('level must be 0..5', 400);
+    }
+
+    let signature = opts.signature != null
+      ? String(opts.signature).trim()
+      : (client.default_signature != null ? String(client.default_signature) : null);
+
+    const refreshSignature = opts.refreshSignature === true;
+    // New junk only when explicit regenerate/refresh; protocol switch reuses junk_pins when present.
+    const forceNewJunk = opts.regenerateJunk === true || refreshSignature;
+
+    if (refreshSignature) {
+      const binding = ensureBinding(profile, signature, bank);
+      profile = binding.profile;
+      const alternatives = listVariants(profile, bank)
+        .filter((v) => v !== String(binding.signature));
+      if (!alternatives.length) {
+        throw new ServerError('No alternative signatures for this protocol', 400);
+      }
+      signature = alternatives[crypto.randomInt(0, alternatives.length)];
+    } else {
+      const variants = listVariants(profile, bank);
+      if (!variants.length) {
+        throw new ServerError(`No signature variants for ${profile}`, 400);
+      }
+      if (!signature || !variants.includes(signature)) {
+        signature = pickRandomVariant(profile, bank);
+      }
+    }
+
+    let junk;
+    if (!forceNewJunk && pins[profile] && typeof pins[profile] === 'object') {
+      try {
+        junk = junkParams.validateJunk(pins[profile]);
+      } catch {
+        junk = null;
+      }
+    }
+    if (!junk) {
+      junk = junkParams.generateJunk(profile);
+    }
+
+    return {
+      level,
+      profile,
+      signature,
+      junk,
+      junkPinned: Boolean(pins[profile]),
+      persisted: false,
+    };
+  }
+
+  async applyClientObfuscation({ clientId, level, profile, signature, junk, mtuProfile }) {
+    return this.__withConfigLock(async () => {
+      const client = db.clients.getById(clientId);
+      if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+
+      junkParams.ensureSeedBank();
+      const bank = await loadBank();
+
+      const pid = typeof profile === 'string' ? profile.trim() : '';
+      if (!pid || !isKnownProfile(pid)) {
+        throw new ServerError(`Unknown protocol: ${profile}`, 400);
+      }
+      const lvl = Number(level);
+      if (!Number.isInteger(lvl) || lvl < 0 || lvl > 5) {
+        throw new ServerError('level must be 0..5', 400);
+      }
+      const vk = signature != null ? String(signature).trim() : '';
+      const variants = listVariants(pid, bank);
+      if (!vk || !variants.includes(vk)) {
+        throw new ServerError(`Unknown signature variant ${vk} for ${pid}`, 400);
+      }
+
+      let validatedJunk;
+      try {
+        validatedJunk = junkParams.validateJunk(junk);
+      } catch (err) {
+        if (err instanceof junkParams.JunkParamsError) {
+          throw new ServerError(err.message, err.status || 400);
+        }
+        throw err;
+      }
+
+      let mtuProfileId = null;
+      if (mtuProfile != null && String(mtuProfile).trim() !== '') {
+        mtuProfileId = this.__persistServerMtuProfile(mtuProfile);
+        client.mtu_profile = mtuProfileId;
+      }
+
+      const pins = junkParams.parseJunkPins(client.junk_pins);
+      pins[pid] = validatedJunk;
+
+      client.default_profile = pid;
+      client.default_signature = vk;
+      client.default_level = lvl;
+      client.junk_pins = junkParams.stringifyJunkPins(pins);
+      client.updated_at = Math.floor(Date.now() / 1000);
+      db.clients.update(client);
+
+      // Avoid getConfig() here — it also takes __withConfigLock (would deadlock).
+      await this.__ensureServerConfig();
+      const config = this.__buildConfigFromDb();
+      if (!config) throw new ServerError('Failed to build config from DB', 500);
+      junkParams.applyJunkToServer(config.server, validatedJunk);
+
+      try {
+        await this.__saveConfig(config);
+        await this.__syncConfig();
+        await this.__syncCascadeInterface();
+        this.__config = config;
+      } catch (err) {
+        this.__config = null;
+        throw new ServerError(
+          `Obfuscation saved but WireGuard sync failed: ${err.message || err}`,
+          503,
+        );
+      }
+
+      return {
+        level: lvl,
+        profile: pid,
+        signature: vk,
+        junk: validatedJunk,
+        junkPins: pins,
+        serverJunk: validatedJunk,
+        mtuProfile: mtuProfileId || client.mtu_profile || null,
+        mtu: mtuProfileId ? mtuProfiles.resolveMtuValue(mtuProfileId) : null,
+        persisted: true,
+      };
+    });
+  }
+
   async updateClientDns({ clientId, useServerDns }) {
     const client = db.clients.getById(clientId);
     if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
@@ -1147,6 +1648,21 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
     db.clients.update(client);
     this.__config = null;
     await this.saveConfig();
+  }
+
+  async updateClientMtu({ clientId, profileId }) {
+    const client = db.clients.getById(clientId);
+    if (!client) throw new ServerError(`Client Not Found: ${clientId}`, 404);
+    const pid = this.__persistServerMtuProfile(profileId);
+    client.mtu_profile = pid;
+    client.updated_at = Math.floor(Date.now() / 1000);
+    db.clients.update(client);
+    this.__config = null;
+    await this.saveConfig();
+    return {
+      mtuProfile: pid,
+      mtu: mtuProfiles.resolveMtuValue(pid),
+    };
   }
 
   async updateClientRuleProfile({ clientId, ruleProfileId }) {

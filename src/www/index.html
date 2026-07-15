@@ -24,6 +24,34 @@
     padding: 1rem;
     overflow-y: auto;
   }
+  .modal-root-over {
+    z-index: 10050;
+  }
+  .modal-root-over .modal-backdrop {
+    z-index: 10050;
+  }
+  .modal-root-over .modal-panel {
+    z-index: 10051;
+  }
+  .icon-btn-badge {
+    position: relative;
+  }
+  .icon-btn-badge-count {
+    position: absolute;
+    top: -0.35rem;
+    right: -0.4rem;
+    min-width: 1rem;
+    height: 1rem;
+    padding: 0 0.2rem;
+    border-radius: 9999px;
+    background: #16a34a;
+    color: #fff;
+    font-size: 0.625rem;
+    font-weight: 700;
+    line-height: 1rem;
+    text-align: center;
+    pointer-events: none;
+  }
   .modal-backdrop {
     position: fixed;
     inset: 0;
@@ -57,6 +85,184 @@
   .dark .modal-title {
     color: #e5e5e5;
   }
+  .modal-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+  }
+  .modal-title-inline {
+    margin-bottom: 0;
+    flex: 1;
+    min-width: 0;
+  }
+  .modal-panel-sni {
+    max-width: min(28rem, 94vw);
+    padding: 1.15rem 1.2rem 1.1rem;
+  }
+  .sni-finder-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.5rem;
+    background: #f3f4f6;
+    border: 1px solid #e5e7eb;
+  }
+  .dark .sni-finder-meta {
+    background: #363636;
+    border-color: #525252;
+  }
+  .sni-finder-meta-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    font-size: 0.8125rem;
+  }
+  .sni-finder-meta-label {
+    color: #6b7280;
+  }
+  .dark .sni-finder-meta-label {
+    color: #a3a3a3;
+  }
+  .sni-finder-meta-value {
+    color: #111827;
+    font-weight: 500;
+    text-align: right;
+    word-break: break-all;
+  }
+  .dark .sni-finder-meta-value {
+    color: #e5e5e5;
+  }
+  .sni-finder-banner {
+    font-size: 0.8125rem;
+    padding: 0.6rem 0.75rem;
+    border-radius: 0.4rem;
+    line-height: 1.35;
+  }
+  .sni-finder-banner-error {
+    background: #fef2f2;
+    color: #b91c1c;
+    border: 1px solid #fecaca;
+  }
+  .dark .sni-finder-banner-error {
+    background: #450a0a;
+    color: #fca5a5;
+    border-color: #7f1d1d;
+  }
+  .sni-finder-progress {
+    margin-top: 0.15rem;
+  }
+  .sni-finder-bar {
+    height: 0.375rem;
+    border-radius: 9999px;
+    background: #e5e7eb;
+    overflow: hidden;
+  }
+  .dark .sni-finder-bar {
+    background: #525252;
+  }
+  .sni-finder-bar-fill {
+    height: 100%;
+    background: #991b1b;
+    border-radius: 9999px;
+    transition: width 0.2s ease;
+  }
+  .sni-finder-list {
+    max-height: 14rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    margin-top: 0.15rem;
+  }
+  .sni-finder-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    text-align: left;
+    width: 100%;
+    padding: 0.55rem 0.7rem;
+    border-radius: 0.4rem;
+    border: 1px solid #e5e7eb;
+    background: #fff;
+    color: #111827;
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .sni-finder-item:hover:not(:disabled) {
+    background: #f9fafb;
+    border-color: #d1d5db;
+  }
+  .sni-finder-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.85;
+  }
+  .dark .sni-finder-item {
+    background: #404040;
+    border-color: #525252;
+    color: #e5e5e5;
+  }
+  .dark .sni-finder-item:hover:not(:disabled) {
+    background: #4a4a4a;
+    border-color: #737373;
+  }
+  .sni-finder-item-main {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.15rem;
+    min-width: 0;
+    flex: 1;
+  }
+  .sni-finder-domain {
+    font-size: 0.875rem;
+    font-weight: 500;
+    word-break: break-all;
+  }
+  .sni-finder-domain-scan {
+    color: #16a34a;
+  }
+  .dark .sni-finder-domain-scan {
+    color: #4ade80;
+  }
+  .sni-finder-domain-bank {
+    color: #ca8a04;
+  }
+  .dark .sni-finder-domain-bank {
+    color: #facc15;
+  }
+  .sni-finder-domain-dead {
+    color: #dc2626;
+  }
+  .dark .sni-finder-domain-dead {
+    color: #f87171;
+  }
+  .sni-finder-item-meta {
+    display: flex;
+    gap: 0.75rem;
+    font-size: 0.75rem;
+    color: #6b7280;
+  }
+  .dark .sni-finder-item-meta {
+    color: #a3a3a3;
+  }
+  .sni-finder-scan-btn {
+    width: 100%;
+    display: block;
+  }
+  .sni-finder-banner-info {
+    background: #f3f4f6;
+    color: #4b5563;
+    border: 1px solid #e5e7eb;
+  }
+  .dark .sni-finder-banner-info {
+    background: #363636;
+    color: #d4d4d4;
+    border-color: #525252;
+  }
   .modal-body {
     display: flex;
     flex-direction: column;
@@ -82,6 +288,32 @@
     margin-top: 1rem;
     gap: 0.55rem;
   }
+  .thin-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: #c4c4c4 transparent;
+  }
+  .thin-scroll::-webkit-scrollbar {
+    width: 5px;
+  }
+  .thin-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb {
+    background: #c4c4c4;
+    border-radius: 9999px;
+  }
+  .thin-scroll::-webkit-scrollbar-thumb:hover {
+    background: #a3a3a3;
+  }
+  .dark .thin-scroll {
+    scrollbar-color: #6b6b6b transparent;
+  }
+  .dark .thin-scroll::-webkit-scrollbar-thumb {
+    background: #6b6b6b;
+  }
+  .dark .thin-scroll::-webkit-scrollbar-thumb:hover {
+    background: #808080;
+  }
   .dns-profile-list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -92,35 +324,232 @@
     margin: 0;
     padding: 0 0.3rem 0 0;
     list-style: none;
-    scrollbar-width: thin;
-    scrollbar-color: #c4c4c4 transparent;
   }
   @media (max-width: 520px) {
     .dns-profile-list {
       grid-template-columns: 1fr;
     }
   }
-  .dns-profile-list::-webkit-scrollbar {
-    width: 5px;
+  /* Preview tab: ~one QR wide (QR SVG is 512px); amnezia needs room for 3×560 grid. */
+  .qrcode-modal-panel.qrcode-modal-preview {
+    width: min(92vw, 32rem);
+    max-width: 100%;
   }
-  .dns-profile-list::-webkit-scrollbar-track {
-    background: transparent;
+  .qrcode-modal-panel.qrcode-modal-amnezia {
+    width: var(--amnezia-qr-modal-width, min(100vw - 1rem, 36rem));
+    max-width: min(100vw - 1rem, 112rem);
   }
-  .dns-profile-list::-webkit-scrollbar-thumb {
-    background: #c4c4c4;
-    border-radius: 9999px;
+  .qrcode-modal-panel.qrcode-modal-text {
+    max-width: min(100vw - 1rem, 40rem);
   }
-  .dns-profile-list::-webkit-scrollbar-thumb:hover {
-    background: #a3a3a3;
+  .qrcode-modal-panel.qrcode-modal-xray {
+    width: min(100vw - 1rem, 40rem);
+    max-width: min(100vw - 1rem, 40rem);
   }
-  .dark .dns-profile-list {
-    scrollbar-color: #6b6b6b transparent;
+  .qrcode-xray-stack {
+    width: 100%;
+    max-width: 560px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    box-sizing: border-box;
   }
-  .dark .dns-profile-list::-webkit-scrollbar-thumb {
-    background: #6b6b6b;
+  .qrcode-xray-stack .qrcode-text-img {
+    width: 560px;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
   }
-  .dark .dns-profile-list::-webkit-scrollbar-thumb:hover {
-    background: #808080;
+  .qrcode-copy-field {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+    box-sizing: border-box;
+    text-align: left;
+    padding: 0.5rem 0.65rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 0.75rem;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+    word-break: break-all;
+    white-space: normal;
+    border-radius: 0.375rem;
+    border: 1px solid #e5e7eb;
+    background: #f3f4f6;
+    color: #1f2937;
+    cursor: pointer;
+  }
+  .qrcode-copy-field:hover {
+    background: #e5e7eb;
+  }
+  .dark .qrcode-copy-field {
+    border-color: #737373;
+    background: #525252;
+    color: #e5e5e5;
+  }
+  .dark .qrcode-copy-field:hover {
+    background: #737373;
+  }
+  .qrcode-preview-text {
+    width: 100%;
+    max-height: 55vh;
+    overflow-y: auto;
+  }
+  /* Fixed cell size (~2× previous 280px). Do not shrink when more chunks — scroll instead. */
+  .qrcode-amnezia-scroll {
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .qrcode-amnezia-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--amnezia-qr-cols, 1), 560px);
+    gap: 1rem;
+    justify-content: center;
+    width: max-content;
+    margin: 0 auto;
+  }
+  .qrcode-amnezia-cell {
+    width: 560px;
+    text-align: center;
+    justify-self: center;
+  }
+  .qrcode-amnezia-cell img {
+    width: 560px;
+    height: auto;
+    display: block;
+  }
+  .qrcode-text-img {
+    width: 560px;
+    max-width: none;
+    height: auto;
+    display: block;
+  }
+  .qrcode-i-limit-note {
+    margin-top: 0.75rem;
+    text-align: center;
+    font-size: 0.875rem;
+    line-height: 1.35;
+    color: #6b7280;
+  }
+  .dark .qrcode-i-limit-note {
+    color: #a3a3a3;
+  }
+  select.select-no-arrow {
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: none;
+  }
+  select.select-no-arrow::-ms-expand {
+    display: none;
+  }
+  .modal-panel-auth .modal-title {
+    margin-bottom: 0;
+  }
+  .modal-panel-auth .modal-auth-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+  .modal-panel-auth .modal-body {
+    gap: 0.75rem;
+  }
+  .modal-panel-auth .modal-footer {
+    margin-top: 1rem;
+  }
+  .modal-auth-input {
+    width: 100%;
+    box-sizing: border-box;
+    border-radius: 0.375rem;
+    border: 2px solid #e5e7eb;
+    background: #fff;
+    color: #1f2937;
+    padding: 0.55rem 0.75rem;
+    font-size: 0.875rem;
+  }
+  .dark .modal-auth-input {
+    border-color: #525252;
+    background: #525252;
+    color: #e5e5e5;
+  }
+  .modal-auth-input.panel-auth-field--error:not(:focus) {
+    border-color: #ef4444;
+  }
+  .client-assignees-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .field-error {
+    font-size: 0.75rem;
+    line-height: 1.25;
+    color: #dc2626;
+    margin-top: 0.25rem;
+  }
+  .dark .field-error {
+    color: #f87171;
+  }
+  .form-field-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .icon-btn-sm {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.375rem;
+    background: #e5e7eb;
+    color: #4b5563;
+    transition: background 0.15s ease, color 0.15s ease;
+    flex-shrink: 0;
+  }
+  .icon-btn-sm:hover {
+    background: #d1d5db;
+  }
+  .dark .icon-btn-sm {
+    background: #525252;
+    color: #d4d4d4;
+  }
+  .dark .icon-btn-sm:hover {
+    background: #737373;
+  }
+  /* Header DNS status (Tailwind green/amber not in compiled app.css) */
+  .dns-header-btn {
+    background: #e5e7eb;
+    color: #4b5563;
+  }
+  .dns-header-btn:hover {
+    background: #d1d5db;
+  }
+  .dark .dns-header-btn {
+    background: #404040;
+    color: #a3a3a3;
+  }
+  .dark .dns-header-btn:hover {
+    background: #525252;
+  }
+  .dns-header-btn.is-on {
+    background: #16a34a;
+    color: #fff;
+  }
+  .dns-header-btn.is-on:hover {
+    background: #22c55e;
+  }
+  .dns-header-btn.is-warn {
+    background: #f59e0b;
+    color: #fff;
+  }
+  .dns-header-btn.is-warn:hover {
+    background: #d97706;
   }
   .dns-profile-item {
     display: flex;
@@ -334,8 +763,8 @@
             <div class="flex flex-row flex-wrap items-center justify-between gap-3 w-full">
               <button
                 type="button"
-                @click="togglePasswordChangeOpen"
-                class="flex items-center justify-center min-h-8 max-w-[11rem] px-3 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-sm font-medium truncate transition hover:bg-gray-300 dark:hover:bg-neutral-600 shrink-0"
+                @click="toggleUserActions"
+                class="flex items-center justify-center min-h-8 max-w-[14rem] px-3 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-700 dark:text-neutral-300 text-base font-medium truncate transition hover:bg-gray-300 dark:hover:bg-neutral-600 shrink-0"
                 :title="$t('passwordChangeToggleHint')">
                 {{ panelUsername || '—' }}
               </button>
@@ -377,7 +806,7 @@
               </svg>
             </button>
             <!-- Show / hide firewall blocks -->
-            <button type="button" @click="toggleFirewallBlocks()"
+            <button v-if="canManageFirewall" type="button" @click="toggleFirewallBlocks()"
               class="flex items-center justify-center w-8 h-8 rounded-full bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 transition"
               :title="firewallBlocksVisible ? $t('hideFirewallBlocks') : $t('showFirewallBlocks')">
               <svg class="w-5 h-5 text-gray-600 dark:text-neutral-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -387,12 +816,11 @@
             <!-- Amnezia DNS install / remove -->
             <button type="button" @click="toggleAmneziaDns()"
               :disabled="amneziaDnsBusy"
-              class="flex items-center justify-center w-8 h-8 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
-              :class="amneziaDnsPhase === 'running'
-                ? 'bg-red-800 hover:bg-red-700 text-white'
-                : (amneziaDnsPhase === 'error' || amneziaDnsPhase === 'degraded')
-                  ? 'bg-amber-500 hover:bg-amber-600 text-white'
-                  : 'bg-gray-200 hover:bg-gray-300 dark:bg-neutral-700 dark:hover:bg-neutral-600 text-gray-600 dark:text-neutral-400'"
+              class="dns-header-btn flex items-center justify-center w-8 h-8 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              :class="{
+                'is-warn': amneziaDnsPhase === 'error' || amneziaDnsPhase === 'degraded',
+                'is-on': (amneziaDnsPhase === 'running' || amneziaDnsAvailable) && amneziaDnsPhase !== 'error' && amneziaDnsPhase !== 'degraded',
+              }"
               :title="amneziaDnsHeaderTitle()">
               <svg v-if="amneziaDnsBusy || amneziaDnsPhase === 'installing' || amneziaDnsPhase === 'removing'"
                 class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -401,6 +829,24 @@
               </svg>
               <svg v-else class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+              </svg>
+            </button>
+            <!-- Amnezia Xray VLESS Reality -->
+            <button v-if="canManageXray" type="button" @click="toggleAmneziaXray()"
+              :disabled="amneziaXrayBusy"
+              class="dns-header-btn flex items-center justify-center w-8 h-8 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              :class="{
+                'is-warn': amneziaXrayPhase === 'error' || amneziaXrayPhase === 'degraded',
+                'is-on': (amneziaXrayPhase === 'running' || amneziaXrayAvailable) && amneziaXrayPhase !== 'error' && amneziaXrayPhase !== 'degraded',
+              }"
+              :title="amneziaXrayHeaderTitle()">
+              <svg v-if="amneziaXrayBusy || amneziaXrayPhase === 'installing' || amneziaXrayPhase === 'removing'"
+                class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <svg v-else class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
               </svg>
             </button>
             <!-- Language -->
@@ -428,37 +874,18 @@
               </div>
             </div>
             <div
-              v-show="passwordChangeOpen"
-              class="w-full mt-3 box-border border-t border-gray-200 dark:border-neutral-600 panel-password-row-gap">
-              <form
-                class="panel-password-form flex flex-wrap items-center w-full justify-start gap-y-3"
-                @submit.prevent="submitPasswordChange"
-                @click.stop>
-                <span class="text-base font-semibold text-gray-800 dark:text-neutral-200 whitespace-nowrap shrink-0">{{ $t('passwordChangeTitle') }}:</span>
-                <label class="sr-only" for="panel-password-new">{{ $t('passwordChangeNew') }}</label>
-                <input
-                  id="panel-password-new"
-                  v-model="passwordNew"
-                  type="password"
-                  autocomplete="new-password"
-                  :placeholder="$t('passwordChangeNew')"
-                  :class="passwordInputClass(passwordFieldError)" />
-                <span class="text-base font-semibold text-gray-800 dark:text-neutral-200 whitespace-nowrap shrink-0">{{ $t('passwordChangeConfirmLabel') }}:</span>
-                <label class="sr-only" for="panel-password-confirm">{{ $t('passwordChangeConfirm') }}</label>
-                <input
-                  id="panel-password-confirm"
-                  v-model="passwordConfirm"
-                  type="password"
-                  autocomplete="new-password"
-                  :placeholder="$t('passwordChangeConfirm')"
-                  :class="passwordInputClass(passwordFieldError)" />
-                <button
-                  type="submit"
-                  :disabled="passwordChangeSubmitting"
-                  class="panel-password-submit inline-flex items-center justify-center shrink-0 rounded text-sm font-medium bg-red-800 hover:bg-red-700 dark:bg-red-800 dark:hover:bg-red-700 text-white dark:text-white disabled:opacity-50 transition shadow-sm px-4 py-2 box-border border-0">
-                  {{ $t('passwordChangeSubmit') }}
+              v-show="userActionsOpen"
+              class="w-full box-border border-t border-gray-200 dark:border-neutral-600 panel-password-row-gap">
+              <div class="flex flex-wrap items-center gap-2">
+                <button type="button" @click="openPasswordModal"
+                  class="inline-flex items-center justify-center px-4 py-2 rounded text-sm font-medium bg-red-800 hover:bg-red-700 text-white transition">
+                  {{ $t('passwordChangeToggleHint') }}
                 </button>
-              </form>
+                <button v-if="canCreateUsers" type="button" @click="openCreateUserModal"
+                  class="inline-flex items-center justify-center px-4 py-2 rounded text-sm font-medium bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 transition">
+                  {{ $t('createUserTitle') }}
+                </button>
+              </div>
             </div>
         </div>
         <div class="text-sm text-gray-400 dark:text-neutral-400 mb-5"></div>
@@ -485,8 +912,10 @@
               <p class="text-2xl font-medium dark:text-neutral-200">{{$t("clients")}}</p>
             </div>
             <div class="flex-shrink-0 flex items-center gap-3">
-              <button @click="clientCreate = true; clientCreateName = '';"
-                class="flex items-center justify-center p-2 rounded border-2 border-gray-100 dark:border-neutral-600 text-gray-700 dark:text-neutral-200 hover:bg-red-800 hover:border-red-800 hover:text-white transition" :title="$t('new')">
+              <button @click="canCreateClient && (clientCreate = true, clientCreateName = '')"
+                :disabled="!canCreateClient"
+                :title="canCreateClient ? $t('new') : $t('noCidrAssignedCannotCreateClient')"
+                class="flex items-center justify-center p-2 rounded border-2 border-gray-100 dark:border-neutral-600 text-gray-700 dark:text-neutral-200 hover:bg-red-800 hover:border-red-800 hover:text-white transition disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-gray-100 disabled:hover:text-gray-700">
                 <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
@@ -624,8 +1053,8 @@
                       </svg>
                     </button>
 
-                    <!-- Firewall profile: always required; null = Full Access (id=1); no "No profile" option -->
-                    <select
+                    <!-- Firewall profile: admin only; hidden when firewall panel is hidden -->
+                    <select v-if="canManageFirewall && firewallBlocksVisible"
                       :value="client.ruleProfileId == null ? 1 : client.ruleProfileId"
                       @change="onFirewallProfileChange(client, $event)"
                       class="select-no-arrow align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2rem] border-0 cursor-pointer text-center min-w-[5rem]"
@@ -658,19 +1087,26 @@
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                       </svg>
                     </button>
-                    <!-- DNS: server (Amnezia) vs direct (8.8.8.8 etc). Shown only when Amnezia DNS is available. -->
+                    <!-- DNS: server (Amnezia) vs direct. Same gray as sibling card buttons. -->
                     <button v-if="client.downloadableConfig && amneziaDnsAvailable" type="button"
                       @click="toggleClientDns(client)"
-                      class="align-middle p-2 rounded transition min-h-[2.25rem] min-w-[2.25rem] bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-gray-200 dark:hover:bg-neutral-500"
+                      class="align-middle p-2 rounded transition min-h-[2.25rem] min-w-[2.25rem] bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white"
                       :title="getClientUseServerDns(client) ? $t('dnsServerTitle') : $t('dnsDirectTitle')">
                       <svg v-if="getClientUseServerDns(client)" class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
                       </svg>
                       <svg v-else class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z" />
                       </svg>
                     </button>
-                    <!-- Download Config: format + link -->
+                    <!-- MTU profile cycle -->
+                    <button v-if="client.downloadableConfig && mtuProfileCatalog.length" type="button"
+                      @click="cycleClientMtu(client)"
+                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition text-sm min-h-[2.25rem] font-mono min-w-[3.25rem]"
+                      :title="$t('mtuTitle', { mtu: getClientMtuLabel(client) })">
+                      {{ getClientMtuLabel(client) }}
+                    </button>
+                    <!-- Download Config: format + link (committed server config) -->
                     <div v-if="client.downloadableConfig"
                       class="align-middle inline-flex rounded overflow-hidden bg-gray-100 dark:bg-neutral-600">
                       <select
@@ -685,10 +1121,7 @@
                       <a
                         :href="clientConfigurationDownloadHref(client)"
                         :download="clientDownloadFilename(client)"
-                        class="inline-flex items-center px-2 py-2 bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 transition"
-                        :class="{
-                          'hover:bg-red-800 dark:hover:bg-red-800 hover:text-white dark:hover:text-white': client.downloadableConfig,
-                        }"
+                        class="inline-flex items-center px-2 py-2 bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white dark:hover:text-white transition"
                         :title="$t('downloadConfig')"
                         @click="if(!client.downloadableConfig) { $event.preventDefault(); }">
                         <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
@@ -699,24 +1132,6 @@
                       </a>
                     </div>
 
-                    <button v-if="client.downloadableConfig" @click="showConfig(client)"
-                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
-                      :title="$t('viewConfig')">
-                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                          d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                          d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                    </button>
-                    <button v-if="client.downloadableConfig" @click="copyConfig(client)"
-                      class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
-                      :title="$t('copyConfig')">
-                      <svg class="w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                          d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                      </svg>
-                    </button>
                     <button v-if="client.downloadableConfig" @click="showQR(client)"
                       class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition"
                       :title="$t('showQR')">
@@ -726,10 +1141,10 @@
                       </svg>
                     </button>
 
-                    <!-- Delete -->
-
-                    <button
-                      class="align-middle bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white dark:hover:text-white p-2 rounded transition"
+                    <!-- Delete: only when traffic/stats panel is expanded -->
+                    <button v-if="expandedClientStatsId === client.id"
+                      type="button"
+                      class="align-middle bg-red-800 hover:bg-red-700 text-white p-2 rounded transition"
                       :title="$t('deleteClient')" @click="clientDelete = client">
                       <svg class="w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                         <path fill-rule="evenodd"
@@ -762,19 +1177,69 @@
                     </span>
                   </div>
                   <div class="flex flex-col gap-1">
-                    <div class="text-gray-600 dark:text-neutral-300 font-medium">{{ $t('trafficHistory') }}</div>
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-gray-600 dark:text-neutral-300 font-medium">{{ $t('trafficHistory') }}</div>
+                      <button type="button" @click.stop="resetClientTraffic(client)"
+                        :disabled="resettingTrafficClientId === client.id"
+                        class="icon-btn-sm transition disabled:opacity-50 disabled:cursor-not-allowed"
+                        :title="$t('trafficReset')">
+                        <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                      </button>
+                    </div>
                     <template v-for="period in ['hour','day','week','month','year']">
                       <div :key="period" class="flex justify-between gap-2">
                         <span>{{ $t('trafficPeriod' + period.charAt(0).toUpperCase() + period.slice(1)) }}</span>
                         <span class="tabular-nums">{{ formatTrafficShort((clientTrafficHistory[client.id] && clientTrafficHistory[client.id][period]) ? (clientTrafficHistory[client.id][period].rx || 0) + (clientTrafficHistory[client.id][period].tx || 0) : 0) }}</span>
                       </div>
                     </template>
-                    <button type="button" @click.stop="resetClientTraffic(client)"
-                      :disabled="resettingTrafficClientId === client.id"
-                      class="mt-2 self-start px-3 py-1.5 rounded bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-700 dark:text-neutral-200 text-xs font-medium transition disabled:opacity-50 disabled:cursor-not-allowed">
-                      {{ $t('trafficReset') }}
-                    </button>
                   </div>
+                  <div v-if="canAssignClients" class="flex flex-col gap-1" @click.stop>
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="text-gray-600 dark:text-neutral-300 font-medium">{{ $t('clientUsersTitle') }}</div>
+                      <button type="button" @click="openClientAssignModal(client)"
+                        class="icon-btn-sm"
+                        :title="$t('clientUserAssign')">
+                        <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div v-for="u in (client.users || [])" :key="u.id" class="client-assignees-row">
+                      <span class="truncate">{{ u.username }}</span>
+                      <button type="button" @click="revokeClientUser(client, u)"
+                        class="icon-btn-sm"
+                        :title="$t('clientUserRevoke')">
+                        <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="tabular-nums text-gray-600 dark:text-neutral-300">
+                    {{ formatClientCreated(client) }}
+                  </div>
+                </div>
+
+                <!-- Obfuscation draft Apply / Cancel (v-show: no remount flicker) -->
+                <div v-show="isObfuscationDirty(client)"
+                  class="w-full flex flex-wrap items-center justify-end gap-2 pt-2 mt-1 border-t border-gray-100 dark:border-neutral-600"
+                  @click.stop>
+                  <button type="button"
+                    @click="applyClientObfuscation(client)"
+                    :disabled="isObfuscationBusy(client)"
+                    class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition"
+                    :title="$t('obfuscationApplyTitle')">
+                    {{ isObfuscationBusy(client) ? $t('obfuscationApplyBusy') : $t('obfuscationApply') }}
+                  </button>
+                  <button type="button"
+                    @click="cancelClientObfuscation(client)"
+                    :disabled="isObfuscationBusy(client)"
+                    class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 disabled:opacity-50 disabled:cursor-not-allowed text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition"
+                    :title="$t('obfuscationCancelTitle')">
+                    {{ $t('obfuscationCancel') }}
+                  </button>
                 </div>
 
               </div>
@@ -783,8 +1248,10 @@
             <div v-if="clients && clients.length === 0">
               <p class="text-center m-10 text-gray-400 dark:text-neutral-400 text-sm">
                 {{$t("noClients")}}<br /><br />
-                <button @click="clientCreate = true; clientCreateName = '';"
-                  class="bg-red-800 hover:bg-red-700 text-white border-2 border-none py-2 px-4 rounded inline-flex items-center transition">
+                <button @click="canCreateClient && (clientCreate = true, clientCreateName = '')"
+                  :disabled="!canCreateClient"
+                  :title="canCreateClient ? $t('newClient') : $t('noCidrAssignedCannotCreateClient')"
+                  class="bg-red-800 hover:bg-red-700 text-white border-2 border-none py-2 px-4 rounded inline-flex items-center transition disabled:opacity-50 disabled:cursor-not-allowed">
                   <svg class="w-4 mr-2" inline xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"
                     stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
@@ -807,7 +1274,7 @@
         </div>
 
         <!-- Firewall profiles (first row = global rules, second = Full Access, rest = profiles; expand to manage rules) -->
-        <div v-if="firewallBlocksVisible" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden shrink-0 mt-5 mb-8">
+        <div v-if="firewallBlocksVisible && canManageFirewall" class="shadow-md rounded-lg bg-white dark:bg-neutral-700 overflow-hidden shrink-0 mt-5 mb-8">
           <div class="flex flex-row flex-auto items-center p-3 px-5 border-b-2 border-gray-100 dark:border-neutral-600">
             <p class="text-xl font-medium dark:text-neutral-200 flex-grow">{{ $t('firewallProfilesTitle') }}</p>
             <button type="button" @click="openProfileCreate()" class="flex items-center justify-center p-2 rounded border-2 border-gray-100 dark:border-neutral-600 text-gray-700 dark:text-neutral-200 hover:bg-red-800 hover:border-red-800 hover:text-white transition" :title="$t('createNewProfile')">
@@ -826,7 +1293,7 @@
                   <span class="font-medium dark:text-neutral-200">{{ profile.name }}</span>
                 </div>
                 <div class="flex-shrink-0 flex items-center justify-center gap-0">
-                  <template v-if="expandedProfileIds.includes(profile.id) && profile.id !== 'global'">
+                  <template v-if="expandedProfileIds.includes(profile.id) && profile.id !== 'global' && profile.id !== 'cidr'">
                     <button type="button" @click.stop="openProfileEdit(profile)" class="p-2 rounded bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white transition" :title="$t('edit')">
                       <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -838,11 +1305,48 @@
                       </svg>
                     </button>
                   </template>
-                  <span v-else-if="profile.id === 'global' || profile.id === 1" class="inline-block w-9 h-9" aria-hidden="true"></span>
+                  <span v-else-if="profile.id === 'global' || profile.id === 1 || profile.id === 'cidr'" class="inline-block w-9 h-9" aria-hidden="true"></span>
                 </div>
               </div>
               <div v-if="expandedProfileIds.includes(profile.id)" class="mt-4 overflow-x-auto pb-4">
-                <table v-if="profile.id === 'global'" class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
+                <table v-if="profile.id === 'cidr'" class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
+                  <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
+                    <tr>
+                      <th class="px-3 py-1">{{ $t('cidrPoolName') }}</th>
+                      <th class="px-3 py-1">{{ $t('cidrPoolCidr') }}</th>
+                      <th class="px-3 py-1">{{ $t('cidrPoolUsers') }}</th>
+                      <th class="px-3 py-1 w-40"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="pool in vpnPools" :key="pool.id" class="border-b border-gray-100 dark:border-neutral-600">
+                      <td class="px-3 py-1">{{ pool.name || '—' }}</td>
+                      <td class="px-3 py-1 font-mono">{{ pool.cidr }}</td>
+                      <td class="px-3 py-1 truncate max-w-xs" :title="vpnPoolUsernames(pool)">{{ vpnPoolUsernames(pool) }}</td>
+                      <td class="px-3 py-1 whitespace-nowrap">
+                        <button type="button" @click="openCidrPoolAssign(pool)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1" :title="$t('cidrPoolAssignUsers')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                          </svg>
+                        </button>
+                        <button type="button" @click="openCidrPoolEdit(pool)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition mr-1" :title="$t('edit')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button type="button" @click="deleteCidrPool(pool)" class="align-middle inline-block bg-gray-100 dark:bg-neutral-600 dark:text-neutral-300 hover:bg-red-800 dark:hover:bg-red-800 hover:text-white p-2 rounded transition" :title="$t('deleteShort')">
+                          <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </td>
+                    </tr>
+                    <tr class="border-b border-gray-100 dark:border-neutral-600 hover:bg-gray-50 dark:hover:bg-neutral-600 cursor-pointer" @click="openCidrPoolCreate()">
+                      <td colspan="4" class="px-3 py-3 text-center text-gray-500 dark:text-neutral-400 hover:text-red-800 dark:hover:text-red-400 transition text-sm">{{ $t('cidrPoolAdd') }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <table v-else-if="profile.id === 'global'" class="w-full text-sm text-left text-gray-700 dark:text-neutral-300">
                   <thead class="text-xs uppercase bg-gray-100 dark:bg-neutral-600 text-gray-600 dark:text-neutral-200">
                     <tr>
                       <th class="px-3 py-1">{{ $t('globalRuleAction') }}</th>
@@ -942,7 +1446,7 @@
           <div class="modal-panel modal-panel-dns" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-dns-install-title">
             <h3 id="modal-dns-install-title" class="modal-title">{{ $t('dnsInstallTitle') }}</h3>
             <div class="modal-body">
-              <ul class="dns-profile-list" role="listbox" :aria-activedescendant="'dns-profile-' + amneziaDnsInstallSelected">
+              <ul class="dns-profile-list thin-scroll" role="listbox" :aria-activedescendant="'dns-profile-' + amneziaDnsInstallSelected">
                 <li v-for="p in amneziaDnsProfiles" :key="p.id" :id="'dns-profile-' + p.id" role="option"
                   :aria-selected="amneziaDnsInstallSelected === p.id"
                   :aria-disabled="p.available === false">
@@ -988,6 +1492,147 @@
                 class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
                 {{ $t('dnsInstallCancel') }}
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Xray install modal -->
+        <div v-if="amneziaXrayInstallOpen" class="modal-root">
+          <div class="modal-backdrop" @click="closeAmneziaXrayInstall"></div>
+          <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-xray-install-title">
+            <div class="modal-title-row">
+              <h3 id="modal-xray-install-title" class="modal-title modal-title-inline">{{ $t('xrayInstallTitle') }}</h3>
+              <button type="button" class="icon-btn-sm" :title="$t('xrayResetKeys')"
+                @click="confirmAmneziaXrayReset" :disabled="amneziaXrayBusy">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayAddress') }}</label>
+                <input v-model.trim="amneziaXrayAddress" type="text"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
+                  :placeholder="$t('xrayAddressPlaceholder')" />
+              </div>
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-1">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('xraySni') }}</label>
+                  <button type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
+                    @click="openSniFinder" :disabled="amneziaXrayBusy">
+                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <span v-if="sniFinderAliveCount > 0" class="icon-btn-badge-count">{{ sniFinderAliveCount }}</span>
+                  </button>
+                </div>
+                <input v-model.trim="amneziaXraySni" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayFingerprint') }}</label>
+                <select v-model="amneziaXrayFingerprint" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="fp in amneziaXrayFingerprints" :key="fp" :value="fp">{{ fp }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayFlow') }}</label>
+                <select v-model="amneziaXrayFlow" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="f in amneziaXrayFlows" :key="String(f.value)" :value="f.value">{{ f.label }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPort') }}</label>
+                <input v-model.number="amneziaXrayPort" type="number" min="1" max="65535" step="1"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+            </div>
+            <div class="modal-footer flex-wrap">
+              <button type="button" @click="confirmAmneziaXrayInstall"
+                :disabled="!amneziaXraySni || !amneziaXrayAddress || amneziaXrayBusy || !isValidAmneziaXrayPort"
+                class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
+                {{ $t('xrayInstallConfirm') }}
+              </button>
+              <button type="button" @click="closeAmneziaXrayInstall"
+                class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
+                {{ $t('xrayInstallCancel') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- SNI Finder modal -->
+        <div v-if="sniFinderOpen" class="modal-root modal-root-over">
+          <div class="modal-backdrop" @click="closeSniFinder"></div>
+          <div class="modal-panel modal-panel-sni" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-sni-finder-title">
+            <div class="modal-title-row">
+              <h3 id="modal-sni-finder-title" class="modal-title modal-title-inline">{{ $t('xraySniFinderTitle') }}</h3>
+              <button type="button" class="icon-btn-sm" :title="$t('xrayInstallCancel')" @click="closeSniFinder">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body gap-3">
+              <div class="sni-finder-meta">
+                <div class="sni-finder-meta-row">
+                  <span class="sni-finder-meta-label">{{ $t('xraySniPublicIp') }}</span>
+                  <span class="sni-finder-meta-value tabular-nums" :class="sniFinderPublicIpError ? 'text-red-600 dark:text-red-400' : ''">
+                    {{ sniFinderPublicIpError || sniFinderPublicIp || '—' }}
+                  </span>
+                </div>
+                <div>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xraySniCidr') }}</label>
+                  <input v-model.trim="sniFinderCidr" type="text"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono text-sm"
+                    :disabled="sniFinderBusy"
+                    :placeholder="sniFinderDefaultCidr || 'x.x.x.0/24'" />
+                </div>
+              </div>
+              <div v-if="sniFinderEmptyMsg" class="sni-finder-banner sni-finder-banner-info">
+                {{ sniFinderEmptyMsg }}
+              </div>
+              <div v-else-if="sniFinderError" class="sni-finder-banner sni-finder-banner-error">
+                {{ sniFinderError }}
+              </div>
+              <div v-if="sniFinderBusy" class="sni-finder-progress">
+                <div class="flex justify-between text-xs text-gray-600 dark:text-neutral-400 mb-1">
+                  <span>{{ sniFinderPhaseLabel }}</span>
+                  <span class="tabular-nums">{{ sniFinderProgress.done }}/{{ sniFinderProgress.total || '—' }}</span>
+                </div>
+                <div class="sni-finder-bar">
+                  <div class="sni-finder-bar-fill" :style="{ width: sniFinderProgressPct + '%' }"></div>
+                </div>
+              </div>
+              <button type="button" @click="startSniScan(true)"
+                :disabled="sniFinderBusy || !sniFinderCidr"
+                class="sni-finder-scan-btn bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
+                {{ $t('xraySniScan') }}
+              </button>
+              <div v-if="sniFinderEntries && sniFinderEntries.length" class="sni-finder-list thin-scroll">
+                <button type="button" v-for="row in sniFinderEntries" :key="row.domain + ':' + row.source"
+                  class="sni-finder-item"
+                  :disabled="row.alive === false"
+                  @click="pickSniDomain(row)">
+                  <div class="sni-finder-item-main">
+                    <span class="sni-finder-domain"
+                      :class="row.alive === false ? 'sni-finder-domain-dead' : (row.source === 'bank' ? 'sni-finder-domain-bank' : 'sni-finder-domain-scan')">
+                      {{ row.domain }}
+                    </span>
+                    <span class="sni-finder-item-meta tabular-nums">
+                      <span v-if="row.ip">{{ row.ip }}</span>
+                      <span v-if="row.latencyMs != null">{{ Math.round(row.latencyMs) }}ms</span>
+                      <span v-if="row.source === 'bank'">bank</span>
+                    </span>
+                  </div>
+                  <span class="icon-btn-sm" role="button" :title="$t('xraySniRecheck')"
+                    @click.stop.prevent="recheckSniDomain(row)">
+                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1102,18 +1747,31 @@
           </div>
         </div>
 
-        <!-- QR Code (compact config without I1; full config via Download/View). Header: tabs + close; content: QR only. -->
+        <!-- QR Code / Preview (committed server config) -->
         <div v-if="qrcodeModalVisible">
           <div class="bg-black bg-opacity-50 fixed top-0 right-0 left-0 bottom-0 flex items-center justify-center z-20">
-            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg flex flex-col max-w-full">
+            <div class="bg-white dark:bg-neutral-700 rounded-md shadow-lg flex flex-col max-w-full qrcode-modal-panel"
+              :class="{
+                'qrcode-modal-preview': qrcodeTab === 'preview',
+                'qrcode-modal-amnezia': qrcodeTab === 'amnezia',
+                'qrcode-modal-text': qrcodeTab === 'text',
+                'qrcode-modal-xray': qrcodeTab === 'xray',
+              }"
+              :style="qrcodeTab === 'amnezia' ? amneziaQrModalStyle : null">
               <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-neutral-600 shrink-0">
-                <div class="flex gap-1">
+                <div class="flex gap-1 flex-wrap">
                   <button type="button" @click="qrcodeTab = 'amnezia'"
                     :class="qrcodeTab === 'amnezia' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
                     class="pb-1 px-2 transition">{{ $t('qrTabAmneziaClient') }}</button>
                   <button type="button" @click="qrcodeTab = 'text'"
                     :class="qrcodeTab === 'text' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
                     class="pb-1 px-2 transition">{{ $t('qrTabText') }}</button>
+                  <button type="button" @click="qrcodeTab = 'preview'"
+                    :class="qrcodeTab === 'preview' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabPreview') }}</button>
+                  <button v-if="amneziaXrayAvailable" type="button" @click="qrcodeTab = 'xray'"
+                    :class="qrcodeTab === 'xray' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabXray') }}</button>
                 </div>
                 <button type="button" @click="closeQR()"
                   class="text-gray-600 dark:text-neutral-500 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
@@ -1122,56 +1780,267 @@
                   </svg>
                 </button>
               </div>
-              <div class="p-4 overflow-auto max-w-[min(100vw-2rem,56rem)]">
+              <div class="p-4 overflow-auto">
                 <template v-if="qrcodeTab === 'amnezia' && amneziaQrImages.length">
-                  <div class="flex flex-row flex-wrap justify-center items-start gap-4 w-full">
-                    <div v-for="(src, idx) in amneziaQrImages" :key="idx" class="flex-1 min-w-[140px] max-w-[min(48%,280px)] text-center">
-                      <p v-if="amneziaQrImages.length > 1" class="text-sm text-gray-600 dark:text-neutral-400 mb-2">{{ $t('qrAmneziaChunk', { n: idx + 1, total: amneziaQrImages.length }) }}</p>
-                      <button type="button" class="block w-full p-0 border-0 bg-transparent cursor-pointer"
-                        @click="copyQrPayload(qrcodeAmneziaPayloads && qrcodeAmneziaPayloads[idx])">
-                        <img :src="src" :alt="'QR ' + (idx + 1)" class="w-full h-auto mx-auto pointer-events-none" />
-                      </button>
+                  <div class="qrcode-amnezia-scroll">
+                    <div class="qrcode-amnezia-grid" :style="amneziaQrGridStyle">
+                      <div v-for="(src, idx) in amneziaQrImages" :key="idx" class="qrcode-amnezia-cell">
+                        <p v-if="amneziaQrImages.length > 1" class="text-sm text-gray-600 dark:text-neutral-400 mb-2">{{ $t('qrAmneziaChunk', { n: idx + 1, total: amneziaQrImages.length }) }}</p>
+                        <button type="button" class="block w-full p-0 border-0 bg-transparent cursor-pointer"
+                          @click="copyQrPayload(qrcodeAmneziaPayloads && qrcodeAmneziaPayloads[idx])">
+                          <img :src="src" :alt="'QR ' + (idx + 1)" class="pointer-events-none" />
+                        </button>
+                      </div>
                     </div>
                   </div>
+                  <p v-if="qrAmneziaILimitNote" class="qrcode-i-limit-note">{{ qrAmneziaILimitNote }}</p>
                 </template>
-                <button v-else-if="qrcodeTab === 'text' && qrcodeText" type="button"
-                  class="block p-0 border-0 bg-transparent cursor-pointer"
-                  @click="copyQrPayload(qrcodeTextPayload)">
-                  <img :src="qrcodeText" alt="QR Code" class="max-w-full pointer-events-none" />
-                </button>
+                <template v-else-if="qrcodeTab === 'text' && qrcodeText">
+                  <button type="button"
+                    class="block p-0 border-0 bg-transparent cursor-pointer mx-auto"
+                    @click="copyQrPayload(qrcodeTextPayload)">
+                    <img :src="qrcodeText" alt="QR Code" class="qrcode-text-img pointer-events-none" />
+                  </button>
+                  <p v-if="qrTextILimitNote" class="qrcode-i-limit-note">{{ qrTextILimitNote }}</p>
+                </template>
+                <div v-else-if="qrcodeTab === 'text' && !qrcodeText"
+                  class="text-sm text-gray-600 dark:text-neutral-300 text-center py-6 px-2">
+                  {{ $t('qrTextUnavailable') }}
+                </div>
+                <div v-else-if="qrcodeTab === 'preview'" class="flex flex-col gap-3 w-full">
+                  <textarea readonly :value="qrcodePreviewText"
+                    class="qrcode-preview-text thin-scroll p-3 font-mono text-sm bg-gray-100 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 rounded border border-gray-200 dark:border-neutral-500 resize-none block"
+                    rows="12"></textarea>
+                  <textarea v-if="qrcodeXrayJson" readonly :value="qrcodeXrayJson"
+                    class="qrcode-preview-text thin-scroll p-3 font-mono text-sm bg-gray-100 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 rounded border border-gray-200 dark:border-neutral-500 resize-none block"
+                    rows="10"></textarea>
+                  <div class="flex gap-2 flex-wrap">
+                    <button type="button" @click="copyQrPreview"
+                      class="self-start bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">
+                      {{ $t('copyConfig') }}
+                    </button>
+                    <button v-if="qrcodeXrayJson" type="button" @click="copyQrXrayJson"
+                      class="self-start bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
+                      {{ $t('copyXrayJson') }}
+                    </button>
+                  </div>
+                </div>
+                <div v-else-if="qrcodeTab === 'xray'" class="qrcode-xray-stack">
+                  <button v-if="qrcodeXraySvg" type="button"
+                    class="block p-0 m-0 border-0 bg-transparent cursor-pointer w-full"
+                    @click="copyQrXraySub">
+                    <img :src="qrcodeXraySvg" alt="Xray QR" class="qrcode-text-img pointer-events-none" />
+                  </button>
+                  <button type="button" class="qrcode-copy-field" @click="copyQrXraySub">{{ qrcodeXraySubUrl || '—' }}</button>
+                  <button type="button" class="qrcode-copy-field" @click="copyQrXrayVless">{{ qrcodeXrayVlessUrl || '—' }}</button>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- Config View Modal -->
-        <div v-if="configViewClient" class="fixed inset-0 z-20 flex items-center justify-center p-4 overflow-y-auto">
-          <div class="absolute inset-0 bg-black bg-opacity-50" @click="closeConfigView"></div>
-          <div class="relative w-full max-w-2xl my-8 bg-white dark:bg-neutral-700 rounded-md shadow-lg border border-gray-200 dark:border-neutral-600">
-            <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-neutral-600">
-              <p class="font-bold text-gray-800 dark:text-neutral-200">{{ $t('viewConfig') }}</p>
-              <button @click="closeConfigView"
-                class="text-gray-600 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
-                <svg class="w-6" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <!-- Password change modal -->
+        <div v-if="passwordModalOpen" class="modal-root">
+          <div class="modal-backdrop" @click="closePasswordModal"></div>
+          <div class="modal-panel modal-panel-sm modal-panel-auth" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-auth-header">
+              <h3 class="modal-title">{{ $t('passwordChangeTitle') }}</h3>
+              <button type="button" @click="closePasswordModal"
+                class="text-gray-500 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            <div class="px-6 py-4">
-              <textarea readonly :value="configViewText"
-                class="w-full p-3 font-mono text-sm bg-gray-100 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 rounded border border-gray-200 dark:border-neutral-500 resize-none overflow-y-auto block"
-                rows="18" style="max-height: 60vh;"></textarea>
-            </div>
-            <div class="flex gap-2 px-6 py-4 border-t border-gray-200 dark:border-neutral-600">
-              <button @click="copyFromConfigView"
-                class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">
-                {{ $t('copyConfig') }}
+            <form class="modal-body" @submit.prevent="submitPasswordChange">
+              <div v-if="showPasswordUserSelect" class="form-field-wrap">
+                <select v-model="passwordTargetUserId"
+                  class="select-no-arrow modal-auth-input cursor-pointer">
+                  <option v-for="u in passwordTargets" :key="u.id" :value="u.id">{{ u.username }}</option>
+                </select>
+              </div>
+              <div class="form-field-wrap">
+                <input v-model="passwordNew" type="password" autocomplete="new-password"
+                  :placeholder="$t('passwordChangeNew')"
+                  :class="['modal-auth-input', passwordFieldErrors.password ? 'panel-auth-field--error' : '']"
+                  @input="clearFieldError('passwordFieldErrors', 'password')" />
+                <p v-if="passwordFieldErrors.password" class="field-error">{{ passwordFieldErrors.password }}</p>
+              </div>
+              <div class="form-field-wrap">
+                <input v-model="passwordConfirm" type="password" autocomplete="new-password"
+                  :placeholder="$t('passwordChangeConfirm')"
+                  :class="['modal-auth-input', passwordFieldErrors.passwordConfirm ? 'panel-auth-field--error' : '']"
+                  @input="clearFieldError('passwordFieldErrors', 'passwordConfirm')" />
+                <p v-if="passwordFieldErrors.passwordConfirm" class="field-error">{{ passwordFieldErrors.passwordConfirm }}</p>
+              </div>
+              <p v-if="passwordFieldErrors._form" class="field-error">{{ passwordFieldErrors._form }}</p>
+              <div class="modal-footer">
+                <button type="submit" :disabled="passwordChangeSubmitting"
+                  class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition disabled:opacity-50">
+                  {{ $t('passwordChangeSubmit') }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Create user modal -->
+        <div v-if="createUserModalOpen" class="modal-root">
+          <div class="modal-backdrop" @click="closeCreateUserModal"></div>
+          <div class="modal-panel modal-panel-sm modal-panel-auth" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-auth-header">
+              <h3 class="modal-title">{{ $t('createUserTitle') }}</h3>
+              <button type="button" @click="closeCreateUserModal"
+                class="text-gray-500 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
-              <button @click="closeConfigView"
-                class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
-                {{ $t('close') }}
+            </div>
+            <form class="modal-body" @submit.prevent="submitCreateUser">
+              <div v-if="panelRole === 'admin'" class="form-field-wrap">
+                <select v-model="createUserRole"
+                  class="select-no-arrow modal-auth-input cursor-pointer">
+                  <option v-for="opt in createUserRoleOptions" :key="opt.id" :value="opt.id">{{ opt.label }}</option>
+                </select>
+              </div>
+              <div v-if="canManageSettings" class="form-field-wrap">
+                <select v-model="createUserCidr" required
+                  class="select-no-arrow modal-auth-input cursor-pointer">
+                  <option disabled value="">{{ $t('createUserCidrLabel') }}</option>
+                  <option v-for="p in vpnPools" :key="p.id" :value="p.cidr">{{ p.name ? (p.name + ' — ' + p.cidr) : p.cidr }}</option>
+                </select>
+                <p v-if="createUserFieldErrors.cidr" class="field-error">{{ createUserFieldErrors.cidr }}</p>
+              </div>
+              <div class="form-field-wrap">
+                <input v-model="createUserUsername" type="text" autocomplete="username"
+                  :placeholder="$t('createUserUsername')"
+                  :class="['modal-auth-input', createUserFieldErrors.username ? 'panel-auth-field--error' : '']"
+                  @input="clearFieldError('createUserFieldErrors', 'username')" />
+                <p v-if="createUserFieldErrors.username" class="field-error">{{ createUserFieldErrors.username }}</p>
+              </div>
+              <div class="form-field-wrap">
+                <input v-model="createUserPassword" type="password" autocomplete="new-password"
+                  :placeholder="$t('createUserPassword')"
+                  :class="['modal-auth-input', createUserFieldErrors.password ? 'panel-auth-field--error' : '']"
+                  @input="clearFieldError('createUserFieldErrors', 'password')" />
+                <p v-if="createUserFieldErrors.password" class="field-error">{{ createUserFieldErrors.password }}</p>
+              </div>
+              <div class="form-field-wrap">
+                <input v-model="createUserConfirm" type="password" autocomplete="new-password"
+                  :placeholder="$t('createUserConfirm')"
+                  :class="['modal-auth-input', createUserFieldErrors.passwordConfirm ? 'panel-auth-field--error' : '']"
+                  @input="clearFieldError('createUserFieldErrors', 'passwordConfirm')" />
+                <p v-if="createUserFieldErrors.passwordConfirm" class="field-error">{{ createUserFieldErrors.passwordConfirm }}</p>
+              </div>
+              <p v-if="createUserFieldErrors._form" class="field-error">{{ createUserFieldErrors._form }}</p>
+              <div class="modal-footer">
+                <button type="submit" :disabled="createUserSubmitting"
+                  class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition disabled:opacity-50">
+                  {{ $t('createUserSubmit') }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Assign client user modal -->
+        <div v-if="clientAssignModalClient" class="modal-root">
+          <div class="modal-backdrop" @click="closeClientAssignModal"></div>
+          <div class="modal-panel modal-panel-sm modal-panel-auth" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-auth-header">
+              <h3 class="modal-title">{{ $t('clientUsersTitle') }}</h3>
+              <button type="button" @click="closeClientAssignModal"
+                class="text-gray-500 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
             </div>
+            <form class="modal-body" @submit.prevent="submitClientAssign">
+              <div class="form-field-wrap">
+                <select v-model="clientAssignModalUserId"
+                  class="select-no-arrow modal-auth-input cursor-pointer">
+                  <option :value="null" disabled>—</option>
+                  <option v-for="u in assignableUsersForClient(clientAssignModalClient)" :key="u.id" :value="u.id">{{ u.username }}</option>
+                </select>
+                <p v-if="clientAssignFieldError" class="field-error">{{ clientAssignFieldError }}</p>
+              </div>
+              <div class="modal-footer">
+                <button type="submit" :disabled="clientAssignSubmitting || !clientAssignModalUserId"
+                  class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition disabled:opacity-50">
+                  {{ $t('passwordChangeSubmit') }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- CIDR pool create/edit modal -->
+        <div v-if="cidrPoolEdit" class="modal-root">
+          <div class="modal-backdrop" @click="closeCidrPoolEdit"></div>
+          <div class="modal-panel modal-panel-sm modal-panel-auth" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-auth-header">
+              <h3 class="modal-title">{{ cidrPoolEdit.id ? $t('cidrPoolEdit') : $t('cidrPoolAdd') }}</h3>
+              <button type="button" @click="closeCidrPoolEdit"
+                class="text-gray-500 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <form class="modal-body" @submit.prevent="saveCidrPoolEdit">
+              <div class="form-field-wrap">
+                <input v-model="cidrPoolEdit.name" type="text" :placeholder="$t('cidrPoolName')"
+                  class="modal-auth-input" />
+              </div>
+              <div class="form-field-wrap">
+                <input v-model="cidrPoolEdit.cidr" type="text" :placeholder="$t('cidrPoolCidr')"
+                  class="modal-auth-input font-mono" />
+              </div>
+              <div class="form-field-wrap">
+                <input v-model="cidrPoolEdit.gateway" type="text" placeholder="Gateway (optional)"
+                  class="modal-auth-input font-mono" />
+              </div>
+              <div class="modal-footer">
+                <button type="submit"
+                  class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">
+                  {{ $t('globalRuleSave') }}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- CIDR pool assign users modal -->
+        <div v-if="cidrPoolAssign" class="modal-root">
+          <div class="modal-backdrop" @click="closeCidrPoolAssign"></div>
+          <div class="modal-panel modal-panel-sm modal-panel-auth" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-auth-header">
+              <h3 class="modal-title">{{ $t('cidrPoolAssignUsers') }} — {{ cidrPoolAssign.name || cidrPoolAssign.cidr }}</h3>
+              <button type="button" @click="closeCidrPoolAssign"
+                class="text-gray-500 dark:text-neutral-400 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
+                <svg class="w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <form class="modal-body" @submit.prevent="saveCidrPoolAssign">
+              <div class="form-field-wrap max-h-56 overflow-y-auto thin-scroll space-y-2">
+                <label v-for="u in panelUsers" :key="u.id"
+                  class="flex items-center gap-2 text-sm dark:text-neutral-200 cursor-pointer">
+                  <input type="checkbox" :checked="cidrPoolAssignSelected.includes(u.id)"
+                    @change="toggleCidrPoolAssignUser(u.id)" />
+                  <span>{{ u.username }} <span class="text-gray-400">({{ u.role }})</span></span>
+                </label>
+              </div>
+              <div class="modal-footer">
+                <button type="submit" :disabled="cidrPoolAssignSubmitting"
+                  class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition disabled:opacity-50">
+                  {{ $t('globalRuleSave') }}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
 
@@ -1344,17 +2213,26 @@
         <form @submit="login"
           class="shadow rounded-md bg-white dark:bg-neutral-700 mx-auto w-64 p-5 overflow-hidden mt-10">
           <!-- Avatar -->
-          <div class="h-20 w-20 mb-10 mt-5 mx-auto rounded-full bg-red-800 dark:bg-red-800 relative overflow-hidden">
+          <div class="h-20 w-20 mb-5 mt-5 mx-auto rounded-full bg-red-800 dark:bg-red-800 relative overflow-hidden">
             <svg class="w-10 h-10 m-5 text-white dark:text-white" xmlns="http://www.w3.org/2000/svg"
               viewBox="0 0 20 20" fill="currentColor">
               <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
             </svg>
           </div>
 
-          <input type="text" name="username" placeholder="Username" v-model="username"
-            class="panel-auth-field mb-5 w-full" />
-          <input type="password" name="password" :placeholder="$t('password')" v-model="password"
-            class="panel-auth-field mb-5 w-full" />
+          <div class="mb-5">
+            <input type="text" name="username" :placeholder="$t('name')" v-model="username"
+              :class="['panel-auth-field w-full', loginFieldErrors.username ? 'panel-auth-field--error' : '']"
+              @input="clearFieldError('loginFieldErrors', 'username')" />
+            <p v-if="loginFieldErrors.username" class="field-error">{{ loginFieldErrors.username }}</p>
+          </div>
+          <div class="mb-5">
+            <input type="password" name="password" :placeholder="$t('password')" v-model="password"
+              :class="['panel-auth-field w-full', loginFieldErrors.password ? 'panel-auth-field--error' : '']"
+              @input="clearFieldError('loginFieldErrors', 'password')" />
+            <p v-if="loginFieldErrors.password" class="field-error">{{ loginFieldErrors.password }}</p>
+            <p v-if="loginFieldErrors._form" class="field-error">{{ loginFieldErrors._form }}</p>
+          </div>
 
           <button v-if="authenticating"
             class="bg-red-800 dark:bg-red-800 w-full rounded shadow py-2 text-sm text-white dark:text-white cursor-not-allowed">
@@ -1397,9 +2275,9 @@
   <script src="./js/vendor/vue-apexcharts.min.js"></script>
   <script src="./js/vendor/sha256.min.js"></script>
   <script src="./js/vendor/timeago.full.min.js"></script>
-  <script src="./js/api.js?v=6"></script>
-  <script src="./js/i18n.js?v=7"></script>
-  <script src="./js/app.js?v=6"></script>
+  <script src="./js/api.js?v=7"></script>
+  <script src="./js/i18n.js?v=8"></script>
+  <script src="./js/app.js?v=7"></script>
 </body>
 
 </html>

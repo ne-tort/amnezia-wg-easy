@@ -44,6 +44,37 @@ function formatTrafficShort(bytesIn) {
 const DEFAULT_LOCALE = 'ru';
 const LOCALE_STORAGE_KEY = 'lang';
 
+/** Parse IPv4 to unsigned 32-bit int, or null. */
+function ipv4ToInt(ip) {
+  if (typeof ip !== 'string') return null;
+  const parts = ip.trim().split('.');
+  if (parts.length !== 4) return null;
+  let n = 0;
+  for (let i = 0; i < 4; i += 1) {
+    const o = parseInt(parts[i], 10);
+    if (!Number.isInteger(o) || o < 0 || o > 255) return null;
+    n = (n << 8) | o;
+  }
+  return n >>> 0;
+}
+
+/** True if IPv4 host is inside CIDR (a.b.c.d/m). */
+function ipv4InCidr(ip, cidr) {
+  if (typeof cidr !== 'string') return false;
+  const slash = cidr.indexOf('/');
+  if (slash < 0) return false;
+  const addr = ipv4ToInt(cidr.slice(0, slash).trim());
+  const prefix = parseInt(cidr.slice(slash + 1).trim(), 10);
+  const host = ipv4ToInt(ip);
+  if (addr == null || host == null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) return false;
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (host & mask) === (addr & mask);
+}
+
+function ipv4InAnyCidr(ip, cidrs) {
+  return Array.isArray(cidrs) && cidrs.some((c) => ipv4InCidr(ip, c));
+}
+
 const i18n = new VueI18n({
   locale: localStorage.getItem(LOCALE_STORAGE_KEY) || DEFAULT_LOCALE,
   fallbackLocale: DEFAULT_LOCALE,
@@ -83,12 +114,38 @@ new Vue({
     username: null,
     password: null,
     panelUsername: null,
-    passwordChangeOpen: false,
+    panelUserId: null,
+    panelRole: null,
+    panelCapabilities: [],
+    userActionsOpen: false,
+    passwordModalOpen: false,
+    passwordTargets: [],
+    passwordTargetUserId: null,
     passwordNew: '',
     passwordConfirm: '',
-    passwordFieldError: false,
+    passwordFieldErrors: { password: '', passwordConfirm: '', _form: '' },
     passwordChangeSubmitting: false,
-    passwordErrorClearTimer: null,
+    createUserModalOpen: false,
+    createUserUsername: '',
+    createUserPassword: '',
+    createUserConfirm: '',
+    createUserRole: 'user',
+    createUserCidr: '',
+    createUserFieldErrors: { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' },
+    createUserSubmitting: false,
+    sessionAssignedCidrs: [],
+    vpnPools: [],
+    cidrPoolEdit: null,
+    cidrPoolAssign: null,
+    cidrPoolAssignSelected: [],
+    cidrPoolAssignSubmitting: false,
+    roleLabels: {},
+    panelUsers: [],
+    clientAssignModalClient: null,
+    clientAssignModalUserId: null,
+    clientAssignSubmitting: false,
+    clientAssignFieldError: '',
+    loginFieldErrors: { username: '', password: '', _form: '' },
 
     clients: null,
     clientsPersist: {},
@@ -101,8 +158,10 @@ new Vue({
     clientEditAddressId: null,
     qrcodeText: null,
     qrcodeTextPayload: null,
+    qrcodeTextILimit: null,
     qrcodeAmneziaSvgs: null,
     qrcodeAmneziaPayloads: null,
+    qrcodeAmneziaILimit: null,
     qrcodeTab: 'amnezia',
     configViewClient: null,
     configViewText: '',
@@ -110,6 +169,17 @@ new Vue({
     clientLevels: {},
     clientProfiles: {},
     clientSignatures: {},
+    /** Draft junk / dirty flags for obfuscation Apply/Cancel. */
+    clientJunk: {},
+    clientObfuscationDirty: {},
+    clientObfuscationBusy: {},
+    clientJunkPins: {},
+    clientMtuProfiles: {},
+    mtuProfileCatalog: [],
+    mtuDefaultProfile: '1280',
+    serverJunk: null,
+    /** Config text loaded for QR modal Preview tab (committed server state). */
+    qrcodePreviewText: '',
     /** Per-client download format for configuration link: 'conf' | 'amnezia' */
     clientDownloadFormat: {},
     clientUseServerDns: {},
@@ -129,6 +199,43 @@ new Vue({
     amneziaDnsProfilesError: null,
     amneziaDnsInstallOpen: false,
     amneziaDnsInstallSelected: null,
+    amneziaXrayAvailable: false,
+    amneziaXrayPhase: 'off',
+    amneziaXrayBusy: false,
+    amneziaXrayError: null,
+    amneziaXrayPollTimer: null,
+    amneziaXraySni: '',
+    amneziaXrayAddress: '',
+    amneziaXrayFingerprint: 'chrome',
+    amneziaXrayFlow: 'xtls-rprx-vision',
+    amneziaXrayPort: 8443,
+    amneziaXrayInstallOpen: false,
+    amneziaXrayFingerprints: ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'],
+    amneziaXrayFlows: [
+      { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' },
+      { value: 'xtls-rprx-vision-udp443', label: 'xtls-rprx-vision-udp443' },
+      { value: '', label: '(none)' },
+    ],
+    sniFinderDefaultSni: null,
+    sniFinderOpen: false,
+    sniFinderPublicIp: null,
+    sniFinderDefaultCidr: '',
+    sniFinderCidr: '',
+    sniFinderPublicIpError: null,
+    sniFinderError: null,
+    sniFinderEmptyMsg: null,
+    sniFinderBusy: false,
+    sniFinderPhase: 'idle',
+    sniFinderProgress: { done: 0, total: 0 },
+    sniFinderEntries: [],
+    sniFinderAliveCount: 0,
+    sniFinderRechecking: null,
+    sniFinderPollTimer: null,
+    qrcodeXraySvg: null,
+    qrcodeXraySubUrl: '',
+    qrcodeXrayVlessUrl: '',
+    qrcodeXrayJson: '',
+    qrcodeXrayClientId: null,
     ruleProfiles: [],
     globalFirewallRules: [],
     globalRuleEdit: null,
@@ -246,34 +353,119 @@ new Vue({
     getClientLevel(client) {
       return this.clientLevels[client.id] ?? 1;
     },
+    isObfuscationDirty(client) {
+      return !!(client && this.clientObfuscationDirty[client.id]);
+    },
+    isObfuscationBusy(client) {
+      return !!(client && this.clientObfuscationBusy[client.id]);
+    },
+    markObfuscationDirty(clientId) {
+      this.$set(this.clientObfuscationDirty, clientId, true);
+    },
+    clearObfuscationDirty(clientId) {
+      this.$set(this.clientObfuscationDirty, clientId, false);
+    },
+    committedObfuscationFromClient(client) {
+      const profile = client.defaultProfile || this.defaultProfile || 'dns';
+      const pins = client.junkPins || this.clientJunkPins[client.id] || {};
+      const junk = (pins && pins[profile])
+        || this.serverJunk
+        || this.clientJunk[client.id]
+        || null;
+      return {
+        level: client.defaultLevel != null ? client.defaultLevel : 1,
+        profile,
+        signature: client.defaultSignature != null ? String(client.defaultSignature) : null,
+        junk,
+        junkPins: pins,
+      };
+    },
+    syncObfuscationDraftFromClient(client, { force = false } = {}) {
+      if (!client || (!force && this.isObfuscationDirty(client))) return;
+      const c = this.committedObfuscationFromClient(client);
+      this.$set(this.clientLevels, client.id, c.level);
+      this.$set(this.clientProfiles, client.id, c.profile);
+      if (c.signature != null) this.$set(this.clientSignatures, client.id, c.signature);
+      if (c.junk) this.$set(this.clientJunk, client.id, c.junk);
+      this.$set(this.clientJunkPins, client.id, c.junkPins || {});
+      this.$set(
+        this.clientMtuProfiles,
+        client.id,
+        client.mtuProfile || this.mtuDefaultProfile || '1280',
+      );
+      this.clearObfuscationDirty(client.id);
+    },
+    formatJunkSummary(junk) {
+      if (!junk) return '';
+      return this.$t('obfuscationJunkSummary', {
+        jc: junk.jc,
+        jmin: junk.jmin,
+        jmax: junk.jmax,
+        s1: junk.s1,
+        s2: junk.s2,
+        s3: junk.s3,
+        s4: junk.s4,
+      });
+    },
     cycleClientLevel(client) {
       const prev = this.getClientLevel(client);
       const next = prev === 0 ? 1 : (prev === 5 ? 0 : prev + 1);
       this.$set(this.clientLevels, client.id, next);
-      this.api.updateClientObfuscation({ clientId: client.id, level: next })
-        .catch((err) => {
-          this.$set(this.clientLevels, client.id, prev);
-          alert(err.message || err.toString());
-        });
+      this.markObfuscationDirty(client.id);
+    },
+    /** Committed obfuscation from server (not UI draft) for download/QR. */
+    getCommittedLevel(client) {
+      return client && client.defaultLevel != null ? client.defaultLevel : 1;
+    },
+    getCommittedProfile(client) {
+      return (client && client.defaultProfile) || this.defaultProfile || 'dns';
+    },
+    getClientMtuProfile(client) {
+      return this.clientMtuProfiles[client.id]
+        || client.mtuProfile
+        || this.mtuDefaultProfile
+        || '1280';
+    },
+    getClientMtuLabel(client) {
+      const id = this.getClientMtuProfile(client);
+      const row = (this.mtuProfileCatalog || []).find((p) => p.id === id);
+      if (row && row.label != null) return row.label;
+      return id;
+    },
+    cycleClientMtu(client) {
+      const list = (this.mtuProfileCatalog || []).map((p) => p.id);
+      if (!list.length) return;
+      const current = this.getClientMtuProfile(client);
+      let idx = list.indexOf(current);
+      if (idx < 0) idx = 0;
+      const next = list[(idx + 1) % list.length];
+      this.$set(this.clientMtuProfiles, client.id, next);
+      this.markObfuscationDirty(client.id);
+    },
+    async reloadMtuProfiles() {
+      try {
+        const r = await this.api.getMtuProfiles();
+        this.mtuProfileCatalog = (r && Array.isArray(r.profiles)) ? r.profiles : [];
+        this.mtuDefaultProfile = (r && r.defaultProfile) || '1280';
+      } catch {
+        this.mtuProfileCatalog = [];
+      }
     },
     onObfuscationLevelChange(client, ev) {
       const raw = ev.target.value;
       const level = raw === '' || raw === 'null' ? 0 : parseInt(raw, 10);
-      const prev = this.getClientLevel(client);
       if (Number.isNaN(level) || level < 0 || level > 5) return;
       this.$set(this.clientLevels, client.id, level);
-      this.api.updateClientObfuscation({ clientId: client.id, level })
-        .catch((err) => {
-          this.$set(this.clientLevels, client.id, prev);
-          ev.target.value = prev;
-          alert(err.message || err.toString());
-        });
+      this.markObfuscationDirty(client.id);
     },
     getClientProfile(client) {
       return this.clientProfiles[client.id] ?? client.defaultProfile ?? this.defaultProfile;
     },
     getClientSignature(client) {
       return this.clientSignatures[client.id] ?? client.defaultSignature ?? null;
+    },
+    getClientJunk(client) {
+      return this.clientJunk[client.id] || null;
     },
     getClientProfileLabel(client) {
       return this.getProfileLabel(this.getClientProfile(client));
@@ -288,7 +480,7 @@ new Vue({
       if (!row || row.count == null) return '';
       return this.$t('signatureVariants', { count: row.count });
     },
-    cycleClientProfile(client) {
+    async cycleClientProfile(client) {
       if (this.signaturesBankError) {
         alert(this.signaturesBankError);
         return;
@@ -298,35 +490,33 @@ new Vue({
       let idx = list.indexOf(current);
       if (idx < 0) idx = 0;
       const next = list[(idx + 1) % list.length];
-      const prevProfile = current;
-      const prevSig = this.getClientSignature(client);
-      this.$set(this.clientProfiles, client.id, next);
-      this.api.updateClientObfuscation({ clientId: client.id, profile: next })
-        .then((r) => {
-          if (r && r.signature != null) this.$set(this.clientSignatures, client.id, String(r.signature));
-          if (r && r.profile) this.$set(this.clientProfiles, client.id, r.profile);
-        })
-        .catch((err) => {
-          this.$set(this.clientProfiles, client.id, prevProfile);
-          if (prevSig != null) this.$set(this.clientSignatures, client.id, prevSig);
-          alert(err.message || err.toString());
-        });
+      await this.cycleClientProfileTo(client, next);
     },
     onObfuscationProfileChange(client, ev) {
       const profile = ev.target.value;
-      const prev = this.getClientProfile(client);
+      this.cycleClientProfileTo(client, profile);
+    },
+    async cycleClientProfileTo(client, next) {
+      const prevProfile = this.getClientProfile(client);
       const prevSig = this.getClientSignature(client);
-      this.$set(this.clientProfiles, client.id, profile);
-      this.api.updateClientObfuscation({ clientId: client.id, profile })
-        .then((r) => {
-          if (r && r.signature != null) this.$set(this.clientSignatures, client.id, String(r.signature));
-        })
-        .catch((err) => {
-          this.$set(this.clientProfiles, client.id, prev);
-          if (prevSig != null) this.$set(this.clientSignatures, client.id, prevSig);
-          ev.target.value = prev;
-          alert(err.message || err.toString());
+      const prevJunk = this.getClientJunk(client);
+      try {
+        const r = await this.api.previewClientObfuscation({
+          clientId: client.id,
+          profile: next,
+          level: this.getClientLevel(client),
+          signature: prevSig,
         });
+        this.$set(this.clientProfiles, client.id, r.profile || next);
+        if (r.signature != null) this.$set(this.clientSignatures, client.id, String(r.signature));
+        if (r.junk) this.$set(this.clientJunk, client.id, r.junk);
+        this.markObfuscationDirty(client.id);
+      } catch (err) {
+        this.$set(this.clientProfiles, client.id, prevProfile);
+        if (prevSig != null) this.$set(this.clientSignatures, client.id, prevSig);
+        if (prevJunk) this.$set(this.clientJunk, client.id, prevJunk);
+        alert(err.message || this.$t('obfuscationPreviewFailed'));
+      }
     },
     async refreshClientSignature(client) {
       if (this.regeneratingSignatures) return;
@@ -335,32 +525,139 @@ new Vue({
         return;
       }
       this.regeneratingSignatures = true;
+      const prevSig = this.getClientSignature(client);
+      const prevJunk = this.getClientJunk(client);
       try {
-        const result = await this.api.refreshClientSignature({ clientId: client.id });
+        const result = await this.api.previewClientObfuscation({
+          clientId: client.id,
+          profile: this.getClientProfile(client),
+          level: this.getClientLevel(client),
+          signature: prevSig,
+          refreshSignature: true,
+          regenerateJunk: true,
+        });
         if (result && result.signature != null) {
           this.$set(this.clientSignatures, client.id, String(result.signature));
         }
         if (result && result.profile) {
           this.$set(this.clientProfiles, client.id, result.profile);
         }
+        if (result && result.junk) {
+          this.$set(this.clientJunk, client.id, result.junk);
+        }
+        this.markObfuscationDirty(client.id);
       } catch (err) {
+        if (prevSig != null) this.$set(this.clientSignatures, client.id, prevSig);
+        if (prevJunk) this.$set(this.clientJunk, client.id, prevJunk);
         alert(err.message || this.$t('signaturesRefreshFailed') || 'Refresh failed.');
       } finally {
         this.regeneratingSignatures = false;
       }
     },
-    async reloadSignatureProfiles() {
+    cancelClientObfuscation(client) {
+      if (this.isObfuscationBusy(client)) return;
+      this.syncObfuscationDraftFromClient(client, { force: true });
+    },
+    async applyClientObfuscation(client) {
+      if (!client || this.isObfuscationBusy(client) || !this.isObfuscationDirty(client)) return;
+      this.$set(this.clientObfuscationBusy, client.id, true);
       try {
-        const r = await this.api.getSignaturesProfiles();
-        this.signaturesBankError = null;
-        this.profileIds = r && Array.isArray(r.profileIds) ? r.profileIds : [];
-        this.profileCatalog = r && Array.isArray(r.protocols) ? r.protocols : [];
-        this.defaultProfile = (r && (r.defaultProtocol || r.defaultProfile)) || (this.profileIds[0] || 'dns');
+        let junk = this.getClientJunk(client);
+        // Legacy server junk (e.g. S4>32) cannot be re-applied — generate a valid set first.
+        if (!junk || junk.s4 > 32) {
+          const preview = await this.api.previewClientObfuscation({
+            clientId: client.id,
+            profile: this.getClientProfile(client),
+            level: this.getClientLevel(client),
+            signature: this.getClientSignature(client),
+            regenerateJunk: true,
+          });
+          junk = preview.junk;
+          if (preview.signature != null) {
+            this.$set(this.clientSignatures, client.id, String(preview.signature));
+          }
+          if (preview.junk) this.$set(this.clientJunk, client.id, preview.junk);
+        }
+        if (!junk) {
+          throw new Error(this.$t('obfuscationApplyFailed'));
+        }
+        const mtuProfile = this.getClientMtuProfile(client);
+        const result = await this.api.applyClientObfuscation({
+          clientId: client.id,
+          level: this.getClientLevel(client),
+          profile: this.getClientProfile(client),
+          signature: this.getClientSignature(client),
+          junk,
+          mtuProfile,
+        });
+        if (result && result.junk) this.$set(this.clientJunk, client.id, result.junk);
+        if (result && result.junkPins) this.$set(this.clientJunkPins, client.id, result.junkPins);
+        if (result && result.serverJunk) this.serverJunk = result.serverJunk;
+        if (result && result.profile) this.$set(this.clientProfiles, client.id, result.profile);
+        if (result && result.signature != null) {
+          this.$set(this.clientSignatures, client.id, String(result.signature));
+        }
+        if (result && result.level != null) this.$set(this.clientLevels, client.id, result.level);
+        if (result && result.mtuProfile) {
+          this.$set(this.clientMtuProfiles, client.id, result.mtuProfile);
+          client.mtuProfile = result.mtuProfile;
+        } else {
+          client.mtuProfile = mtuProfile;
+        }
+        // Keep local client object committed fields in sync for cancel/refresh.
+        client.defaultProfile = this.getClientProfile(client);
+        client.defaultSignature = this.getClientSignature(client);
+        client.defaultLevel = this.getClientLevel(client);
+        client.junkPins = result.junkPins || this.clientJunkPins[client.id] || {};
+        this.clearObfuscationDirty(client.id);
+        await this.refresh().catch(() => {});
       } catch (err) {
-        this.signaturesBankError = (err && err.message) || this.$t('signaturesBankUnavailable') || 'signatures.json unavailable';
+        alert(err.message || this.$t('obfuscationApplyFailed'));
+      } finally {
+        this.$set(this.clientObfuscationBusy, client.id, false);
+      }
+    },
+    guardDirtyObfuscation(client, ev) {
+      if (!this.isObfuscationDirty(client)) return false;
+      if (ev) ev.preventDefault();
+      alert(this.$t('obfuscationDownloadBlocked'));
+      return true;
+    },
+    async reloadSignatureProfiles({ attempts = 5 } = {}) {
+      let lastErr = null;
+      for (let i = 0; i < attempts; i += 1) {
+        try {
+          const r = await this.api.getSignaturesProfiles();
+          this.signaturesBankError = null;
+          this.profileIds = r && Array.isArray(r.profileIds) ? r.profileIds : [];
+          this.profileCatalog = r && Array.isArray(r.protocols) ? r.protocols : [];
+          this.defaultProfile = (r && (r.defaultProtocol || r.defaultProfile))
+            || (this.profileIds[0] || 'dns');
+          return true;
+        } catch (err) {
+          lastErr = err;
+          if (i < attempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 350 * (i + 1)));
+          }
+        }
+      }
+      const msg = (lastErr && lastErr.message) || '';
+      const status = lastErr && lastErr.status;
+      // Keep a previous good catalog; avoid sticky red banner on transient 5xx/network blips.
+      const transient = status >= 500
+        || (lastErr && lastErr.code === 'NETWORK_ERROR')
+        || msg === 'NETWORK_ERROR'
+        || /^Internal Server Error$/i.test(msg)
+        || /^Bad Gateway$/i.test(msg);
+      if (transient && this.profileIds && this.profileIds.length) {
+        return false;
+      }
+      this.signaturesBankError = msg || this.$t('signaturesBankUnavailable') || 'signatures.json unavailable';
+      if (!this.profileIds || !this.profileIds.length) {
         this.profileIds = [];
         this.profileCatalog = [];
       }
+      return false;
     },
     applyAmneziaDnsCapability(caps) {
       const c = caps || {};
@@ -550,6 +847,327 @@ new Vue({
       }
       await this.openAmneziaDnsInstall();
     },
+    applyAmneziaXrayCapability(caps) {
+      const c = caps || {};
+      this.amneziaXrayAvailable = c.xrayAvailable === true;
+      const st = c.xray || {};
+      if (st.phase) this.amneziaXrayPhase = st.phase;
+      this.amneziaXrayBusy = st.busy === true
+        || st.phase === 'installing'
+        || st.phase === 'removing';
+      this.amneziaXrayError = st.lastError || null;
+      if (st.sniStored) this.amneziaXraySni = st.sniStored;
+      else if (st.sni && !this.amneziaXraySni) this.amneziaXraySni = st.sni;
+      if (st.addressStored) this.amneziaXrayAddress = st.addressStored;
+      else if (st.address && !this.amneziaXrayAddress) this.amneziaXrayAddress = st.address;
+      if (st.fingerprint) this.amneziaXrayFingerprint = st.fingerprint;
+      if (st.flow !== undefined && st.flow !== null) this.amneziaXrayFlow = st.flow;
+      if (st.port) this.amneziaXrayPort = st.port;
+      if (Array.isArray(st.fingerprints) && st.fingerprints.length) {
+        this.amneziaXrayFingerprints = st.fingerprints;
+      }
+      if (this.amneziaXrayBusy) this.ensureAmneziaXrayPoll();
+      else this.stopAmneziaXrayPoll();
+    },
+    async refreshAmneziaXrayStatus() {
+      if (!this.canManageXray) return null;
+      try {
+        const st = await this.api.getAmneziaXrayStatus();
+        this.applyAmneziaXrayCapability({
+          xrayAvailable: st.available === true,
+          xray: st,
+        });
+        return st;
+      } catch (err) {
+        this.amneziaXrayError = (err && err.message) || String(err);
+        return null;
+      }
+    },
+    ensureAmneziaXrayPoll() {
+      if (this.amneziaXrayPollTimer) return;
+      this.amneziaXrayPollTimer = setInterval(() => {
+        this.refreshAmneziaXrayStatus().then((st) => {
+          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
+            this.refresh().catch(() => {});
+          }
+        });
+      }, 1000);
+    },
+    stopAmneziaXrayPoll() {
+      if (this.amneziaXrayPollTimer) {
+        clearInterval(this.amneziaXrayPollTimer);
+        this.amneziaXrayPollTimer = null;
+      }
+    },
+    amneziaXrayHeaderTitle() {
+      const phase = this.amneziaXrayPhase;
+      if (phase === 'installing' || phase === 'removing' || this.amneziaXrayBusy) {
+        return this.$t('xrayHeaderBusy');
+      }
+      if (phase === 'error') {
+        return (this.amneziaXrayError && `${this.$t('xrayHeaderError')}: ${this.amneziaXrayError}`)
+          || this.$t('xrayHeaderError');
+      }
+      if (phase === 'degraded') return this.$t('xrayHeaderDegraded');
+      if (phase === 'running') return this.$t('xrayHeaderDisable');
+      return this.$t('xrayHeaderEnable');
+    },
+    closeAmneziaXrayInstall() {
+      this.amneziaXrayInstallOpen = false;
+    },
+    openAmneziaXrayInstall() {
+      // Prefill from persisted status; address defaults to how the panel was opened.
+      Promise.all([
+        this.refreshAmneziaXrayStatus(),
+        this.refreshSniCache({ ensureBg: true }),
+      ]).finally(() => {
+        if (!String(this.amneziaXrayAddress || '').trim()) {
+          this.amneziaXrayAddress = (typeof window !== 'undefined' && window.location && window.location.hostname)
+            ? window.location.hostname
+            : '';
+        }
+        if (!String(this.amneziaXraySni || '').trim() && this.sniFinderDefaultSni) {
+          this.amneziaXraySni = this.sniFinderDefaultSni;
+        }
+        this.amneziaXrayInstallOpen = true;
+      });
+    },
+    async confirmAmneziaXrayInstall() {
+      if (
+        this.amneziaXrayBusy
+        || !String(this.amneziaXraySni || '').trim()
+        || !String(this.amneziaXrayAddress || '').trim()
+        || !this.isValidAmneziaXrayPort
+      ) return;
+      this.closeAmneziaXrayInstall();
+      this.amneziaXrayBusy = true;
+      this.ensureAmneziaXrayPoll();
+      try {
+        await this.withAmneziaDnsTimeout(
+          this.api.enableAmneziaXray({
+            address: String(this.amneziaXrayAddress).trim(),
+            sni: String(this.amneziaXraySni).trim(),
+            fingerprint: this.amneziaXrayFingerprint,
+            flow: this.amneziaXrayFlow,
+            port: Number(this.amneziaXrayPort),
+          }),
+          180000,
+        );
+        await this.refreshAmneziaXrayStatus();
+        await this.refresh();
+      } catch (err) {
+        this.amneziaXrayError = (err && err.message) || this.$t('xrayToggleFailed');
+        alert(this.amneziaXrayError);
+        await this.refreshAmneziaXrayStatus();
+      } finally {
+        this.amneziaXrayBusy = false;
+        if (!['installing', 'removing'].includes(this.amneziaXrayPhase)) {
+          this.stopAmneziaXrayPoll();
+        }
+      }
+    },
+    async confirmAmneziaXrayReset() {
+      if (this.amneziaXrayBusy) return;
+      if (!window.confirm(this.$t('xrayResetConfirm'))) return;
+      this.amneziaXrayBusy = true;
+      this.ensureAmneziaXrayPoll();
+      try {
+        await this.withAmneziaDnsTimeout(this.api.resetAmneziaXray(), 120000);
+        await this.refreshAmneziaXrayStatus();
+        await this.refresh();
+        alert(this.$t('xrayResetDone'));
+      } catch (err) {
+        this.amneziaXrayError = (err && err.message) || this.$t('xrayToggleFailed');
+        alert(this.amneziaXrayError);
+        await this.refreshAmneziaXrayStatus();
+      } finally {
+        this.amneziaXrayBusy = false;
+        if (!['installing', 'removing'].includes(this.amneziaXrayPhase)) {
+          this.stopAmneziaXrayPoll();
+        }
+      }
+    },
+    stopSniFinderPoll() {
+      if (this.sniFinderPollTimer) {
+        clearInterval(this.sniFinderPollTimer);
+        this.sniFinderPollTimer = null;
+      }
+    },
+    applySniCachePayload(data) {
+      if (!data || typeof data !== 'object') return;
+      this.sniFinderPublicIp = data.publicIp || null;
+      this.sniFinderDefaultCidr = data.defaultCidr || '';
+      if (!this.sniFinderCidr) {
+        this.sniFinderCidr = data.defaultCidr || data.cidr || '';
+      }
+      this.sniFinderPublicIpError = (data.publicIpError && data.publicIpError.message) || null;
+      this.sniFinderAliveCount = Number(data.scannedAliveCount) || 0;
+      this.sniFinderDefaultSni = data.defaultSni || null;
+      if (Array.isArray(data.entries)) {
+        this.sniFinderEntries = data.entries;
+      }
+      if (data.scan) this.applySniScanStatus(data.scan);
+    },
+    applySniScanStatus(st) {
+      if (!st || typeof st !== 'object') return;
+      this.sniFinderPhase = st.phase || 'idle';
+      this.sniFinderProgress = st.progress || { done: 0, total: 0 };
+      this.sniFinderBusy = st.busy === true
+        || ['starting', 'detecting', 'probing', 'verifying'].includes(st.phase);
+      if (st.result && st.result.empty) {
+        this.sniFinderEmptyMsg = this.$t('xraySniNothingFound');
+        this.sniFinderError = null;
+      } else if (st.error && st.error.message) {
+        this.sniFinderEmptyMsg = null;
+        this.sniFinderError = st.error.code
+          ? `[${st.error.code}] ${st.error.message}`
+          : st.error.message;
+      }
+      if (st.result && Array.isArray(st.result.entries)) {
+        this.sniFinderEntries = st.result.entries;
+        this.sniFinderAliveCount = st.result.entries.filter(
+          (e) => e.source === 'scan' && e.alive !== false,
+        ).length;
+        if (st.result.cidr) this.sniFinderCidr = st.result.cidr;
+        if (st.result.refIp) this.sniFinderPublicIp = st.result.refIp;
+      } else if (st.result && Array.isArray(st.result.domains) && !st.result.entries) {
+        /* legacy */
+      }
+      if (st.phase === 'done' || st.phase === 'error' || st.phase === 'idle') {
+        if (!this.sniFinderBusy) this.stopSniFinderPoll();
+      }
+    },
+    ensureSniFinderPoll() {
+      if (this.sniFinderPollTimer) return;
+      this.sniFinderPollTimer = setInterval(async () => {
+        try {
+          const st = await this.api.getXraySniScanStatus();
+          this.applySniScanStatus(st);
+          if (!this.sniFinderBusy) {
+            await this.refreshSniCache({ ensureBg: false });
+          }
+        } catch {
+          /* ignore poll errors */
+        }
+      }, 1000);
+    },
+    async refreshSniCache({ ensureBg } = {}) {
+      try {
+        const data = await this.api.getXraySniCache({ ensureBg: !!ensureBg });
+        this.applySniCachePayload(data);
+        if (data.scan && data.scan.busy) this.ensureSniFinderPoll();
+        return data;
+      } catch (err) {
+        if (this.sniFinderOpen) {
+          this.sniFinderError = (err && err.message) || this.$t('xraySniScanFailed');
+        }
+        return null;
+      }
+    },
+    async openSniFinder() {
+      this.sniFinderOpen = true;
+      this.sniFinderError = null;
+      this.sniFinderEmptyMsg = null;
+      await this.refreshSniCache({ ensureBg: true });
+    },
+    closeSniFinder() {
+      this.sniFinderOpen = false;
+      this.stopSniFinderPoll();
+    },
+    pickSniDomain(row) {
+      if (!row || row.alive === false) return;
+      const domain = typeof row === 'string' ? row : row.domain;
+      if (!domain) return;
+      this.amneziaXraySni = '';
+      this.$nextTick(() => {
+        this.amneziaXraySni = String(domain).trim();
+      });
+      this.closeSniFinder();
+    },
+    async recheckSniDomain(row) {
+      if (!row || !row.domain || this.sniFinderRechecking) return;
+      this.sniFinderRechecking = row.domain;
+      try {
+        const updated = await this.api.recheckXraySni({ domain: row.domain });
+        if (updated && updated.domain) {
+          const list = this.sniFinderEntries.slice();
+          const idx = list.findIndex((e) => e.domain === updated.domain);
+          if (idx >= 0) list.splice(idx, 1, updated);
+          else list.push(updated);
+          this.sniFinderEntries = list;
+          this.sniFinderAliveCount = list.filter(
+            (e) => e.source === 'scan' && e.alive !== false,
+          ).length;
+        } else {
+          await this.refreshSniCache({ ensureBg: false });
+        }
+      } catch (err) {
+        this.sniFinderError = (err && err.message) || this.$t('xraySniScanFailed');
+      } finally {
+        this.sniFinderRechecking = null;
+      }
+    },
+    async startSniScan(force) {
+      if (this.sniFinderBusy) return;
+      this.sniFinderError = null;
+      this.sniFinderEmptyMsg = null;
+      this.sniFinderBusy = true;
+      this.ensureSniFinderPoll();
+      try {
+        const st = await this.api.startXraySniScan({
+          cidr: String(this.sniFinderCidr || '').trim() || undefined,
+          force: force === true,
+        });
+        this.applySniScanStatus(st);
+      } catch (err) {
+        this.sniFinderBusy = false;
+        this.stopSniFinderPoll();
+        const code = err && err.code;
+        const msg = (err && err.message) || this.$t('xraySniScanFailed');
+        this.sniFinderError = code ? `[${code}] ${msg}` : msg;
+      }
+    },
+    async toggleAmneziaXray() {
+      if (!this.canManageXray || this.amneziaXrayBusy) return;
+      const phase = this.amneziaXrayPhase;
+      if (phase === 'running' || phase === 'degraded') {
+        this.amneziaXrayBusy = true;
+        this.ensureAmneziaXrayPoll();
+        try {
+          await this.withAmneziaDnsTimeout(this.api.disableAmneziaXray(), 60000);
+          await this.refreshAmneziaXrayStatus();
+          await this.refresh();
+        } catch (err) {
+          this.amneziaXrayError = (err && err.message) || this.$t('xrayToggleFailed');
+          alert(this.amneziaXrayError);
+          await this.refreshAmneziaXrayStatus();
+        } finally {
+          this.amneziaXrayBusy = false;
+          if (!['installing', 'removing'].includes(this.amneziaXrayPhase)) {
+            this.stopAmneziaXrayPoll();
+          }
+        }
+        return;
+      }
+      if (phase === 'error') {
+        this.amneziaXrayBusy = true;
+        this.ensureAmneziaXrayPoll();
+        try {
+          await this.withAmneziaDnsTimeout(this.api.forceCleanupAmneziaXray(), 60000);
+          await this.refreshAmneziaXrayStatus();
+          await this.refresh();
+        } catch (err) {
+          this.amneziaXrayError = (err && err.message) || this.$t('xrayToggleFailed');
+          alert(this.amneziaXrayError);
+          await this.refreshAmneziaXrayStatus();
+        } finally {
+          this.amneziaXrayBusy = false;
+          this.stopAmneziaXrayPoll();
+        }
+        return;
+      }
+      this.openAmneziaXrayInstall();
+    },
     getClientUseServerDns(client) {
       return this.clientUseServerDns[client.id] !== false;
     },
@@ -580,12 +1198,15 @@ new Vue({
       this.$set(this.clientDownloadFormat, clientId, value);
     },
     clientConfigurationDownloadHref(client) {
-      const level = this.getClientLevel(client);
-      const profile = this.getClientProfile(client);
+      // Committed server binding only — ignore UI draft.
+      const level = this.getCommittedLevel(client);
+      const profile = this.getCommittedProfile(client);
+      const signature = client.defaultSignature != null ? String(client.defaultSignature) : null;
       const map = this.clientDownloadFormat;
       const fmt = (map && map[client.id]) || 'conf';
       const params = [`level=${Number(level)}`];
       if (profile) params.push(`profile=${encodeURIComponent(profile)}`);
+      if (signature) params.push(`signature=${encodeURIComponent(signature)}`);
       if (fmt === 'amnezia') params.push('format=amnezia');
       return `/api/wireguard/client/${client.id}/configuration?${params.join('&')}`;
     },
@@ -600,47 +1221,80 @@ new Vue({
       const base = safe || 'configuration';
       return fmt === 'amnezia' ? `${base}.vpn` : `${base}.conf`;
     },
-    async copyConfig(client) {
-      try {
-        const config = await this.api.getConfiguration(client.id, this.getClientLevel(client), this.getClientProfile(client));
-        const ta = document.createElement('textarea');
-        ta.value = config;
-        ta.setAttribute('readonly', '');
-        ta.style.cssText = 'position:fixed;top:0;left:0;width:2em;height:2em;padding:0;border:none;outline:none;boxShadow:none;background:transparent;opacity:0;';
-        document.body.appendChild(ta);
-        ta.focus();
-        ta.select();
-        const ok = document.execCommand('copy');
-        document.body.removeChild(ta);
-        if (!ok) throw new Error('Copy failed');
-      } catch (err) {
-        alert(err.message || 'Copy failed');
-      }
-    },
-    async showConfig(client) {
-      try {
-        const config = await this.api.getConfiguration(client.id, this.getClientLevel(client), this.getClientProfile(client));
-        this.configViewClient = client;
-        this.configViewText = config;
-      } catch (err) {
-        alert(err.message || 'Failed to load config');
-      }
-    },
     async showQR(client) {
       try {
-        const level = this.getClientLevel(client);
-        const profile = this.getClientProfile(client);
-        const [textQr, amneziaQr] = await Promise.all([
+        const level = this.getCommittedLevel(client);
+        const profile = this.getCommittedProfile(client);
+        const xrayPromise = this.amneziaXrayAvailable
+          ? this.api.getClientXray(client.id)
+          : Promise.reject(new Error('xray off'));
+        const [textRes, amneziaRes, previewRes, xrayRes] = await Promise.allSettled([
           this.api.getClientQRCodeSVG(client.id, level, profile, 'text'),
           this.api.getClientQRCodeSVG(client.id, level, profile, 'amnezia'),
+          this.api.getConfiguration(client.id, level, profile),
+          xrayPromise,
         ]);
-        this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(textQr.svg);
-        this.qrcodeTextPayload = textQr.payload;
-        this.qrcodeAmneziaSvgs = amneziaQr.svgs.map(
-          (s) => 'data:image/svg+xml,' + encodeURIComponent(s),
-        );
-        this.qrcodeAmneziaPayloads = amneziaQr.payloads || [];
-        this.qrcodeTab = 'amnezia';
+
+        this.qrcodeText = null;
+        this.qrcodeTextPayload = null;
+        this.qrcodeTextILimit = null;
+        this.qrcodeAmneziaSvgs = null;
+        this.qrcodeAmneziaPayloads = null;
+        this.qrcodeAmneziaILimit = null;
+        this.qrcodePreviewText = '';
+        this.qrcodeXraySvg = null;
+        this.qrcodeXraySubUrl = '';
+        this.qrcodeXrayVlessUrl = '';
+        this.qrcodeXrayJson = '';
+        this.qrcodeXrayClientId = client.id;
+
+        if (textRes.status === 'fulfilled' && textRes.value && textRes.value.svg) {
+          this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(textRes.value.svg);
+          this.qrcodeTextPayload = textRes.value.payload;
+          this.qrcodeTextILimit = textRes.value.iLimit || null;
+        }
+        if (amneziaRes.status === 'fulfilled' && amneziaRes.value && Array.isArray(amneziaRes.value.svgs)) {
+          this.qrcodeAmneziaSvgs = amneziaRes.value.svgs.map(
+            (s) => 'data:image/svg+xml,' + encodeURIComponent(s),
+          );
+          this.qrcodeAmneziaPayloads = amneziaRes.value.payloads || [];
+          this.qrcodeAmneziaILimit = amneziaRes.value.iLimit || null;
+        }
+        if (previewRes.status === 'fulfilled') {
+          this.qrcodePreviewText = previewRes.value || '';
+        }
+        if (xrayRes.status === 'fulfilled' && xrayRes.value) {
+          const x = xrayRes.value;
+          this.qrcodeXraySubUrl = x.subUrl || '';
+          this.qrcodeXrayVlessUrl = x.vlessUrl || '';
+          this.qrcodeXrayJson = x.clientJson
+            ? JSON.stringify(x.clientJson, null, 2)
+            : '';
+          if (x.subQrSvg) {
+            this.qrcodeXraySvg = 'data:image/svg+xml,' + encodeURIComponent(x.subQrSvg);
+          }
+        }
+
+        const hasAny = this.qrcodeText
+          || (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length)
+          || this.qrcodePreviewText
+          || this.qrcodeXraySvg
+          || this.qrcodeXraySubUrl;
+        if (!hasAny) {
+          const err = (textRes.status === 'rejected' && textRes.reason)
+            || (amneziaRes.status === 'rejected' && amneziaRes.reason)
+            || (previewRes.status === 'rejected' && previewRes.reason);
+          throw err || new Error('Failed to load QR code');
+        }
+
+        if (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length) this.qrcodeTab = 'amnezia';
+        else if (this.qrcodeText) this.qrcodeTab = 'text';
+        else if (this.qrcodeXraySvg || this.qrcodeXraySubUrl) this.qrcodeTab = 'xray';
+        else this.qrcodeTab = 'preview';
+
+        if (!this.qrcodeText && textRes.status === 'rejected') {
+          console.warn('Text QR unavailable:', textRes.reason && textRes.reason.message);
+        }
       } catch (err) {
         alert(err.message || 'Failed to load QR code');
       }
@@ -648,13 +1302,50 @@ new Vue({
     closeQR() {
       this.qrcodeText = null;
       this.qrcodeTextPayload = null;
+      this.qrcodeTextILimit = null;
       this.qrcodeAmneziaSvgs = null;
       this.qrcodeAmneziaPayloads = null;
+      this.qrcodeAmneziaILimit = null;
+      this.qrcodePreviewText = '';
+      this.qrcodeXraySvg = null;
+      this.qrcodeXraySubUrl = '';
+      this.qrcodeXrayVlessUrl = '';
+      this.qrcodeXrayJson = '';
+      this.qrcodeXrayClientId = null;
       this.qrcodeTab = 'amnezia';
     },
-    closeConfigView() {
-      this.configViewClient = null;
-      this.configViewText = '';
+    async copyQrXraySub() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeXraySubUrl || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async copyQrXrayVless() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeXrayVlessUrl || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async copyQrXrayJson() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeXrayJson || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    formatQrILimitNote(iLimit) {
+      if (!iLimit || !iLimit.limited) return '';
+      if (iLimit.excluded || iLimit.effective === 0) return this.$t('qrIParamsExcluded');
+      return this.$t('qrIParamsLimited', { n: iLimit.effective });
+    },
+    async copyQrPreview() {
+      try {
+        await this.copyTextToClipboard(this.qrcodePreviewText || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
     },
     async copyTextToClipboard(text) {
       if (text == null || text === '') return;
@@ -680,12 +1371,6 @@ new Vue({
         alert(err.message || 'Copy failed');
       }
     },
-    copyFromConfigView() {
-      if (!this.configViewText) return;
-      this.copyTextToClipboard(this.configViewText).catch((err) => {
-        alert(err.message || 'Copy failed');
-      });
-    },
     dateTime: (value) => {
       return new Intl.DateTimeFormat(undefined, {
         year: 'numeric',
@@ -695,22 +1380,34 @@ new Vue({
         minute: 'numeric',
       }).format(value);
     },
+    formatClientCreated(client) {
+      if (!client || !client.createdAt) return '—';
+      const d = client.createdAt instanceof Date ? client.createdAt : new Date(client.createdAt);
+      const dd = String(d.getDate()).padStart(2, '0');
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const yyyy = d.getFullYear();
+      const name = client.createdByUsername || '—';
+      return `${dd}.${mm}.${yyyy} ${name}`;
+    },
     async refresh({
       updateCharts = false,
     } = {}) {
       if (!this.authenticated) return;
 
       try {
+        if (this.signaturesBankError) {
+          this.reloadSignatureProfiles({ attempts: 1 }).catch(() => {});
+        }
         const res = await this.api.getClients();
         this.refreshError = null;
         this.applyAmneziaDnsCapability(res.serverCapabilities);
+        this.applyAmneziaXrayCapability(res.serverCapabilities);
+        if (res.serverJunk) this.serverJunk = res.serverJunk;
         const list = Array.isArray(res.clients) ? res.clients : [];
         this.clients = list.map((client) => {
-        this.$set(this.clientLevels, client.id, client.defaultLevel != null ? client.defaultLevel : 1);
-        this.$set(this.clientProfiles, client.id, client.defaultProfile || this.defaultProfile || 'dns');
-        if (client.defaultSignature != null) {
-          this.$set(this.clientSignatures, client.id, String(client.defaultSignature));
-        }
+        if (client.junkPins) this.$set(this.clientJunkPins, client.id, client.junkPins);
+        // Do not overwrite in-progress drafts (level/profile/junk/MTU) on poll refresh.
+        this.syncObfuscationDraftFromClient(client, { force: false });
         if (this.amneziaDnsAvailable) {
           this.$set(this.clientUseServerDns, client.id, client.useServerDns !== false);
         }
@@ -814,6 +1511,10 @@ new Vue({
     },
     /** Must complete before first refresh() so firewall profile <select> has <option> rows (avoids empty dropdown on first paint). */
     ensureRuleProfiles() {
+      if (!this.canManageFirewall) {
+        this.ruleProfiles = [];
+        return Promise.resolve();
+      }
       return this.api.getRuleProfiles()
         .then((r) => { this.ruleProfiles = Array.isArray(r) ? r : []; })
         .catch(() => { this.ruleProfiles = []; });
@@ -821,23 +1522,31 @@ new Vue({
     login(e) {
       e.preventDefault();
 
-      if (!this.username || !this.password) return;
+      if (!this.username || !this.password) {
+        this.loginFieldErrors.username = !this.username ? this.$t('fieldRequired') : '';
+        this.loginFieldErrors.password = !this.password ? this.$t('fieldRequired') : '';
+        return;
+      }
       if (this.authenticating) return;
 
+      this.loginFieldErrors = { username: '', password: '', _form: '' };
       this.authenticating = true;
       this.api.createSession({ username: this.username, password: this.password })
         .then(async () => {
           const session = await this.api.getSession();
           this.authenticated = session.authenticated;
           this.syncPanelUserFromSession(session);
+          await this.reloadPanelUsers();
           await this.ensureRuleProfiles();
+          if (this.canManageFirewall) this.loadGlobalFirewallRules();
           return this.refresh();
         })
         .catch((err) => {
-          const msg = err.status === 409 || err.code === 'USERNAME_EXISTS'
-            ? (this.$t ? this.$t('usernameExists') : 'Username already exists')
-            : (err.message || err.toString());
-          alert(msg);
+          if (err.status === 401) {
+            this.loginFieldErrors._form = this.$t('loginErrInvalid');
+          } else {
+            this.loginFieldErrors._form = (err.message || err.toString());
+          }
         })
         .finally(() => {
           this.authenticating = false;
@@ -857,6 +1566,10 @@ new Vue({
         });
     },
     loadGlobalFirewallRules() {
+      if (!this.canManageFirewall) {
+        this.globalFirewallRules = [];
+        return;
+      }
       this.api.getGlobalFirewallRules()
         .then((r) => { this.globalFirewallRules = Array.isArray(r) ? r : []; })
         .catch(() => { this.globalFirewallRules = []; });
@@ -1027,11 +1740,103 @@ new Vue({
         this.loadGlobalFirewallRules();
         return;
       }
+      if (profile.id === 'cidr') {
+        this.loadVpnPools();
+        return;
+      }
       this.api.getRuleProfile(profile.id)
         .then((data) => {
           this.$set(this.profileRulesByExpandedId, profile.id, Array.isArray(data.rules) ? data.rules : []);
         })
         .catch(() => { this.$set(this.profileRulesByExpandedId, profile.id, []); });
+    },
+    loadVpnPools() {
+      if (!this.canManageSettings) {
+        this.vpnPools = [];
+        return Promise.resolve();
+      }
+      return Promise.all([
+        this.api.getVpnPools().then((data) => {
+          this.vpnPools = Array.isArray(data && data.pools) ? data.pools : [];
+        }).catch(() => { this.vpnPools = []; }),
+        this.reloadPanelUsers(),
+      ]);
+    },
+    openCidrPoolCreate() {
+      this.cidrPoolEdit = { id: null, name: '', cidr: '', gateway: '' };
+    },
+    openCidrPoolEdit(pool) {
+      this.cidrPoolEdit = {
+        id: pool.id,
+        name: pool.name || '',
+        cidr: pool.cidr || '',
+        gateway: pool.gateway || '',
+      };
+    },
+    closeCidrPoolEdit() {
+      this.cidrPoolEdit = null;
+    },
+    saveCidrPoolEdit() {
+      const edit = this.cidrPoolEdit;
+      if (!edit) return;
+      const name = (edit.name || '').trim();
+      const cidr = (edit.cidr || '').trim();
+      if (!name || !cidr) {
+        alert(this.$t('fieldRequired'));
+        return;
+      }
+      const body = { name, cidr };
+      const gw = (edit.gateway || '').trim();
+      // Only send gateway if it still belongs to the CIDR; otherwise server picks default.
+      if (gw && ipv4InCidr(gw, cidr)) body.gateway = gw;
+      const req = edit.id
+        ? this.api.updateVpnPool(edit.id, body)
+        : this.api.createVpnPool(body);
+      req
+        .then(() => {
+          this.closeCidrPoolEdit();
+          return this.loadVpnPools();
+        })
+        .catch((err) => alert(err.message || err.toString()))
+        .finally(() => this.refresh().catch(console.error));
+    },
+    deleteCidrPool(pool) {
+      if (!confirm(this.$t('cidrPoolDeleteConfirm'))) return;
+      this.api.deleteVpnPool(pool.id)
+        .then(() => this.loadVpnPools())
+        .catch((err) => alert(err.message || err.toString()))
+        .finally(() => this.refresh().catch(console.error));
+    },
+    openCidrPoolAssign(pool) {
+      this.cidrPoolAssign = pool;
+      this.cidrPoolAssignSelected = Array.isArray(pool.userIds) ? pool.userIds.slice() : [];
+      this.reloadPanelUsers();
+    },
+    closeCidrPoolAssign() {
+      this.cidrPoolAssign = null;
+      this.cidrPoolAssignSelected = [];
+    },
+    toggleCidrPoolAssignUser(userId) {
+      const i = this.cidrPoolAssignSelected.indexOf(userId);
+      if (i >= 0) this.cidrPoolAssignSelected.splice(i, 1);
+      else this.cidrPoolAssignSelected.push(userId);
+    },
+    saveCidrPoolAssign() {
+      if (!this.cidrPoolAssign) return;
+      this.cidrPoolAssignSubmitting = true;
+      this.api.setVpnPoolUsers(this.cidrPoolAssign.id, this.cidrPoolAssignSelected.slice())
+        .then(() => {
+          this.closeCidrPoolAssign();
+          return this.loadVpnPools();
+        })
+        .catch((err) => alert(err.message || err.toString()))
+        .finally(() => {
+          this.cidrPoolAssignSubmitting = false;
+        });
+    },
+    vpnPoolUsernames(pool) {
+      const ids = new Set(Array.isArray(pool.userIds) ? pool.userIds : []);
+      return (this.panelUsers || []).filter((u) => ids.has(u.id)).map((u) => u.username).join(', ') || '—';
     },
     loadRulesForProfile(profileId) {
       if (!profileId) return;
@@ -1128,11 +1933,24 @@ new Vue({
         });
     },
     createClient() {
-      const name = this.clientCreateName;
+      const name = (this.clientCreateName || '').trim();
       if (!name) return;
+      if ((this.clients || []).some((c) => c.name === name)) {
+        alert(this.$t('clientNameAlreadyExists'));
+        return;
+      }
+      if (this.panelRole === 'user' && !(this.sessionAssignedCidrs || []).length) {
+        alert(this.$t('noCidrAssignedCannotCreateClient'));
+        return;
+      }
 
       this.api.createClient({ name })
-        .catch((err) => alert(err.message || err.toString()))
+        .catch((err) => {
+          const msg = (err.status === 409 || (err.data && err.data.code === 'CLIENT_NAME_EXISTS'))
+            ? this.$t('clientNameAlreadyExists')
+            : (err.message || err.toString());
+          alert(msg);
+        })
         .finally(() => this.refresh().catch(console.error));
     },
     deleteClient(client) {
@@ -1142,7 +1960,12 @@ new Vue({
     },
     enableClient(client) {
       this.api.enableClient({ clientId: client.id })
-        .catch((err) => alert(err.message || err.toString()))
+        .catch((err) => {
+          const msg = err.status === 400
+            ? (this.$t('clientAddressInvalid') || err.message)
+            : (err.message || err.toString());
+          alert(msg);
+        })
         .finally(() => this.refresh().catch(console.error));
     },
     disableClient(client) {
@@ -1151,14 +1974,40 @@ new Vue({
         .finally(() => this.refresh().catch(console.error));
     },
     updateClientName(client, name) {
-      this.api.updateClientName({ clientId: client.id, name })
-        .catch((err) => alert(err.message || err.toString()))
+      const trimmed = (name || '').trim();
+      if (!trimmed) return;
+      if ((this.clients || []).some((c) => c.id !== client.id && c.name === trimmed)) {
+        alert(this.$t('clientNameAlreadyExists'));
+        return;
+      }
+      this.api.updateClientName({ clientId: client.id, name: trimmed })
+        .catch((err) => {
+          const msg = (err.status === 409 || (err.data && err.data.code === 'CLIENT_NAME_EXISTS'))
+            ? this.$t('clientNameAlreadyExists')
+            : (err.message || err.toString());
+          alert(msg);
+        })
         .finally(() => this.refresh().catch(console.error));
     },
     updateClientAddress(client, address) {
-      this.api.updateClientAddress({ clientId: client.id, address })
+      const trimmed = (address || '').trim();
+      if (!trimmed) return;
+      const ranges = this.sessionAssignedCidrs || [];
+      if (!ranges.length) {
+        alert(this.$t('noCidrAssignedCannotCreateClient'));
+        return;
+      }
+      if (!ipv4InAnyCidr(trimmed, ranges)) {
+        alert(this.$t('addressOutsideAssignedCidrs'));
+        return;
+      }
+      this.api.updateClientAddress({ clientId: client.id, address: trimmed })
         .catch((err) => {
-          const msg = err.status === 409 ? (this.$t('addressAlreadyInUse') || err.message) : (err.message || err.toString());
+          let msg = err.message || err.toString();
+          if (err.status === 409) msg = this.$t('addressAlreadyInUse') || msg;
+          else if (err.status === 403 || err.status === 400) {
+            msg = this.$t('addressOutsideAssignedCidrs') || msg;
+          }
           alert(msg);
         })
         .finally(() => this.refresh().catch(console.error));
@@ -1202,61 +2051,287 @@ new Vue({
       this.firewallBlocksVisible = !this.firewallBlocksVisible;
       localStorage.setItem('firewallBlocksVisible', this.firewallBlocksVisible ? '1' : '0');
     },
+    toggleUserActions() {
+      this.userActionsOpen = !this.userActionsOpen;
+    },
+    clearFieldError(storeName, field) {
+      const store = this[storeName];
+      if (store && field in store) {
+        this.$set(store, field, '');
+      }
+      if (store && store._form) {
+        this.$set(store, '_form', '');
+      }
+    },
+    emptyFieldErrors() {
+      return { password: '', passwordConfirm: '', _form: '' };
+    },
+    validatePasswordFields(password, passwordConfirm, errors) {
+      errors.password = '';
+      errors.passwordConfirm = '';
+      errors._form = '';
+      let ok = true;
+      if (!password || password.length < 5) {
+        errors.password = this.$t('passwordErrTooShort');
+        ok = false;
+      } else if (password.length > 256) {
+        errors.password = this.$t('passwordErrTooLong');
+        ok = false;
+      }
+      if (password !== passwordConfirm) {
+        errors.passwordConfirm = this.$t('passwordErrMismatch');
+        ok = false;
+      }
+      return ok;
+    },
+    applyPasswordApiError(err, errors) {
+      const c = err && err.code;
+      if (c === 'PASSWORD_TOO_SHORT') errors.password = this.$t('passwordErrTooShort');
+      else if (c === 'PASSWORD_TOO_LONG') errors.password = this.$t('passwordErrTooLong');
+      else if (c === 'PASSWORD_MISMATCH') errors.passwordConfirm = this.$t('passwordErrMismatch');
+      else errors._form = (err && err.message) || String(err);
+    },
     syncPanelUserFromSession(session) {
       this.panelUsername = session && session.authenticated ? (session.username || null) : null;
+      this.panelUserId = session && session.authenticated ? (session.userId || session.id || null) : null;
+      this.panelRole = session && session.authenticated ? (session.role || null) : null;
+      this.panelCapabilities = session && session.authenticated && Array.isArray(session.capabilities)
+        ? session.capabilities
+        : [];
+      this.sessionAssignedCidrs = session && session.authenticated && Array.isArray(session.assigned_cidrs)
+        ? session.assigned_cidrs
+        : [];
+      if (!this.canManageFirewall) {
+        this.firewallBlocksVisible = false;
+      }
+    },
+    hasCapability(cap) {
+      return Array.isArray(this.panelCapabilities) && this.panelCapabilities.includes(cap);
     },
     clearPasswordChangeUi() {
-      if (this.passwordErrorClearTimer) {
-        clearTimeout(this.passwordErrorClearTimer);
-        this.passwordErrorClearTimer = null;
-      }
       this.panelUsername = null;
-      this.passwordChangeOpen = false;
+      this.panelUserId = null;
+      this.panelRole = null;
+      this.panelCapabilities = [];
+      this.userActionsOpen = false;
+      this.passwordModalOpen = false;
+      this.passwordTargets = [];
+      this.passwordTargetUserId = null;
       this.passwordNew = '';
       this.passwordConfirm = '';
-      this.passwordFieldError = false;
+      this.passwordFieldErrors = { password: '', passwordConfirm: '', _form: '' };
+      this.createUserModalOpen = false;
+      this.createUserUsername = '';
+      this.createUserPassword = '';
+      this.createUserConfirm = '';
+      this.createUserRole = 'user';
+      this.createUserFieldErrors = { username: '', password: '', passwordConfirm: '', _form: '' };
+      this.roleLabels = {};
+      this.panelUsers = [];
+      this.clientAssignModalClient = null;
+      this.clientAssignModalUserId = null;
+      this.clientAssignFieldError = '';
+      this.loginFieldErrors = { username: '', password: '', _form: '' };
     },
-    passwordInputClass(hasErr) {
-      const base =
-        'panel-auth-field panel-password-field flex-1 min-w-[7rem] max-w-[16rem]';
-      return hasErr ? `${base} panel-auth-field--error` : base;
+    openPasswordModal() {
+      this.userActionsOpen = false;
+      this.passwordNew = '';
+      this.passwordConfirm = '';
+      this.passwordFieldErrors = { password: '', passwordConfirm: '', _form: '' };
+      this.passwordModalOpen = true;
+      this.api.getPasswordTargets()
+        .then((list) => {
+          this.passwordTargets = Array.isArray(list) ? list : [];
+          if (this.showPasswordUserSelect) {
+            const self = this.passwordTargets.find((u) => u.id === this.panelUserId)
+              || this.passwordTargets[0];
+            this.passwordTargetUserId = self ? self.id : null;
+          } else {
+            this.passwordTargetUserId = this.panelUserId;
+          }
+        })
+        .catch((err) => {
+          this.passwordFieldErrors._form = (err && err.message) || String(err);
+          this.passwordModalOpen = false;
+        });
     },
-    togglePasswordChangeOpen() {
-      this.passwordChangeOpen = !this.passwordChangeOpen;
+    closePasswordModal() {
+      this.passwordModalOpen = false;
+      this.passwordNew = '';
+      this.passwordConfirm = '';
+      this.passwordFieldErrors = { password: '', passwordConfirm: '', _form: '' };
     },
-    passwordChangeErrorMessage(err) {
-      const c = err && err.code;
-      if (c === 'PASSWORD_TOO_SHORT') return this.$t('passwordErrTooShort');
-      if (c === 'PASSWORD_TOO_LONG') return this.$t('passwordErrTooLong');
-      if (c === 'PASSWORD_MISMATCH') return this.$t('passwordErrMismatch');
-      return (err && err.message) || String(err);
+    openCreateUserModal() {
+      this.userActionsOpen = false;
+      this.createUserUsername = '';
+      this.createUserPassword = '';
+      this.createUserConfirm = '';
+      this.createUserRole = 'user';
+      this.createUserCidr = '';
+      this.createUserFieldErrors = { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' };
+      this.roleLabels = {};
+      this.createUserModalOpen = true;
+      if (this.panelRole === 'admin') {
+        this.api.getRoles(this.currentLocale)
+          .then((labels) => {
+            this.roleLabels = labels && typeof labels === 'object' ? labels : {};
+          })
+          .catch(() => {
+            this.roleLabels = {};
+          });
+      }
+      if (this.canManageSettings) {
+        this.loadVpnPools().then(() => {
+          if (!this.createUserCidr && this.vpnPools.length) {
+            this.createUserCidr = this.vpnPools[0].cidr;
+          }
+        });
+      }
+    },
+    closeCreateUserModal() {
+      this.createUserModalOpen = false;
+      this.createUserUsername = '';
+      this.createUserPassword = '';
+      this.createUserConfirm = '';
+      this.createUserRole = 'user';
+      this.createUserCidr = '';
+      this.createUserFieldErrors = { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' };
     },
     submitPasswordChange() {
       if (this.passwordChangeSubmitting) return;
-      if (this.passwordErrorClearTimer) {
-        clearTimeout(this.passwordErrorClearTimer);
-        this.passwordErrorClearTimer = null;
+      const errors = { password: '', passwordConfirm: '', _form: '' };
+      if (!this.validatePasswordFields(this.passwordNew, this.passwordConfirm, errors)) {
+        this.passwordFieldErrors = errors;
+        return;
       }
-      this.passwordFieldError = false;
+      const targetId = this.showPasswordUserSelect
+        ? this.passwordTargetUserId
+        : this.panelUserId;
+      if (!targetId) return;
       this.passwordChangeSubmitting = true;
-      this.api.changePassword({ password: this.passwordNew, passwordConfirm: this.passwordConfirm })
+      this.passwordFieldErrors = { password: '', passwordConfirm: '', _form: '' };
+      this.api.changeUserPassword({
+        userId: targetId,
+        password: this.passwordNew,
+        passwordConfirm: this.passwordConfirm,
+      })
         .then(() => {
-          this.passwordNew = '';
-          this.passwordConfirm = '';
-          alert(this.$t('passwordChangedOk'));
+          this.closePasswordModal();
         })
         .catch((err) => {
-          if (err.status === 400) {
-            this.passwordFieldError = true;
-            this.passwordErrorClearTimer = setTimeout(() => {
-              this.passwordFieldError = false;
-              this.passwordErrorClearTimer = null;
-            }, 3000);
-          }
-          alert(this.passwordChangeErrorMessage(err));
+          const next = { password: '', passwordConfirm: '', _form: '' };
+          this.applyPasswordApiError(err, next);
+          this.passwordFieldErrors = next;
         })
         .finally(() => {
           this.passwordChangeSubmitting = false;
+        });
+    },
+    submitCreateUser() {
+      if (this.createUserSubmitting) return;
+      const errors = { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' };
+      if (!this.createUserUsername || !this.createUserUsername.trim()) {
+        errors.username = this.$t('fieldRequired');
+      }
+      if (!this.validatePasswordFields(this.createUserPassword, this.createUserConfirm, errors)) {
+        // validatePasswordFields may set password/passwordConfirm
+      }
+      if (!this.createUserCidr) {
+        errors.cidr = this.$t('createUserCidrRequired');
+      }
+      if (errors.username || errors.password || errors.passwordConfirm || errors.cidr) {
+        this.createUserFieldErrors = errors;
+        return;
+      }
+      this.createUserSubmitting = true;
+      this.createUserFieldErrors = { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' };
+      const role = this.panelRole === 'admin' ? (this.createUserRole || 'user') : 'user';
+      const payload = {
+        username: this.createUserUsername.trim(),
+        password: this.createUserPassword,
+        role,
+        assigned_cidrs: [this.createUserCidr],
+      };
+      this.api.createUser(payload)
+        .then(() => {
+          this.closeCreateUserModal();
+          return this.reloadPanelUsers();
+        })
+        .catch((err) => {
+          const next = { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' };
+          if (err.status === 409 || err.code === 'USERNAME_EXISTS') {
+            next.username = this.$t('usernameExists');
+          } else if (err.status === 400) {
+            this.applyPasswordApiError(err, next);
+            if (!next.password && !next.passwordConfirm) {
+              next._form = (err && err.message) || String(err);
+            }
+          } else {
+            next._form = (err && err.message) || String(err);
+          }
+          this.createUserFieldErrors = next;
+        })
+        .finally(() => {
+          this.createUserSubmitting = false;
+        });
+    },
+    reloadPanelUsers() {
+      if (!this.canAssignClients && !this.canCreateUsers) {
+        this.panelUsers = [];
+        return Promise.resolve();
+      }
+      return this.api.getUsers()
+        .then((list) => {
+          this.panelUsers = Array.isArray(list) ? list.filter((u) => u && u.is_active) : [];
+        })
+        .catch(() => {
+          this.panelUsers = [];
+        });
+    },
+    assignableUsersForClient(client) {
+      const assigned = new Set((client.users || []).map((u) => u.id));
+      return (this.panelUsers || []).filter((u) => u && !assigned.has(u.id));
+    },
+    revokeClientUser(client, user) {
+      const nextIds = (client.users || []).filter((u) => u.id !== user.id).map((u) => u.id);
+      this.api.setClientUsers({ clientId: client.id, userIds: nextIds })
+        .then((users) => {
+          this.$set(client, 'users', Array.isArray(users) ? users : []);
+        })
+        .catch((err) => {
+          this.clientAssignFieldError = (err && err.message) || String(err);
+        });
+    },
+    openClientAssignModal(client) {
+      this.clientAssignModalClient = client;
+      this.clientAssignModalUserId = null;
+      this.clientAssignFieldError = '';
+    },
+    closeClientAssignModal() {
+      this.clientAssignModalClient = null;
+      this.clientAssignModalUserId = null;
+      this.clientAssignFieldError = '';
+    },
+    submitClientAssign() {
+      const client = this.clientAssignModalClient;
+      const uid = this.clientAssignModalUserId;
+      if (!client || !uid) {
+        this.clientAssignFieldError = this.$t('fieldRequired');
+        return;
+      }
+      this.clientAssignSubmitting = true;
+      this.clientAssignFieldError = '';
+      const nextIds = [...(client.users || []).map((u) => u.id), uid];
+      this.api.setClientUsers({ clientId: client.id, userIds: nextIds })
+        .then((users) => {
+          this.$set(client, 'users', Array.isArray(users) ? users : []);
+          this.closeClientAssignModal();
+        })
+        .catch((err) => {
+          this.clientAssignFieldError = (err && err.message) || String(err);
+        })
+        .finally(() => {
+          this.clientAssignSubmitting = false;
         });
     },
   },
@@ -1286,8 +2361,12 @@ new Vue({
         this.authenticated = session.authenticated;
         this.syncPanelUserFromSession(session);
         this.reloadSignatureProfiles();
+        this.reloadMtuProfiles();
         this.loadGlobalFirewallRules();
-        return this.ensureRuleProfiles();
+        return Promise.all([
+          this.ensureRuleProfiles(),
+          this.reloadPanelUsers(),
+        ]);
       })
       .then(() => {
         return this.refresh({
@@ -1346,13 +2425,95 @@ new Vue({
     }).catch((err) => console.error(err));
   },
   computed: {
+    canManageFirewall() {
+      return this.hasCapability('system.firewall');
+    },
+    canManageXray() {
+      return this.hasCapability('system.xray');
+    },
+    isValidAmneziaXrayPort() {
+      const n = Number(this.amneziaXrayPort);
+      return Number.isInteger(n) && n >= 1 && n <= 65535;
+    },
+    sniFinderProgressPct() {
+      const t = Number(this.sniFinderProgress && this.sniFinderProgress.total) || 0;
+      const d = Number(this.sniFinderProgress && this.sniFinderProgress.done) || 0;
+      if (t <= 0) return this.sniFinderBusy ? 8 : 0;
+      return Math.max(0, Math.min(100, Math.round((d / t) * 100)));
+    },
+    sniFinderPhaseLabel() {
+      const phase = this.sniFinderPhase;
+      if (phase === 'detecting' || phase === 'starting') return this.$t('xraySniPhaseDetecting');
+      if (phase === 'probing') return this.$t('xraySniPhaseProbing');
+      if (phase === 'verifying') return this.$t('xraySniPhaseVerifying');
+      if (phase === 'done') return this.$t('xraySniPhaseDone');
+      if (phase === 'error') return this.$t('xraySniPhaseError');
+      return phase || '';
+    },
+    canManageSettings() {
+      return this.hasCapability('system.settings');
+    },
+    canCreateClient() {
+      return Array.isArray(this.sessionAssignedCidrs) && this.sessionAssignedCidrs.length > 0;
+    },
+    canCreateUsers() {
+      return this.hasCapability('users.write');
+    },
+    canAssignClients() {
+      return this.hasCapability('clients.assign');
+    },
+    showPasswordUserSelect() {
+      return this.panelRole === 'admin' || this.panelRole === 'moderator';
+    },
+    createUserRoleOptions() {
+      const fallback = {
+        admin: this.$t('roleAdmin') || 'Administrator',
+        moderator: this.$t('roleModerator') || 'Moderator',
+        user: this.$t('roleUser') || 'User',
+      };
+      const labels = this.roleLabels && Object.keys(this.roleLabels).length
+        ? this.roleLabels
+        : fallback;
+      return ['admin', 'moderator', 'user'].map((id) => ({
+        id,
+        label: labels[id] || fallback[id] || id,
+      }));
+    },
+    amneziaQrCols() {
+      const n = this.amneziaQrImages.length;
+      return Math.max(1, Math.min(3, n || 1));
+    },
+    amneziaQrGridStyle() {
+      return { '--amnezia-qr-cols': String(this.amneziaQrCols) };
+    },
+    amneziaQrModalStyle() {
+      const cols = this.amneziaQrCols;
+      const gapPx = 16;
+      const cell = 560;
+      const pad = 32;
+      const w = cols * cell + (cols - 1) * gapPx + pad;
+      return {
+        '--amnezia-qr-modal-width': `min(100vw - 1rem, ${w}px)`,
+        width: `min(100vw - 1rem, ${w}px)`,
+      };
+    },
     qrcodeModalVisible() {
-      return this.qrcodeText != null;
+      return this.qrcodeText != null
+        || (Array.isArray(this.qrcodeAmneziaSvgs) && this.qrcodeAmneziaSvgs.length > 0)
+        || !!this.qrcodePreviewText
+        || !!this.qrcodeXraySvg
+        || !!this.qrcodeXraySubUrl;
     },
     /** Safe for Vue 2 template (avoids ReferenceError if stale cached app.js lacks data key). */
     amneziaQrImages() {
       const q = this.qrcodeAmneziaSvgs;
       return Array.isArray(q) ? q : [];
+    },
+    qrTextILimitNote() {
+      return this.formatQrILimitNote(this.qrcodeTextILimit);
+    },
+    qrAmneziaILimitNote() {
+      return this.formatQrILimitNote(this.qrcodeAmneziaILimit);
     },
     chartOptionsTX() {
       const opts = {
@@ -1401,6 +2562,7 @@ new Vue({
       }
       const rest = profiles.filter((p) => p.id !== 1).sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0) || a.id - b.id);
       rest.forEach((p) => list.push(p));
+      list.push({ id: 'cidr', name: this.$t('cidrPoolsTitle'), isCidr: true });
       return list;
     },
   },

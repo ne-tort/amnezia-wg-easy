@@ -44,6 +44,13 @@ let activeJob = null;
 let reconcileTimer = null;
 
 function vpnGateway() {
+  try {
+    const dbMod = require('./db');
+    const primary = dbMod.vpnPools.getPrimary();
+    if (primary && primary.gateway) return primary.gateway;
+  } catch {
+    /* */
+  }
   const addr = config.WG_DEFAULT_ADDRESS || '10.8.0.x';
   return addr.replace(/x$/, '1');
 }

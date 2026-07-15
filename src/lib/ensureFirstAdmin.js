@@ -10,12 +10,17 @@ const { ADMIN_USERNAME, ADMIN_PASSWORD } = require('../config');
  */
 async function ensureFirstAdmin() {
   if (!ADMIN_PASSWORD || typeof ADMIN_PASSWORD !== 'string') return;
-  if (db.panelUsers.count() > 0) return;
+  if (db.panelUsers.count() > 0) {
+    // Existing install: ensure seeded Default pool is assigned to admins with empty list.
+    db.vpnPools.assignPrimaryToEmptyAdmins();
+    return;
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const password_hash = await auth.hashPassword(ADMIN_PASSWORD);
+  const id = auth.generateUserId();
   db.panelUsers.create({
-    id: auth.generateUserId(),
+    id,
     username: ADMIN_USERNAME || 'admin',
     password_hash,
     role: 'admin',
@@ -23,6 +28,8 @@ async function ensureFirstAdmin() {
     created_at: now,
     updated_at: now,
   });
+  // Same Default pool as for everyone else — no special privileges, just assign on first boot.
+  db.vpnPools.assignPrimaryToEmptyAdmins();
 }
 
 module.exports = { ensureFirstAdmin };

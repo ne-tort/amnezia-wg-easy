@@ -1,5 +1,7 @@
 .env
 **/__pycache__/
+.pytest_cache/
+.cursor/
 *.pyc
 .DS_Store
 *.swp
@@ -9,6 +11,23 @@
 /wg0.json
 /1.conf
 /tmp_smb.conf
+
+# Ad-hoc API / curl dumps (keep out of the repo)
+/cookies.txt
+/login.json
+/apply.json
+/apply-out.json
+/clients.json
+/mtu.json
+/preview.json
+/preview-req.json
+/profiles.json
+/qr-err.json
+/qr.json
+/tmp-*.sh
+/tmp-*.py
+/.tmp-*
+/tmp-3xui/
 
 # Local / optional worktrees (not part of the panel image)
 /signature-lab/

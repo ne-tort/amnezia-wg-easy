@@ -8,6 +8,26 @@
 set -e
 cd "$(dirname "$0")"
 
+# Stable compose project name so volumes match install.sh acme inject.
+export COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-amnezia-wg-easy}"
+
+# Target: Linux VPS with Docker Engine + Compose plugin.
+# Usage: ./deploy.sh
+# Do not set COMPOSE_PROJECT_NAME unless you intentionally isolate a stack.
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "[deploy] ERROR: docker not found" >&2
+  exit 1
+fi
+if ! docker info >/dev/null 2>&1; then
+  echo "[deploy] ERROR: cannot talk to Docker daemon (is it running?)" >&2
+  exit 1
+fi
+if ! docker compose version >/dev/null 2>&1; then
+  echo "[deploy] ERROR: docker compose plugin not found" >&2
+  exit 1
+fi
+
 # Optional submodule (signature bank tooling); panel image does not need it at build time.
 if [ -f .gitmodules ] && [ -d .git ]; then
   if [ ! -f capture_udp_sig/README.md ]; then
@@ -144,13 +164,27 @@ ensure_amnezia_dns_net
 
 echo "[deploy] Building amnezia-dns image (client-compatible tag, container not started)..."
 if ! docker build -t amnezia-dns ./amnezia-dns; then
-  echo "[deploy] WARNING: amnezia-dns image build failed; panel can rebuild on enable if Dockerfile is present" >&2
+  echo "[deploy] ERROR: amnezia-dns image build failed (required for Amnezia DNS from the panel)" >&2
+  exit 1
 fi
 # Drop obsolete local tag from older deploys
 docker rmi amnezia-dns:local 2>/dev/null || true
 
-# HTTPS: self-signed (no certbot) for empty / 127.0.0.1 / localhost / plain IPv4 (no ACME for IP).
-# Let's Encrypt + certbot when PANEL_DOMAIN is a DNS name and CERTBOT_EMAIL is set.
+echo "[deploy] Building amnezia-xray image (VLESS Reality; container not started)..."
+if ! docker build -t amnezia-xray ./amnezia-xray; then
+  echo "[deploy] ERROR: amnezia-xray image build failed (required for Xray toggle from the panel)" >&2
+  exit 1
+fi
+
+if ! docker network inspect amnezia-dns-net >/dev/null 2>&1; then
+  echo "[deploy] ERROR: amnezia-dns-net missing after create" >&2
+  exit 1
+fi
+
+# HTTPS modes (SSL_MODE in .env, written by install.sh):
+#   selfsigned — nginx local cert (empty / 127.0.0.1 / localhost / plain IPv4 without acme)
+#   acme       — certs already in volume certbot_conf (acme.sh domain or IP shortlived); no certbot
+#   certbot    — docker certbot profile for DNS names + CERTBOT_EMAIL
 is_panel_local() {
   local p
   p=$(echo "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
@@ -175,17 +209,37 @@ is_valid_certbot_email() {
 
 PANEL_FOR_TLS=$(grep -E "^PANEL_DOMAIN=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
 CERTBOT_EMAIL_FOR_TLS=$(grep -E "^CERTBOT_EMAIL=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+SSL_MODE_VAL=$(grep -E "^SSL_MODE=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+SSL_MODE_VAL=$(echo "${SSL_MODE_VAL:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
-if is_panel_local "$PANEL_FOR_TLS"; then
-  COMPOSE_TLS_ARGS=()
-  echo "[deploy] HTTPS: self-signed (certbot service not started)"
-elif ! is_valid_certbot_email "$CERTBOT_EMAIL_FOR_TLS"; then
-  echo "[deploy] ERROR: PANEL_DOMAIN is a DNS name (not localhost/IPv4). Set CERTBOT_EMAIL in $ENV_WORKING for Let's Encrypt (a real mailbox you control)."
-  exit 1
-else
-  COMPOSE_TLS_ARGS=(--profile letsencrypt)
-  echo "[deploy] HTTPS: Let's Encrypt (certbot profile enabled)"
-fi
+COMPOSE_TLS_ARGS=()
+case "$SSL_MODE_VAL" in
+  acme)
+    echo "[deploy] HTTPS: SSL_MODE=acme (certs via volume; certbot service not started)"
+    ;;
+  certbot)
+    if ! is_valid_certbot_email "$CERTBOT_EMAIL_FOR_TLS"; then
+      echo "[deploy] ERROR: SSL_MODE=certbot requires CERTBOT_EMAIL in $ENV_WORKING"
+      exit 1
+    fi
+    COMPOSE_TLS_ARGS=(--profile letsencrypt)
+    echo "[deploy] HTTPS: SSL_MODE=certbot (Let's Encrypt profile enabled)"
+    ;;
+  selfsigned)
+    echo "[deploy] HTTPS: SSL_MODE=selfsigned (certbot service not started)"
+    ;;
+  *)
+    if is_panel_local "$PANEL_FOR_TLS"; then
+      echo "[deploy] HTTPS: self-signed (certbot service not started)"
+    elif ! is_valid_certbot_email "$CERTBOT_EMAIL_FOR_TLS"; then
+      echo "[deploy] ERROR: PANEL_DOMAIN is a DNS name (not localhost/IPv4). Set CERTBOT_EMAIL in $ENV_WORKING for Let's Encrypt, or SSL_MODE=acme after install.sh."
+      exit 1
+    else
+      COMPOSE_TLS_ARGS=(--profile letsencrypt)
+      echo "[deploy] HTTPS: Let's Encrypt (certbot profile enabled)"
+    fi
+    ;;
+esac
 
 # Build and start — retry on transient BuildKit/snapshot errors (common on busy hosts).
 echo "[deploy] Building and starting..."
@@ -206,36 +260,52 @@ if [ "$compose_ok" -ne 1 ]; then
   exit 1
 fi
 
-PORT=$(grep -E "^PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "51821")
-WG_PORT=$(grep -E "^WG_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "51820")
-PANEL_HTTPS_PORT=$(grep -E "^PANEL_HTTPS_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "443")
-PANEL_HTTP_PORT=$(grep -E "^PANEL_HTTP_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "80")
-WG_HOST=$(grep -E "^WG_HOST=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2 || echo "localhost")
-PANEL_DOMAIN=$(grep -E "^PANEL_DOMAIN=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || echo "")
-ADMIN_USER=$(grep -E "^ADMIN_USERNAME=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || echo "admin")
-ADMIN_PWD=$(grep -E "^ADMIN_PASSWORD=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || echo "")
+# DNS prerequisites for panel UI toggle (docker.sock → same daemon as this deploy).
+if ! docker image inspect amnezia-dns >/dev/null 2>&1; then
+  echo "[deploy] ERROR: amnezia-dns image missing after build" >&2
+  exit 1
+fi
+if ! docker inspect amnezia-awg --format '{{json .NetworkSettings.Networks}}' 2>/dev/null | grep -q 'amnezia-dns-net'; then
+  echo "[deploy] WARNING: amnezia-awg is not attached to amnezia-dns-net; Amnezia DNS install may fail" >&2
+fi
+
+PORT=$(grep -E "^PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+WG_PORT=$(grep -E "^WG_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+PANEL_HTTPS_PORT=$(grep -E "^PANEL_HTTPS_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+PANEL_HTTP_PORT=$(grep -E "^PANEL_HTTP_PORT=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+WG_HOST=$(grep -E "^WG_HOST=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+PANEL_DOMAIN=$(grep -E "^PANEL_DOMAIN=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+ADMIN_USER=$(grep -E "^ADMIN_USERNAME=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+ADMIN_PWD=$(grep -E "^ADMIN_PASSWORD=" "$ENV_WORKING" 2>/dev/null | cut -d= -f2- || true)
+PORT=${PORT:-51821}
+WG_PORT=${WG_PORT:-51820}
+PANEL_HTTPS_PORT=${PANEL_HTTPS_PORT:-443}
+PANEL_HTTP_PORT=${PANEL_HTTP_PORT:-80}
+WG_HOST=${WG_HOST:-localhost}
+ADMIN_USER=${ADMIN_USER:-admin}
 PANEL_DOMAIN_PRINT="${PANEL_DOMAIN:-$WG_HOST}"
 HTTPS_SUFFIX=""
 if [ "$PANEL_HTTPS_PORT" != "443" ]; then
   HTTPS_SUFFIX=":${PANEL_HTTPS_PORT}"
 fi
 
-# Wait until nginx can reach the panel (avoids immediate 502 right after compose up).
+# Probe localhost host-port (nginx publish), not public PANEL_DOMAIN/WG_HOST — hairpin often fails.
+PANEL_PROBE_URL="https://127.0.0.1${HTTPS_SUFFIX}/"
 PANEL_URL="https://${PANEL_DOMAIN_PRINT}${HTTPS_SUFFIX}/"
 if command -v curl >/dev/null 2>&1; then
-  echo "[deploy] Waiting for panel at ${PANEL_URL} ..."
+  echo "[deploy] Waiting for panel at ${PANEL_PROBE_URL} ..."
   ready=0
   for _ in $(seq 1 40); do
-    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 3 "$PANEL_URL" || true)
+    code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 3 "$PANEL_PROBE_URL" || true)
     case "$code" in
-      200|301|302) ready=1; break ;;
+      200|301|302|401) ready=1; break ;;
     esac
     sleep 2
   done
   if [ "$ready" -eq 1 ]; then
     echo "[deploy] Panel is responding (HTTP ${code})"
   else
-    echo "[deploy] WARNING: panel not responding yet; check: docker compose logs -f amnezia-wg-easy"
+    echo "[deploy] WARNING: panel not responding yet; check: docker compose logs -f nginx amnezia-wg-easy"
   fi
 fi
 
@@ -245,4 +315,4 @@ if [ "$PANEL_HTTP_PORT" != "80" ]; then
 fi
 echo "[deploy] Admin login: ${ADMIN_USER}"
 echo "[deploy] Admin password: ${ADMIN_PWD}"
-echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). Amnezia DNS: enable/disable from panel header."
+echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). Amnezia DNS / Xray: enable from panel header (XRAY_PORT for Reality)."

@@ -1,6 +1,7 @@
 # Amnezia WG-Easy — ./deploy.sh or: docker compose up -d --build
-# Amnezia DNS matches amnezia-client: optional container via docker run (not a compose service).
+# Amnezia DNS / Xray match amnezia-client: optional containers via docker run (not compose services).
 # Network amnezia-dns-net is created by deploy.sh (same as client prepare_host.sh); panel attaches as external.
+# Xray publishes XRAY_PORT on the host when enabled from the panel (default 8443).
 
 services:
   amnezia-wg-easy:

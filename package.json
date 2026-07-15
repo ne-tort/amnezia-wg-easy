@@ -5,6 +5,6 @@
   "description": "Self-hosted AmneziaWG panel",
   "scripts": {
     "build": "DOCKER_BUILDKIT=1 docker build --tag amnezia-wg-easy .",
-    "test": "node --test tests/node/*.test.js"
+    "test": "node --test --test-concurrency=1 --test-force-exit tests/node/*.test.js"
   }
 }

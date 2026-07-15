@@ -16,6 +16,7 @@ const {
   fromNodeMiddleware,
   getQuery,
   getRouterParam,
+  getRequestURL,
   toNodeListener,
   readBody,
   setHeader,
@@ -24,6 +25,8 @@ const {
 
 const db = require('./db');
 const auth = require('./auth');
+const acl = require('./acl');
+const roleLabels = require('./roleLabels');
 const WireGuard = require('./WireGuard');
 const {
   isKnownProfile,
@@ -33,26 +36,42 @@ const {
 } = require('./obfuscationProfiles');
 const { BankError } = require('./signaturesBank');
 const amneziaDns = require('./amneziaDns');
+const amneziaXray = require('./amneziaXray');
+const sniFinder = require('./sniFinder');
+const mtuProfiles = require('./mtuProfiles');
 const { applyFirewall } = require('./firewall');
 
 /**
  * h3 strips bare `message` from JSON bodies; clients read statusMessage / data.error.
  * Keep statusMessage short (h3 may sanitize it); put the full text in data.error.
  */
-function httpError(statusCode, message) {
+function httpError(statusCode, message, code) {
   const shortByStatus = {
     400: 'Bad Request',
     401: 'Unauthorized',
     403: 'Forbidden',
     404: 'Not Found',
+    409: 'Conflict',
+    413: 'Payload Too Large',
+    499: 'Client Closed Request',
     503: 'Service Unavailable',
+    504: 'Gateway Timeout',
   };
+  const data = { error: message };
+  if (code) data.code = code;
   return createError({
     statusCode,
     statusMessage: shortByStatus[statusCode] || 'Error',
     message,
-    data: { error: message },
+    data,
   });
+}
+
+function sniHttpError(err) {
+  const status = (err && err.status) || 500;
+  const code = (err && err.code) || undefined;
+  const message = (err && err.message) || 'SNI finder error';
+  return httpError(status, message, code);
 }
 
 function bankHttpError(err) {
@@ -97,7 +116,9 @@ module.exports = class Server {
    * Starts HTTP server (sessions, routes, listen).
    * Call only after admin exists; first-admin setup is done in server.js main().
    */
-  async start() {
+  async start(options = {}) {
+    this._listenPort = options.port;
+    this._listenHost = options.host;
     const app = createApp();
     this.app = app;
 
@@ -146,19 +167,18 @@ module.exports = class Server {
       }))
 
       .get('/api/session', defineEventHandler((event) => {
-        const session = event.node.req.session;
-        let authenticated = false;
-        let role = null;
-        let username = null;
-        if (session?.userId) {
-          const user = db.panelUsers.findById(session.userId);
-          if (user && user.is_active) {
-            authenticated = true;
-            role = user.role ?? null;
-            username = user.username ?? null;
-          }
+        const actor = acl.getActor(event);
+        if (!actor) {
+          return { authenticated: false, role: null, username: null, userId: null, capabilities: [] };
         }
-        return { authenticated, role, username };
+        return {
+          authenticated: true,
+          role: actor.role,
+          username: actor.username,
+          userId: actor.id,
+          capabilities: acl.capabilitiesForRole(actor.role),
+          assigned_cidrs: actor.assigned_cidrs || [],
+        };
       }))
       .post('/api/session', defineEventHandler(async (event) => {
         const body = (await readBody(event)) || {};
@@ -181,27 +201,44 @@ module.exports = class Server {
         event.node.req.session.save();
         db.panelUsers.updateLastLogin(user.id, Math.floor(Date.now() / 1000));
         debug('Session: user %s', user.username);
-        return { success: true, role: user.role, username: user.username };
+        return {
+          success: true,
+          role: user.role,
+          username: user.username,
+          userId: user.id,
+          capabilities: acl.capabilitiesForRole(user.role),
+        };
       }));
 
     app.use(
-      fromNodeMiddleware((req, res, next) => {
-        if (!req.url.startsWith('/api/')) return next();
-        const session = req.session;
+      defineEventHandler((event) => {
+        const url = event.node.req.url || '';
+        if (!url.startsWith('/api/')) return;
+        const method = (event.node.req.method || 'GET').toUpperCase();
+        const pathOnly = url.split('?')[0] || '';
+        // Public endpoints (registered on the first router) — do not block.
+        if (
+          (pathOnly === '/api/session' && (method === 'GET' || method === 'POST'))
+          || pathOnly === '/api/release'
+          || pathOnly === '/api/check-update'
+          || pathOnly === '/api/lang'
+          || pathOnly === '/api/ui-traffic-stats'
+          || pathOnly === '/api/ui-chart-type'
+          || pathOnly === '/api/display-name'
+        ) {
+          return;
+        }
+        const session = event.node.req.session;
         if (session?.userId) {
           const user = db.panelUsers.findById(session.userId);
-          if (user && user.is_active) return next();
+          if (user && user.is_active) {
+            session.role = user.role;
+            return;
+          }
         }
-        return res.status(401).json({ error: 'Not Logged In' });
+        throw createError({ status: 401, message: 'Not Logged In' });
       }),
     );
-
-    function requireRoles(event, allowedRoles) {
-      const role = event.node.req.session?.role;
-      if (!role || !allowedRoles.includes(role)) {
-        throw createError({ status: 403, message: 'Forbidden' });
-      }
-    }
 
     const router2 = createRouter();
     app.use(router2);
@@ -216,11 +253,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .post('/api/me/password', defineEventHandler(async (event) => {
-        const userId = event.node.req.session?.userId;
-        const user = userId ? db.panelUsers.findById(userId) : null;
-        if (!user || !user.is_active) {
-          throw createError({ status: 401, message: 'Not authenticated' });
-        }
+        const actor = acl.requireActor(event);
         const body = await readBody(event);
         const password = typeof body.password === 'string' ? body.password : '';
         const passwordConfirm = typeof body.passwordConfirm === 'string' ? body.passwordConfirm : '';
@@ -248,12 +281,323 @@ module.exports = class Server {
           });
         }
         const password_hash = await auth.hashPassword(password);
-        db.panelUsers.updatePasswordHash(user.id, password_hash);
+        db.panelUsers.updatePasswordHash(actor.id, password_hash);
         return { success: true };
       }))
-      .get('/api/wireguard/client', defineEventHandler(() => WireGuard.getClients()))
+      .get('/api/users', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.USERS_READ);
+        return db.panelUsers.list();
+      }))
+      .get('/api/users/password-targets', defineEventHandler((event) => {
+        const actor = acl.requireActor(event);
+        return acl.listPasswordTargets(actor);
+      }))
+      .get('/api/roles', defineEventHandler((event) => {
+        acl.requireActor(event);
+        const query = getQuery(event);
+        const lang = typeof query.lang === 'string' ? query.lang : 'en';
+        return roleLabels.getRoleLabels(lang);
+      }))
+      .post('/api/users/:id/password', defineEventHandler(async (event) => {
+        const actor = acl.requireActor(event);
+        const id = getRouterParam(event, 'id');
+        const target = db.panelUsers.findById(id);
+        if (!target) throw createError({ status: 404, message: 'User not found' });
+        if (!acl.canChangePassword(actor, target)) {
+          throw createError({ status: 403, message: 'Forbidden' });
+        }
+        const body = (await readBody(event)) || {};
+        const password = typeof body.password === 'string' ? body.password : '';
+        const passwordConfirm = typeof body.passwordConfirm === 'string' ? body.passwordConfirm : '';
+        const minLen = 5;
+        const maxLen = 256;
+        if (password.length < minLen) {
+          throw createError({
+            status: 400,
+            message: `Password must be at least ${minLen} characters`,
+            data: { code: 'PASSWORD_TOO_SHORT' },
+          });
+        }
+        if (password.length > maxLen) {
+          throw createError({
+            status: 400,
+            message: `Password must be at most ${maxLen} characters`,
+            data: { code: 'PASSWORD_TOO_LONG' },
+          });
+        }
+        if (password !== passwordConfirm) {
+          throw createError({
+            status: 400,
+            message: 'Passwords do not match',
+            data: { code: 'PASSWORD_MISMATCH' },
+          });
+        }
+        const password_hash = await auth.hashPassword(password);
+        db.panelUsers.updatePasswordHash(id, password_hash);
+        return { success: true };
+      }))
+      .post('/api/users', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.USERS_WRITE);
+        const body = (await readBody(event)) || {};
+        const username = typeof body.username === 'string' ? body.username.trim() : '';
+        const password = typeof body.password === 'string' ? body.password : '';
+        const role = typeof body.role === 'string' ? body.role.trim() : '';
+        if (!username || !password) {
+          throw createError({ status: 400, message: 'Missing username or password' });
+        }
+        if (!acl.isValidRole(role)) {
+          throw createError({ status: 400, message: 'Invalid role' });
+        }
+        if (password.length < 5 || password.length > 256) {
+          throw createError({ status: 400, message: 'Password must be 5–256 characters' });
+        }
+        let assignedCidrs;
+        if (body.assigned_cidrs !== undefined) {
+          const vpnAddress = require('./vpnAddress');
+          const raw = Array.isArray(body.assigned_cidrs) ? body.assigned_cidrs : null;
+          if (!raw) {
+            throw createError({ status: 400, message: 'assigned_cidrs must be an array' });
+          }
+          const poolCidrs = db.vpnPools.list().map((p) => p.cidr);
+          const validated = vpnAddress.validateAssignedCidrs(raw, poolCidrs);
+          if (!validated.ok) {
+            throw createError({ status: 400, message: validated.message });
+          }
+          assignedCidrs = validated.cidrs;
+        }
+        if (!assignedCidrs || !assignedCidrs.length) {
+          throw createError({ status: 400, message: 'assigned_cidrs is required (at least one CIDR)' });
+        }
+        const now = Math.floor(Date.now() / 1000);
+        const password_hash = await auth.hashPassword(password);
+        const id = auth.generateUserId();
+        try {
+          db.panelUsers.create({
+            id,
+            username,
+            password_hash,
+            role,
+            is_active: 1,
+            created_at: now,
+            updated_at: now,
+          });
+        } catch (err) {
+          if (err.code === 'USERNAME_EXISTS') {
+            throw createError({ status: 409, message: 'Username already exists', data: { code: 'USERNAME_EXISTS' } });
+          }
+          throw err;
+        }
+        db.panelUsers.update(id, { assigned_cidrs: assignedCidrs });
+        event.node.res.statusCode = 201;
+        return db.panelUsers.findByIdPublic(id);
+      }))
+      .get('/api/users/:id', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.USERS_READ);
+        const id = getRouterParam(event, 'id');
+        const user = db.panelUsers.findByIdPublic(id);
+        if (!user) throw createError({ status: 404, message: 'User not found' });
+        return user;
+      }))
+      .patch('/api/users/:id', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.USERS_WRITE);
+        const id = getRouterParam(event, 'id');
+        const target = db.panelUsers.findById(id);
+        if (!target) throw createError({ status: 404, message: 'User not found' });
+        const body = (await readBody(event)) || {};
+        const fields = {};
+        if (body.role !== undefined) {
+          if (!acl.isValidRole(body.role)) {
+            throw createError({ status: 400, message: 'Invalid role' });
+          }
+          fields.role = body.role;
+        }
+        if (body.is_active !== undefined) {
+          fields.is_active = !!body.is_active;
+        }
+        if (body.password !== undefined) {
+          const password = typeof body.password === 'string' ? body.password : '';
+          if (password.length < 5 || password.length > 256) {
+            throw createError({ status: 400, message: 'Password must be 5–256 characters' });
+          }
+          fields.password_hash = await auth.hashPassword(password);
+        }
+        if (body.assigned_cidrs !== undefined) {
+          const vpnAddress = require('./vpnAddress');
+          const raw = Array.isArray(body.assigned_cidrs) ? body.assigned_cidrs : null;
+          if (!raw) {
+            throw createError({ status: 400, message: 'assigned_cidrs must be an array' });
+          }
+          const poolCidrs = db.vpnPools.list().map((p) => p.cidr);
+          const validated = vpnAddress.validateAssignedCidrs(raw, poolCidrs);
+          if (!validated.ok) {
+            throw createError({ status: 400, message: validated.message });
+          }
+          fields.assigned_cidrs = validated.cidrs;
+        }
+        const inv = acl.validateAdminInvariant(
+          target,
+          fields.role,
+          fields.is_active !== undefined ? fields.is_active : undefined,
+        );
+        if (!inv.ok) throw createError({ status: 400, message: inv.message });
+        const updated = db.panelUsers.update(id, fields);
+        if (fields.is_active === false || fields.is_active === 0) {
+          db.panelUsers.destroySessions(id);
+        }
+        return updated;
+      }))
+      .delete('/api/users/:id', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.USERS_WRITE);
+        const id = getRouterParam(event, 'id');
+        const target = db.panelUsers.findById(id);
+        if (!target) throw createError({ status: 404, message: 'User not found' });
+        const inv = acl.validateAdminInvariant(target, target.role, 0);
+        if (!inv.ok) throw createError({ status: 400, message: inv.message });
+        db.panelUsers.deactivate(id);
+        db.panelUsers.destroySessions(id);
+        return { success: true };
+      }))
+      .get('/api/vpn-pools', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const pools = db.vpnPools.list().map((p) => ({
+          ...p,
+          userIds: db.vpnPools.listUserIds(p.id),
+        }));
+        return { pools };
+      }))
+      .post('/api/vpn-pools', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const body = (await readBody(event)) || {};
+        try {
+          const pool = db.vpnPools.create({
+            name: body.name,
+            cidr: body.cidr,
+            gateway: body.gateway,
+            sort_order: body.sort_order,
+          });
+          try {
+            await WireGuard.saveConfig();
+          } catch {
+            /* conf may be unavailable in tests */
+          }
+          event.node.res.statusCode = 201;
+          return { ...pool, userIds: [] };
+        } catch (err) {
+          if (err.code === 'INVALID_CIDR' || err.code === 'INVALID_GATEWAY' || err.code === 'INVALID_NAME' || err.code === 'GATEWAY_EXISTS') {
+            throw createError({ status: 400, message: err.message });
+          }
+          if (err.code === 'POOL_EXISTS') {
+            throw createError({ status: 409, message: err.message });
+          }
+          throw err;
+        }
+      }))
+      .put('/api/vpn-pools/:id', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        if (!Number.isInteger(id)) {
+          throw createError({ status: 400, message: 'Invalid pool id' });
+        }
+        const body = (await readBody(event)) || {};
+        try {
+          const pool = db.vpnPools.update(id, {
+            name: body.name,
+            cidr: body.cidr,
+            gateway: body.gateway,
+            sort_order: body.sort_order,
+          });
+          if (!pool) throw createError({ status: 404, message: 'Pool not found' });
+          try {
+            await WireGuard.saveConfig();
+          } catch {
+            /* */
+          }
+          return { ...pool, userIds: db.vpnPools.listUserIds(pool.id) };
+        } catch (err) {
+          if (err.statusCode) throw err;
+          if (err.code === 'INVALID_CIDR' || err.code === 'INVALID_GATEWAY' || err.code === 'INVALID_NAME' || err.code === 'GATEWAY_EXISTS') {
+            throw createError({ status: 400, message: err.message });
+          }
+          if (err.code === 'POOL_EXISTS') {
+            throw createError({ status: 409, message: err.message });
+          }
+          throw err;
+        }
+      }))
+      .patch('/api/vpn-pools/:id', defineEventHandler(async (event) => {
+        // Alias of PUT (older clients / proxies); same handler body via re-dispatch is awkward — duplicate call.
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        if (!Number.isInteger(id)) {
+          throw createError({ status: 400, message: 'Invalid pool id' });
+        }
+        const body = (await readBody(event)) || {};
+        try {
+          const pool = db.vpnPools.update(id, {
+            name: body.name,
+            cidr: body.cidr,
+            gateway: body.gateway,
+            sort_order: body.sort_order,
+          });
+          if (!pool) throw createError({ status: 404, message: 'Pool not found' });
+          try {
+            await WireGuard.saveConfig();
+          } catch {
+            /* */
+          }
+          return { ...pool, userIds: db.vpnPools.listUserIds(pool.id) };
+        } catch (err) {
+          if (err.statusCode) throw err;
+          if (err.code === 'INVALID_CIDR' || err.code === 'INVALID_GATEWAY' || err.code === 'INVALID_NAME' || err.code === 'GATEWAY_EXISTS') {
+            throw createError({ status: 400, message: err.message });
+          }
+          if (err.code === 'POOL_EXISTS') {
+            throw createError({ status: 409, message: err.message });
+          }
+          throw err;
+        }
+      }))
+      .put('/api/vpn-pools/:id/users', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        if (!Number.isInteger(id)) {
+          throw createError({ status: 400, message: 'Invalid pool id' });
+        }
+        if (!db.vpnPools.getById(id)) {
+          throw createError({ status: 404, message: 'Pool not found' });
+        }
+        const body = (await readBody(event)) || {};
+        if (!Array.isArray(body.userIds)) {
+          throw createError({ status: 400, message: 'userIds must be an array' });
+        }
+        return db.vpnPools.setUsers(id, body.userIds);
+      }))
+      .delete('/api/vpn-pools/:id', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const id = parseInt(getRouterParam(event, 'id'), 10);
+        if (!Number.isInteger(id)) {
+          throw createError({ status: 400, message: 'Invalid pool id' });
+        }
+        const deleted = db.vpnPools.delete(id);
+        if (!deleted) throw createError({ status: 404, message: 'Pool not found' });
+        try {
+          await WireGuard.saveConfig();
+        } catch {
+          /* */
+        }
+        return { success: true };
+      }))
+      .get('/api/wireguard/client', defineEventHandler(async (event) => {
+        const actor = acl.requireActor(event);
+        const payload = await WireGuard.getClients();
+        const clients = acl.enrichClientsWithUsers(
+          acl.filterClientsForActor(actor, payload.clients || []),
+        );
+        return { ...payload, clients };
+      }))
       .get('/api/wireguard/client/:clientId/qrcode.svg', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const query = getQuery(event);
         let level;
         if (query.level !== undefined) {
@@ -264,21 +608,27 @@ module.exports = class Server {
         if (query.profile !== undefined && isKnownProfile(query.profile)) profile = query.profile;
         let signature;
         if (query.signature !== undefined && query.signature !== '') signature = String(query.signature);
-        if (query.encoding === 'amnezia') {
-          const { svgs, payloads } = await WireGuard.getClientAmneziaQRCodeSvgs({
+        try {
+          if (query.encoding === 'amnezia') {
+            const { svgs, payloads, iLimit } = await WireGuard.getClientAmneziaQRCodeSvgs({
+              clientId, level, profile, signature,
+            });
+            setHeader(event, 'Content-Type', 'application/json');
+            return JSON.stringify({ svgs, payloads, chunkCount: svgs.length, iLimit });
+          }
+          const { svg, payload, iLimit } = await WireGuard.getClientQRCodeSVG({
             clientId, level, profile, signature,
           });
           setHeader(event, 'Content-Type', 'application/json');
-          return JSON.stringify({ svgs, payloads, chunkCount: svgs.length });
+          return JSON.stringify({ svg, payload, iLimit });
+        } catch (err) {
+          const code = (err && (err.statusCode || err.status)) || 500;
+          throw httpError(code, (err && err.message) || 'QR generation failed');
         }
-        const { svg, payload } = await WireGuard.getClientQRCodeSVG({
-          clientId, level, profile, signature,
-        });
-        setHeader(event, 'Content-Type', 'application/json');
-        return JSON.stringify({ svg, payload });
       }))
       .get('/api/wireguard/client/:clientId/configuration', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const query = getQuery(event);
         let level;
         if (query.level !== undefined) {
@@ -333,13 +683,16 @@ module.exports = class Server {
       }))
       .get('/api/wireguard/client/:clientId/config-versions', defineEventHandler((event) => {
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const list = db.clientConfigVersions.getByClientId(clientId);
         return list.map((v) => ({ id: v.id, version: v.version, created_at: v.created_at }));
       }))
       .get('/api/wireguard/client/:clientId/config-versions/:versionId', defineEventHandler(async (event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const versionId = getRouterParam(event, 'versionId');
         const v = db.clientConfigVersions.getById(parseInt(versionId, 10));
-        if (!v) throw createError({ status: 404, message: 'Version not found' });
+        if (!v || v.client_id !== clientId) throw createError({ status: 404, message: 'Version not found' });
         const config_raw = await WireGuard.rewriteIniEndpointForClientExport(v.config_raw || '');
         return {
           id: v.id,
@@ -351,6 +704,7 @@ module.exports = class Server {
       }))
       .get('/api/wireguard/client/:clientId/config-versions/:versionId/download', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const versionId = getRouterParam(event, 'versionId');
         const query = getQuery(event);
         const amneziaExport =
@@ -373,68 +727,202 @@ module.exports = class Server {
         return await WireGuard.rewriteIniEndpointForClientExport(v.config_raw || '');
       }))
       .post('/api/wireguard/client', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        const actor = acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const body = (await readBody(event)) || {};
+        const name = body.name;
+        if (actor.role === 'user' && Array.isArray(body.userIds) && body.userIds.length > 0) {
+          throw createError({ status: 403, message: 'Forbidden' });
+        }
+        const addressRanges = acl.getAddressRangesForActor(actor);
+        if (!addressRanges.length) {
+          throw createError({ status: 400, message: 'No VPN CIDRs assigned to this user' });
+        }
+        let created;
+        try {
+          created = await WireGuard.createClient({
+            name,
+            createdBy: actor.id,
+            addressRanges,
+          });
+        } catch (err) {
+          if (err instanceof BankError || err.name === 'BankError') {
+            throw bankHttpError(err);
+          }
+          if (err && err.statusCode) {
+            throw createError({
+              status: err.statusCode,
+              message: err.message,
+              data: err.statusCode === 409 ? { code: 'CLIENT_NAME_EXISTS' } : undefined,
+            });
+          }
+          throw err;
+        }
+        const id = created && created.id;
+        if (id) {
+          if (actor.role === 'user') {
+            db.clientPanelUsers.assign(id, actor.id);
+          } else if (Array.isArray(body.userIds)) {
+            acl.setClientUsers(id, body.userIds);
+          }
+        }
+        return { success: true, id, client: created };
+      }))
+      .get('/api/wireguard/client/:clientId/users', defineEventHandler((event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        return acl.listAssigneeUsers(clientId);
+      }))
+      .put('/api/wireguard/client/:clientId/users', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_ASSIGN);
+        const clientId = getRouterParam(event, 'clientId');
+        if (!db.clients.getById(clientId)) {
+          throw createError({ status: 404, message: 'Client not found' });
+        }
+        const body = (await readBody(event)) || {};
+        if (!Array.isArray(body.userIds)) {
+          throw createError({ status: 400, message: 'userIds must be an array' });
+        }
+        return acl.setClientUsers(clientId, body.userIds);
+      }))
+      .delete('/api/wireguard/client/:clientId', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        await WireGuard.deleteClient({ clientId });
+        return { success: true };
+      }))
+      .post('/api/wireguard/client/:clientId/enable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        try {
+          await WireGuard.enableClient({ clientId });
+        } catch (err) {
+          if (err && err.statusCode) {
+            throw createError({ status: err.statusCode, message: err.message });
+          }
+          throw err;
+        }
+        return { success: true };
+      }))
+      .post('/api/wireguard/client/:clientId/disable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        await WireGuard.disableClient({ clientId });
+        return { success: true };
+      }))
+      .put('/api/wireguard/client/:clientId/name', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const { name } = await readBody(event);
         try {
-          await WireGuard.createClient({ name });
+          await WireGuard.updateClientName({ clientId, name });
+        } catch (err) {
+          if (err && err.statusCode) {
+            throw createError({
+              status: err.statusCode,
+              message: err.message,
+              data: err.statusCode === 409 ? { code: 'CLIENT_NAME_EXISTS' } : undefined,
+            });
+          }
+          throw err;
+        }
+        return { success: true };
+      }))
+      .put('/api/wireguard/client/:clientId/address', defineEventHandler(async (event) => {
+        const actor = acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        const { address } = await readBody(event);
+        const opts = {
+          clientId,
+          address,
+          allowedRanges: acl.getAddressRangesForActor(actor),
+        };
+        try {
+          await WireGuard.updateClientAddress(opts);
+        } catch (err) {
+          if (err && err.statusCode) {
+            throw createError({ status: err.statusCode, message: err.message });
+          }
+          throw err;
+        }
+        return { success: true };
+      }))
+      .get('/api/wireguard/client/:clientId/obfuscation', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        try {
+          return await WireGuard.getClientObfuscation({ clientId });
         } catch (err) {
           if (err instanceof BankError || err.name === 'BankError') {
             throw bankHttpError(err);
           }
           throw err;
         }
-        return { success: true };
       }))
-      .delete('/api/wireguard/client/:clientId', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+      .post('/api/wireguard/client/:clientId/obfuscation/preview', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
         const clientId = getRouterParam(event, 'clientId');
-        await WireGuard.deleteClient({ clientId });
-        return { success: true };
-      }))
-      .post('/api/wireguard/client/:clientId/enable', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
-        const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
+        acl.assertClientAccess(event, clientId);
+        try {
+          const body = (await readBody(event)) || {};
+          const profile = typeof body.profile === 'string' ? body.profile : undefined;
+          const signature = body.signature != null ? String(body.signature) : undefined;
+          const level = typeof body.level === 'number' ? body.level
+            : (typeof body.level === 'string' ? parseInt(body.level, 10) : undefined);
+          const result = await WireGuard.previewClientObfuscation({
+            clientId,
+            profile,
+            signature,
+            level,
+            refreshSignature: body.refreshSignature === true || body.action === 'refresh',
+            regenerateJunk: body.regenerateJunk === true || body.action === 'junk',
+          });
+          return { success: true, ...result };
+        } catch (err) {
+          if (err instanceof BankError || err.name === 'BankError') {
+            throw bankHttpError(err);
+          }
+          throw err;
         }
-        await WireGuard.enableClient({ clientId });
-        return { success: true };
       }))
-      .post('/api/wireguard/client/:clientId/disable', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+      .post('/api/wireguard/client/:clientId/obfuscation/apply', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
+        acl.assertClientAccess(event, clientId);
+        try {
+          const body = (await readBody(event)) || {};
+          const profile = typeof body.profile === 'string' ? body.profile : undefined;
+          const signature = body.signature != null ? String(body.signature) : undefined;
+          const level = typeof body.level === 'number' ? body.level
+            : (typeof body.level === 'string' ? parseInt(body.level, 10) : undefined);
+          const mtuProfile = body.mtuProfile != null ? body.mtuProfile
+            : (body.profileId != null ? body.profileId : undefined);
+          const result = await WireGuard.applyClientObfuscation({
+            clientId,
+            profile,
+            signature,
+            level,
+            junk: body.junk,
+            mtuProfile,
+          });
+          return { success: true, ...result };
+        } catch (err) {
+          if (err instanceof BankError || err.name === 'BankError') {
+            throw bankHttpError(err);
+          }
+          throw err;
         }
-        await WireGuard.disableClient({ clientId });
-        return { success: true };
       }))
-      .put('/api/wireguard/client/:clientId/name', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
-        const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
-        const { name } = await readBody(event);
-        await WireGuard.updateClientName({ clientId, name });
-        return { success: true };
-      }))
-      .put('/api/wireguard/client/:clientId/address', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
-        const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
-        const { address } = await readBody(event);
-        await WireGuard.updateClientAddress({ clientId, address });
-        return { success: true };
-      }))
+      // Legacy immediate-write endpoints (prefer preview + apply).
       .put('/api/wireguard/client/:clientId/obfuscation', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
+        acl.assertClientAccess(event, clientId);
         try {
           const body = await readBody(event);
           const profile = typeof body.profile === 'string' ? body.profile : undefined;
@@ -450,11 +938,9 @@ module.exports = class Server {
         }
       }))
       .post('/api/wireguard/client/:clientId/obfuscation/refresh', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
         const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
-        }
+        acl.assertClientAccess(event, clientId);
         try {
           const result = await WireGuard.refreshClientSignature({ clientId });
           return { success: true, ...result };
@@ -465,12 +951,27 @@ module.exports = class Server {
           throw err;
         }
       }))
-      .put('/api/wireguard/client/:clientId/dns', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
-        const clientId = getRouterParam(event, 'clientId');
-        if (clientId === '__proto__' || clientId === 'constructor' || clientId === 'prototype') {
-          throw createError({ status: 403 });
+      .get('/api/mtu-profiles', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        try {
+          return mtuProfiles.getCatalog();
+        } catch (err) {
+          throw httpError(err.status || 500, err.message || 'MTU profiles unavailable');
         }
+      }))
+      .put('/api/wireguard/client/:clientId/mtu', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        const body = (await readBody(event)) || {};
+        const profileId = body.profileId != null ? body.profileId : body.mtuProfile;
+        const result = await WireGuard.updateClientMtu({ clientId, profileId });
+        return { success: true, ...result };
+      }))
+      .put('/api/wireguard/client/:clientId/dns', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         if (!amneziaDns.isAmneziaDnsAvailable()) {
           throw httpError(503, 'Amnezia DNS is not running');
         }
@@ -480,11 +981,11 @@ module.exports = class Server {
         return { success: true };
       }))
       .get('/api/amnezia-dns', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator', 'user']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_DNS);
         return amneziaDns.getStatus();
       }))
       .get('/api/amnezia-dns/profiles', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator', 'user']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_DNS);
         try {
           const q = getQuery(event) || {};
           const forceProbe = q.refresh === '1' || q.refresh === 'true';
@@ -500,7 +1001,7 @@ module.exports = class Server {
         }
       }))
       .post('/api/amnezia-dns/enable', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_DNS);
         try {
           const body = await readBody(event).catch(() => ({}));
           const profileId = body && body.profileId != null ? body.profileId : undefined;
@@ -520,7 +1021,7 @@ module.exports = class Server {
         }
       }))
       .post('/api/amnezia-dns/disable', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_DNS);
         try {
           const status = await amneziaDns.disable();
           return { success: true, ...status };
@@ -530,7 +1031,7 @@ module.exports = class Server {
         }
       }))
       .post('/api/amnezia-dns/force-cleanup', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_DNS);
         try {
           const status = await amneziaDns.forceCleanup();
           return { success: true, ...status };
@@ -539,9 +1040,140 @@ module.exports = class Server {
           throw httpError(500, err.message || 'Amnezia DNS cleanup failed');
         }
       }))
-      .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+      .get('/api/amnezia-xray', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        return amneziaXray.getStatus();
+      }))
+      .post('/api/amnezia-xray/enable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const status = await amneziaXray.enable({
+            sni: body && body.sni,
+            fingerprint: body && body.fingerprint,
+            flow: body && body.flow,
+            port: body && body.port,
+            address: body && body.address,
+          });
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          if (err && err.status === 409) throw httpError(409, err.message);
+          if (err && err.status === 400) throw httpError(400, err.message);
+          if (err && err.status === 504) throw httpError(504, err.message);
+          if (err && err.status === 503) throw httpError(503, err.message);
+          throw httpError(500, err.message || 'Amnezia Xray enable failed');
+        }
+      }))
+      .post('/api/amnezia-xray/disable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        try {
+          const status = await amneziaXray.disable();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Xray disable failed');
+        }
+      }))
+      .post('/api/amnezia-xray/force-cleanup', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        try {
+          const status = await amneziaXray.forceCleanup();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Xray cleanup failed');
+        }
+      }))
+      .post('/api/amnezia-xray/reset', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        try {
+          const status = await amneziaXray.resetCredentials();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Xray reset failed');
+        }
+      }))
+      .get('/api/amnezia-xray/sni-cache', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        const q = getQuery(event) || {};
+        const ensureBg = q.ensureBg === '1' || q.ensureBg === 'true' || q.ensureBg === true;
+        return sniFinder.getCacheWithPreview({ ensureBg });
+      }))
+      .get('/api/amnezia-xray/sni-scan', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        return sniFinder.getScanStatus();
+      }))
+      .post('/api/amnezia-xray/sni-scan', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return sniFinder.startScan({
+            cidr: body && body.cidr,
+            refIp: body && body.refIp,
+            force: body && body.force,
+          });
+        } catch (err) {
+          throw sniHttpError(err);
+        }
+      }))
+      .post('/api/amnezia-xray/sni-scan/cancel', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        return sniFinder.cancelScan();
+      }))
+      .post('/api/amnezia-xray/sni-recheck', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const domain = body && body.domain;
+          return await sniFinder.recheckDomain(domain);
+        } catch (err) {
+          throw sniHttpError(err);
+        }
+      }))
+      .get('/api/wireguard/client/:clientId/xray', defineEventHandler(async (event) => {
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        if (!amneziaXray.isAmneziaXrayAvailable()) {
+          throw httpError(503, 'Amnezia Xray is not running');
+        }
+        const client = db.clients.getById(clientId);
+        if (!client) throw httpError(404, 'Client Not Found');
+        amneziaXray.ensureClientUuids();
+        const refreshed = db.clients.getById(clientId);
+        let baseUrl = '';
+        try {
+          const url = getRequestURL(event);
+          baseUrl = `${url.protocol}//${url.host}`;
+        } catch {
+          baseUrl = '';
+        }
+        const payload = amneziaXray.getClientXrayPayload(refreshed, { baseUrl });
+        if (!payload) throw httpError(503, 'Xray keys not ready');
+        let subQrSvg = null;
+        try {
+          const QRCode = require('qrcode');
+          subQrSvg = await QRCode.toString(payload.subUrl, {
+            type: 'svg',
+            width: 512,
+            errorCorrectionLevel: 'M',
+          });
+        } catch {
+          subQrSvg = null;
+        }
+        return {
+          uuid: payload.uuid,
+          vlessUrl: payload.vlessUrl,
+          subUrl: payload.subUrl,
+          clientJson: payload.clientJson,
+          subQrSvg,
+        };
+      }))
+      .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const body = await readBody(event);
         let ruleProfileId;
         if (body == null || body.rule_profile_id === undefined) {
@@ -559,8 +1191,9 @@ module.exports = class Server {
         return { success: true };
       }))
       .put('/api/wireguard/client/:clientId/expires', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const body = await readBody(event);
         let expiresAt = null;
         if (body && body.expires_at !== undefined && body.expires_at !== null) {
@@ -572,15 +1205,17 @@ module.exports = class Server {
         return { success: true };
       }))
       .get('/api/wireguard/client/:clientId/firewall-rules', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const client = db.clients.getById(clientId);
         if (!client) throw createError({ status: 404, message: 'Client not found' });
         return db.clientFirewallRules.getByClientId(clientId);
       }))
       .post('/api/wireguard/client/:clientId/firewall-rules', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const client = db.clients.getById(clientId);
         if (!client) throw createError({ status: 404, message: 'Client not found' });
         const body = await readBody(event);
@@ -612,8 +1247,9 @@ module.exports = class Server {
         return { id, success: true };
       }))
       .put('/api/wireguard/client/:clientId/firewall-rules/:id', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         const client = db.clients.getById(clientId);
         if (!client) throw createError({ status: 404, message: 'Client not found' });
@@ -646,8 +1282,9 @@ module.exports = class Server {
         return { success: true };
       }))
       .delete('/api/wireguard/client/:clientId/firewall-rules/:id', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         const client = db.clients.getById(clientId);
         if (!client) throw createError({ status: 404, message: 'Client not found' });
@@ -658,10 +1295,8 @@ module.exports = class Server {
         return { success: true };
       }))
       .get('/api/traffic/client/:clientId', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator', 'user']);
         const clientId = getRouterParam(event, 'clientId');
-        const client = db.clients.getById(clientId);
-        if (!client) throw createError({ status: 404, message: 'Client not found' });
+        acl.assertClientAccess(event, clientId);
         const query = getQuery(event);
         const period = (query.period && String(query.period).toLowerCase()) || 'day';
         const periodSeconds = { hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000 }[period];
@@ -670,8 +1305,9 @@ module.exports = class Server {
         return db.traffic.deltas.sumByClientAndPeriod(clientId, tsFrom);
       }))
       .delete('/api/traffic/client/:clientId/history', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.CLIENTS_WRITE);
         const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
         const client = db.clients.getById(clientId);
         if (!client) throw createError({ status: 404, message: 'Client not found' });
         const Util = require('./Util');
@@ -700,7 +1336,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .get('/api/traffic/aggregate', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator', 'user']);
+        acl.requireCapability(event, acl.CAP.CLIENTS_READ_ALL);
         const query = getQuery(event);
         const period = (query.period && String(query.period).toLowerCase()) || 'day';
         const periodSeconds = { hour: 3600, day: 86400, week: 604800, month: 2592000, year: 31536000 }[period];
@@ -708,23 +1344,31 @@ module.exports = class Server {
         const tsFrom = Math.floor(Date.now() / 1000) - periodSeconds;
         return db.traffic.deltas.sumByPeriod(tsFrom);
       }))
-      .get('/api/signatures/profiles', defineEventHandler(() => {
-        const meta = getProfilesCatalog();
-        if (meta.ok === false) {
-          throw httpError(503, meta.error || 'signatures.json unavailable');
+      .get('/api/signatures/profiles', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SIGNATURES);
+        try {
+          const meta = getProfilesCatalog();
+          if (meta.ok === false) {
+            throw httpError(503, meta.error || 'signatures.json unavailable');
+          }
+          return {
+            ok: true,
+            profileIds: meta.profileIds || getProfileIds(),
+            protocols: meta.protocols || [],
+            defaultProtocol: meta.defaultProtocol || DEFAULT_PROFILE_ID,
+            defaultProfile: meta.defaultProtocol || DEFAULT_PROFILE_ID,
+          };
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          throw httpError(503, (err && err.message) || 'signatures.json unavailable');
         }
-        return {
-          ok: true,
-          profileIds: meta.profileIds || getProfileIds(),
-          protocols: meta.protocols || [],
-          defaultProtocol: meta.defaultProtocol || DEFAULT_PROFILE_ID,
-          defaultProfile: meta.defaultProtocol || DEFAULT_PROFILE_ID,
-        };
       }))
-      .get('/api/rule-profiles', defineEventHandler(() => {
+      .get('/api/rule-profiles', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         return db.ruleProfiles.getAll();
       }))
       .get('/api/rule-profiles/:id', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         const profile = db.ruleProfiles.getById(id);
         if (!profile) throw createError({ status: 404, message: 'Profile not found' });
@@ -732,7 +1376,7 @@ module.exports = class Server {
         return { ...profile, rules };
       }))
       .post('/api/rule-profiles', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const body = await readBody(event);
         if (!body || !body.name || typeof body.name !== 'string' || !body.name.trim()) {
           throw createError({ status: 400, message: 'name is required' });
@@ -746,7 +1390,7 @@ module.exports = class Server {
         return { id, success: true };
       }))
       .put('/api/rule-profiles/:id', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         const profile = db.ruleProfiles.getById(id);
         if (!profile) throw createError({ status: 404, message: 'Profile not found' });
@@ -763,7 +1407,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .delete('/api/rule-profiles/:id', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         if (id === 1) throw createError({ status: 403, message: 'Full Access profile cannot be deleted' });
         const profile = db.ruleProfiles.getById(id);
@@ -775,7 +1419,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .post('/api/ip-rules', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const body = await readBody(event);
         if (!body || body.rule_profile_id == null || body.action == null || !body.destination_cidr) {
           throw createError({ status: 400, message: 'rule_profile_id, action and destination_cidr required' });
@@ -809,7 +1453,7 @@ module.exports = class Server {
         return { id, success: true };
       }))
       .put('/api/ip-rules/:id', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         const rule = db.ipRules.getById(id);
         if (!rule) throw createError({ status: 404, message: 'Rule not found' });
@@ -840,7 +1484,7 @@ module.exports = class Server {
         return { success: true };
       }))
       .delete('/api/ip-rules/:id', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         const rule = db.ipRules.getById(id);
         if (!rule) throw createError({ status: 404, message: 'Rule not found' });
@@ -848,11 +1492,12 @@ module.exports = class Server {
         applyFirewall();
         return { success: true };
       }))
-      .get('/api/global-firewall-rules', defineEventHandler(() => {
+      .get('/api/global-firewall-rules', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         return db.globalFirewallRules.getAll();
       }))
       .post('/api/global-firewall-rules', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const body = await readBody(event);
         if (!body || body.action == null || !body.destination_cidr) {
           throw createError({ status: 400, message: 'action and destination_cidr required' });
@@ -881,7 +1526,7 @@ module.exports = class Server {
         return { id, success: true };
       }))
       .put('/api/global-firewall-rules/:id', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         const body = await readBody(event);
         if (!body || body.action == null || !body.destination_cidr) {
@@ -910,17 +1555,18 @@ module.exports = class Server {
         return { success: true };
       }))
       .delete('/api/global-firewall-rules/:id', defineEventHandler((event) => {
-        requireRoles(event, ['admin', 'moderator']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const id = parseInt(getRouterParam(event, 'id'), 10);
         db.globalFirewallRules.delete(id);
         applyFirewall();
         return { success: true };
       }))
-      .get('/api/app-settings', defineEventHandler(() => {
+      .get('/api/app-settings', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
         return db.appSettings.getAll();
       }))
       .put('/api/app-settings', defineEventHandler(async (event) => {
-        requireRoles(event, ['admin']);
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
         const body = await readBody(event);
         if (body && typeof body.key === 'string') {
           db.appSettings.set(body.key, body.value);
@@ -937,6 +1583,49 @@ module.exports = class Server {
       .get('/api/protocol-templates', defineEventHandler(() => {
         return db.protocolTemplates.getAll();
       }));
+
+    // Public Xray subscription (no session; path is outside /api/)
+    const subRouter = createRouter();
+    subRouter
+      .get('/sub/:name', defineEventHandler((event) => {
+        if (!amneziaXray.isAmneziaXrayAvailable()) {
+          throw httpError(503, 'Xray is not available');
+        }
+        const raw = getRouterParam(event, 'name') || '';
+        let name;
+        try {
+          name = decodeURIComponent(raw);
+        } catch {
+          throw httpError(400, 'Invalid name');
+        }
+        const client = amneziaXray.findEnabledClientByName(name);
+        if (!client) throw httpError(404, 'Not Found');
+        const payload = amneziaXray.getClientXrayPayload(client);
+        if (!payload) throw httpError(503, 'Xray keys not ready');
+        setHeader(event, 'Content-Type', 'application/json; charset=utf-8');
+        setHeader(event, 'Cache-Control', 'no-store');
+        return payload.clientJson;
+      }))
+      .get('/sub/:name/vless', defineEventHandler((event) => {
+        if (!amneziaXray.isAmneziaXrayAvailable()) {
+          throw httpError(503, 'Xray is not available');
+        }
+        const raw = getRouterParam(event, 'name') || '';
+        let name;
+        try {
+          name = decodeURIComponent(raw);
+        } catch {
+          throw httpError(400, 'Invalid name');
+        }
+        const client = amneziaXray.findEnabledClientByName(name);
+        if (!client) throw httpError(404, 'Not Found');
+        const payload = amneziaXray.getClientXrayPayload(client);
+        if (!payload) throw httpError(503, 'Xray keys not ready');
+        setHeader(event, 'Content-Type', 'text/plain; charset=utf-8');
+        setHeader(event, 'Cache-Control', 'no-store');
+        return payload.vlessUrl;
+      }));
+    app.use(subRouter);
 
     const safePathJoin = (base, target) => {
       // Manage web root (edge case)
@@ -1005,8 +1694,29 @@ module.exports = class Server {
         });
       }
     };
-    createServer(listener).listen(PORT, WEBUI_HOST);
-    debug(`Listening on http://${WEBUI_HOST}:${PORT}`);
+    const listenPort = this._listenPort != null ? this._listenPort : PORT;
+    const listenHost = this._listenHost != null ? this._listenHost : WEBUI_HOST;
+    this.httpServer = createServer(listener);
+    await new Promise((resolve, reject) => {
+      this.httpServer.once('error', reject);
+      this.httpServer.listen(listenPort, listenHost, () => resolve());
+    });
+    const addr = this.httpServer.address();
+    this.listenPort = typeof addr === 'object' && addr ? addr.port : listenPort;
+    debug(`Listening on http://${listenHost}:${this.listenPort}`);
+    return this.httpServer;
+  }
+
+  async stop() {
+    if (!this.httpServer) return;
+    const server = this.httpServer;
+    this.httpServer = null;
+    if (typeof server.closeAllConnections === 'function') {
+      server.closeAllConnections();
+    }
+    await new Promise((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
   }
 
 };

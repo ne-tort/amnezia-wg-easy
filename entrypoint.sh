@@ -24,4 +24,44 @@ if [ "$need_seed" -eq 1 ] && [ -f "$SEED" ]; then
   echo "[entrypoint] seeded signatures.json from config/signatures.seed.json"
 fi
 
+JUNK_SEED=/app/config/junk-ranges.seed.json
+JUNK_DEST=/opt/amnezia/awg/junk-ranges.json
+junk_need=0
+if [ ! -f "$JUNK_DEST" ] || [ ! -s "$JUNK_DEST" ]; then
+  junk_need=1
+elif [ -f "$JUNK_SEED" ]; then
+  junk_seed_ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$JUNK_SEED" | head -n1)
+  junk_dest_ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$JUNK_DEST" | head -n1)
+  junk_seed_ver=${junk_seed_ver:-0}
+  junk_dest_ver=${junk_dest_ver:-0}
+  if [ "$junk_dest_ver" -lt "$junk_seed_ver" ]; then
+    junk_need=1
+  fi
+fi
+if [ "$junk_need" -eq 1 ] && [ -f "$JUNK_SEED" ]; then
+  mkdir -p /opt/amnezia/awg
+  cp "$JUNK_SEED" "$JUNK_DEST"
+  echo "[entrypoint] seeded junk-ranges.json from config/junk-ranges.seed.json"
+fi
+
+MTU_SEED=/app/config/mtu-profiles.seed.json
+MTU_DEST=/opt/amnezia/awg/mtu-profiles.json
+mtu_need=0
+if [ ! -f "$MTU_DEST" ] || [ ! -s "$MTU_DEST" ]; then
+  mtu_need=1
+elif [ -f "$MTU_SEED" ]; then
+  mtu_seed_ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$MTU_SEED" | head -n1)
+  mtu_dest_ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$MTU_DEST" | head -n1)
+  mtu_seed_ver=${mtu_seed_ver:-0}
+  mtu_dest_ver=${mtu_dest_ver:-0}
+  if [ "$mtu_dest_ver" -lt "$mtu_seed_ver" ]; then
+    mtu_need=1
+  fi
+fi
+if [ "$mtu_need" -eq 1 ] && [ -f "$MTU_SEED" ]; then
+  mkdir -p /opt/amnezia/awg
+  cp "$MTU_SEED" "$MTU_DEST"
+  echo "[entrypoint] seeded mtu-profiles.json from config/mtu-profiles.seed.json"
+fi
+
 exec /usr/bin/dumb-init node server.js

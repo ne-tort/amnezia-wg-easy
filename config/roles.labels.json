@@ -1,0 +1,14 @@
+{
+  "admin": {
+    "en": "Administrator",
+    "ru": "Администратор"
+  },
+  "moderator": {
+    "en": "Moderator",
+    "ru": "Модератор"
+  },
+  "user": {
+    "en": "User",
+    "ru": "Пользователь"
+  }
+}

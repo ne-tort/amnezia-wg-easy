@@ -19,6 +19,7 @@ function getDb() {
   fs.mkdirSync(dir, { recursive: true });
   db = new Database(DB_PATH);
   runMigrations(db);
+  vpnPoolsEnsureSeeded();
   return db;
 }
 
@@ -46,7 +47,10 @@ function panelUsersCreate(row) {
       row.updated_at
     );
   } catch (e) {
-    if (e.code === 'SQLITE_CONSTRAINT' && (e.message || '').includes('UNIQUE')) {
+    if (
+      (e.code === 'SQLITE_CONSTRAINT' || e.code === 'SQLITE_CONSTRAINT_UNIQUE')
+      && (e.message || '').includes('UNIQUE')
+    ) {
       const err = new Error('Username already exists');
       err.code = 'USERNAME_EXISTS';
       throw err;
@@ -66,6 +70,192 @@ function panelUsersCount() {
 function panelUsersUpdatePasswordHash(id, password_hash) {
   const now = Math.floor(Date.now() / 1000);
   getDb().prepare('UPDATE panel_users SET password_hash = ?, updated_at = ? WHERE id = ?').run(password_hash, now, id);
+}
+
+/** Public fields only (never password_hash). */
+function panelUsersToPublic(row) {
+  if (!row) return null;
+  const { parseAssignedCidrsField } = require('./vpnAddress');
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    is_active: row.is_active ? 1 : 0,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_login_at: row.last_login_at ?? null,
+    assigned_cidrs: parseAssignedCidrsField(row.assigned_cidrs),
+  };
+}
+
+function panelUsersList() {
+  return getDb()
+    .prepare(
+      `SELECT id, username, role, is_active, created_at, updated_at, last_login_at, assigned_cidrs
+       FROM panel_users
+       ORDER BY created_at ASC`
+    )
+    .all()
+    .map(panelUsersToPublic);
+}
+
+function panelUsersFindByIdPublic(id) {
+  const row = panelUsersFindById(id);
+  return panelUsersToPublic(row);
+}
+
+function panelUsersCountActiveAdmins() {
+  return getDb()
+    .prepare(`SELECT COUNT(*) AS n FROM panel_users WHERE role = 'admin' AND is_active = 1`)
+    .get().n;
+}
+
+/**
+ * Partial update: role, is_active, password_hash, and/or assigned_cidrs.
+ * Caller enforces last-admin and ACL rules. assigned_cidrs must already be validated.
+ */
+function panelUsersUpdate(id, fields) {
+  const row = panelUsersFindById(id);
+  if (!row) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const role = fields.role !== undefined ? fields.role : row.role;
+  const is_active = fields.is_active !== undefined ? (fields.is_active ? 1 : 0) : row.is_active;
+  const password_hash = fields.password_hash !== undefined ? fields.password_hash : row.password_hash;
+  const { stringifyAssignedCidrs } = require('./vpnAddress');
+  const assigned_cidrs = fields.assigned_cidrs !== undefined
+    ? stringifyAssignedCidrs(fields.assigned_cidrs)
+    : (row.assigned_cidrs != null ? row.assigned_cidrs : '[]');
+  getDb()
+    .prepare(
+      `UPDATE panel_users
+       SET role = ?, is_active = ?, password_hash = ?, assigned_cidrs = ?, updated_at = ?
+       WHERE id = ?`
+    )
+    .run(role, is_active, password_hash, assigned_cidrs, now, id);
+  return panelUsersFindByIdPublic(id);
+}
+
+function panelUsersDeactivate(id) {
+  return panelUsersUpdate(id, { is_active: 0 });
+}
+
+/** Best-effort: drop express-session rows that contain this userId. */
+function panelUsersDestroySessions(userId) {
+  try {
+    const tables = getDb()
+      .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('sessions', 'session')`)
+      .all()
+      .map((r) => r.name);
+    for (const name of tables) {
+      getDb()
+        .prepare(`DELETE FROM ${name} WHERE sess LIKE ?`)
+        .run(`%"userId":"${userId}"%`);
+    }
+  } catch {
+    // Session table may not exist yet; inactive flag is enough.
+  }
+}
+
+// * Client ↔ panel user assignments (M:N)
+function clientPanelUsersListUserIds(clientId) {
+  return getDb()
+    .prepare('SELECT user_id FROM client_panel_users WHERE client_id = ?')
+    .all(clientId)
+    .map((r) => r.user_id);
+}
+
+function clientPanelUsersListUsers(clientId) {
+  return getDb()
+    .prepare(
+      `SELECT u.id, u.username, u.role, u.is_active, u.created_at, u.updated_at, u.last_login_at
+       FROM client_panel_users c
+       JOIN panel_users u ON u.id = c.user_id
+       WHERE c.client_id = ?
+       ORDER BY u.username ASC`
+    )
+    .all(clientId)
+    .map(panelUsersToPublic);
+}
+
+function clientPanelUsersListClientIdsForUser(userId) {
+  return getDb()
+    .prepare('SELECT client_id FROM client_panel_users WHERE user_id = ?')
+    .all(userId)
+    .map((r) => r.client_id);
+}
+
+function clientPanelUsersIsAssigned(clientId, userId) {
+  const row = getDb()
+    .prepare('SELECT 1 AS ok FROM client_panel_users WHERE client_id = ? AND user_id = ?')
+    .get(clientId, userId);
+  return !!row;
+}
+
+function clientPanelUsersAssign(clientId, userId) {
+  getDb()
+    .prepare(
+      `INSERT OR IGNORE INTO client_panel_users (client_id, user_id) VALUES (?, ?)`
+    )
+    .run(clientId, userId);
+}
+
+function clientPanelUsersUnassign(clientId, userId) {
+  getDb()
+    .prepare('DELETE FROM client_panel_users WHERE client_id = ? AND user_id = ?')
+    .run(clientId, userId);
+}
+
+/** Replace full assignee set for a client. Invalid user ids are skipped if missing. */
+function clientPanelUsersSetUsers(clientId, userIds) {
+  const ids = Array.isArray(userIds) ? [...new Set(userIds.map(String))] : [];
+  const run = getDb().transaction(() => {
+    getDb().prepare('DELETE FROM client_panel_users WHERE client_id = ?').run(clientId);
+    const insert = getDb().prepare(
+      `INSERT INTO client_panel_users (client_id, user_id) VALUES (?, ?)`
+    );
+    for (const uid of ids) {
+      const u = panelUsersFindById(uid);
+      if (!u) continue;
+      insert.run(clientId, uid);
+    }
+  });
+  run();
+  return clientPanelUsersListUsers(clientId);
+}
+
+/** Map clientId → public users[] for batch enrichment. */
+function clientPanelUsersMapForClientIds(clientIds) {
+  const map = Object.create(null);
+  if (!clientIds || !clientIds.length) return map;
+  for (const id of clientIds) map[id] = [];
+  const placeholders = clientIds.map(() => '?').join(',');
+  const rows = getDb()
+    .prepare(
+      `SELECT c.client_id AS client_id, u.id, u.username, u.role, u.is_active,
+              u.created_at, u.updated_at, u.last_login_at
+       FROM client_panel_users c
+       JOIN panel_users u ON u.id = c.user_id
+       WHERE c.client_id IN (${placeholders})
+       ORDER BY u.username ASC`
+    )
+    .all(...clientIds);
+  for (const r of rows) {
+    if (!map[r.client_id]) map[r.client_id] = [];
+    map[r.client_id].push(panelUsersToPublic(r));
+  }
+  return map;
+}
+
+/** Close DB (tests). Next getDb() reopens. */
+function closeDb() {
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      // ignore
+    }
+    db = null;
+  }
 }
 
 // * Server config (singleton)
@@ -115,22 +305,42 @@ function clientsGetByIdIncludingDeleted(id) {
   return getDb().prepare('SELECT * FROM clients WHERE id = ?').get(id);
 }
 
+/** clientId → creator username (null if unknown). */
+function clientsMapCreatedByUsernames(clientIds) {
+  const map = Object.create(null);
+  if (!Array.isArray(clientIds) || !clientIds.length) return map;
+  const placeholders = clientIds.map(() => '?').join(',');
+  const rows = getDb().prepare(
+    `SELECT c.id, u.username
+     FROM clients c
+     LEFT JOIN panel_users u ON u.id = c.created_by
+     WHERE c.id IN (${placeholders})`
+  ).all(...clientIds);
+  for (const r of rows) {
+    map[r.id] = r.username || null;
+  }
+  return map;
+}
+
 function clientsCreate(row) {
   getDb().prepare(
-    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_signature, default_level, use_server_dns)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_signature, default_level, use_server_dns, junk_pins, mtu_profile, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     row.id, row.name, row.address, row.public_key, row.private_key, row.pre_shared_key ?? null,
     row.enabled ?? 1, row.note ?? null, row.created_at, row.updated_at,
     row.expires_at ?? null, row.rule_profile_id ?? null, row.default_profile ?? null,
     row.default_signature ?? null, row.default_level ?? null,
-    row.use_server_dns === 0 ? 0 : 1
+    row.use_server_dns === 0 ? 0 : 1,
+    row.junk_pins ?? null,
+    row.mtu_profile ?? null,
+    row.created_by ?? null
   );
 }
 
 function clientsUpdate(row) {
   getDb().prepare(
-    `UPDATE clients SET name=?, address=?, public_key=?, private_key=?, pre_shared_key=?, enabled=?, note=?, updated_at=?, expires_at=?, rule_profile_id=?, default_profile=?, default_signature=?, default_level=?, use_server_dns=?
+    `UPDATE clients SET name=?, address=?, public_key=?, private_key=?, pre_shared_key=?, enabled=?, note=?, updated_at=?, expires_at=?, rule_profile_id=?, default_profile=?, default_signature=?, default_level=?, use_server_dns=?, junk_pins=?, mtu_profile=?
      WHERE id = ?`
   ).run(
     row.name, row.address, row.public_key, row.private_key, row.pre_shared_key ?? null,
@@ -138,6 +348,8 @@ function clientsUpdate(row) {
     row.rule_profile_id ?? null, row.default_profile ?? null, row.default_signature ?? null,
     row.default_level ?? null,
     row.use_server_dns === 0 ? 0 : 1,
+    row.junk_pins ?? null,
+    row.mtu_profile ?? null,
     row.id
   );
 }
@@ -159,20 +371,33 @@ function clientsDisableExpired() {
   return r.changes > 0;
 }
 
+function clientsSetXrayUuid(id, uuid) {
+  const now = Math.floor(Date.now() / 1000);
+  getDb().prepare('UPDATE clients SET xray_uuid = ?, updated_at = ? WHERE id = ?').run(uuid || null, now, id);
+}
+
+function clientsGetByName(name) {
+  return getDb().prepare('SELECT * FROM clients WHERE name = ? AND deleted_at IS NULL').get(name);
+}
+
 function clientsDelete(id) {
   const row = clientsGetByIdIncludingDeleted(id);
   if (!row) return;
   if (row.deleted_at != null) return;
   const now = Math.floor(Date.now() / 1000);
-  getDb().prepare('UPDATE clients SET rule_profile_id = NULL, deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, id);
+  const run = getDb().transaction(() => {
+    getDb().prepare('DELETE FROM client_panel_users WHERE client_id = ?').run(id);
+    getDb().prepare('UPDATE clients SET rule_profile_id = NULL, deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, id);
+  });
+  run();
 }
 
 function clientsReplaceAll(rows) {
   const database = getDb();
   database.prepare('DELETE FROM clients WHERE deleted_at IS NULL').run();
   const stmt = database.prepare(
-    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_signature, default_level, use_server_dns)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_signature, default_level, use_server_dns, junk_pins, mtu_profile, created_by, xray_uuid)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const row of rows) {
     stmt.run(
@@ -180,7 +405,11 @@ function clientsReplaceAll(rows) {
       row.enabled ?? 1, row.note ?? null, row.created_at, row.updated_at,
       row.expires_at ?? null, row.rule_profile_id ?? null, row.default_profile ?? null,
       row.default_signature ?? null, row.default_level ?? null,
-      row.use_server_dns === 0 ? 0 : 1
+      row.use_server_dns === 0 ? 0 : 1,
+      row.junk_pins ?? null,
+      row.mtu_profile ?? null,
+      row.created_by ?? null,
+      row.xray_uuid ?? null
     );
   }
 }
@@ -450,15 +679,346 @@ function trafficDeltasDeleteByClientId(clientId) {
   return getDb().prepare('DELETE FROM traffic_deltas WHERE client_id = ?').run(clientId);
 }
 
+// * VPN address pools
+function vpnPoolsSyncInternetOnlyDenies() {
+  const pools = vpnPoolsList();
+  const existing = getDb()
+    .prepare(
+      `SELECT id, destination_cidr FROM ip_rules
+       WHERE rule_profile_id = 2 AND action = 'deny'`
+    )
+    .all();
+  const existingCidrs = new Set(existing.map((r) => r.destination_cidr));
+  let maxSort = getDb()
+    .prepare(`SELECT COALESCE(MAX(sort_order), 0) AS m FROM ip_rules WHERE rule_profile_id = 2`)
+    .get().m;
+  for (const pool of pools) {
+    if (existingCidrs.has(pool.cidr)) continue;
+    maxSort += 10;
+    getDb()
+      .prepare(
+        `INSERT INTO ip_rules (rule_profile_id, action, destination_cidr, sort_order)
+         VALUES (2, 'deny', ?, ?)`
+      )
+      .run(pool.cidr, maxSort);
+  }
+}
+
+function vpnPoolsAssignPrimaryToEmptyAdmins() {
+  const primary = vpnPoolsGetPrimary();
+  if (!primary || !primary.cidr) return;
+  const { parseAssignedCidrsField, stringifyAssignedCidrs } = require('./vpnAddress');
+  const admins = getDb()
+    .prepare(`SELECT id, assigned_cidrs FROM panel_users WHERE role = 'admin' AND is_active = 1`)
+    .all();
+  const now = Math.floor(Date.now() / 1000);
+  for (const u of admins) {
+    const list = parseAssignedCidrsField(u.assigned_cidrs);
+    if (list.length) continue;
+    getDb()
+      .prepare('UPDATE panel_users SET assigned_cidrs = ?, updated_at = ? WHERE id = ?')
+      .run(stringifyAssignedCidrs([primary.cidr]), now, u.id);
+  }
+}
+
+function vpnPoolsEnsureSeeded() {
+  const n = db.prepare('SELECT COUNT(*) AS n FROM vpn_address_pools').get().n;
+  if (n > 0) {
+    db.prepare(`UPDATE vpn_address_pools SET name = 'Default' WHERE name = '' OR name IS NULL`).run();
+    vpnPoolsAssignPrimaryToEmptyAdmins();
+    return;
+  }
+  const { WG_DEFAULT_ADDRESS } = require('../config');
+  const { seedPoolFromEnvTemplate } = require('./vpnAddress');
+  const seed = seedPoolFromEnvTemplate(WG_DEFAULT_ADDRESS);
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare(
+    `INSERT INTO vpn_address_pools (cidr, gateway, sort_order, created_at, name) VALUES (?, ?, 0, ?, 'Default')`
+  ).run(seed.cidr, seed.gateway, now);
+  // Align legacy Internet-only deny with seeded primary pool when different from hardcoded seed.
+  const deny10 = db.prepare(
+    `SELECT id FROM ip_rules WHERE rule_profile_id = 2 AND action = 'deny' AND destination_cidr = '10.8.0.0/24'`
+  ).get();
+  if (deny10 && seed.cidr !== '10.8.0.0/24') {
+    db.prepare(`UPDATE ip_rules SET destination_cidr = ? WHERE id = ?`).run(seed.cidr, deny10.id);
+  }
+  vpnPoolsSyncInternetOnlyDenies();
+  vpnPoolsAssignPrimaryToEmptyAdmins();
+}
+
+function vpnPoolsList() {
+  return getDb()
+    .prepare(
+      `SELECT id, name, cidr, gateway, sort_order, created_at
+       FROM vpn_address_pools
+       ORDER BY sort_order ASC, id ASC`
+    )
+    .all();
+}
+
+function vpnPoolsGetPrimary() {
+  const rows = vpnPoolsList();
+  return rows[0] || null;
+}
+
+function vpnPoolsGetById(id) {
+  return getDb().prepare('SELECT * FROM vpn_address_pools WHERE id = ?').get(id);
+}
+
+function vpnPoolsAssertUniqueGateway(gateway, excludeId = null) {
+  const rows = vpnPoolsList();
+  for (const p of rows) {
+    if (excludeId != null && p.id === excludeId) continue;
+    if (p.gateway === gateway) {
+      const err = new Error(`Gateway ${gateway} is already used by pool ${p.cidr}`);
+      err.code = 'GATEWAY_EXISTS';
+      throw err;
+    }
+  }
+}
+
+/**
+ * Disable active clients whose address is outside the union of current pools.
+ * @returns {number} number of clients disabled
+ */
+function clientsReconcileAddressesAgainstPools() {
+  const vpnAddress = require('./vpnAddress');
+  const poolCidrs = vpnPoolsList().map((p) => p.cidr);
+  const now = Math.floor(Date.now() / 1000);
+  let disabled = 0;
+  for (const c of clientsGetAll()) {
+    if (!c.address || !vpnAddress.ipInAnyPool(c.address, poolCidrs)) {
+      if (c.enabled) {
+        getDb().prepare('UPDATE clients SET enabled = 0, updated_at = ? WHERE id = ?').run(now, c.id);
+        disabled += 1;
+      }
+    }
+  }
+  return disabled;
+}
+
+/**
+ * @param {{ name?: string, cidr: string, gateway?: string, sort_order?: number }} input
+ */
+function vpnPoolsCreate(input) {
+  const vpnAddress = require('./vpnAddress');
+  const norm = vpnAddress.normalizeCidr(input.cidr, { minPrefix: 8, maxPrefix: 30 });
+  if (!norm.ok) {
+    const err = new Error(norm.message);
+    err.code = 'INVALID_CIDR';
+    throw err;
+  }
+  const name = typeof input.name === 'string' ? input.name.trim() : '';
+  if (!name) {
+    const err = new Error('Pool name is required');
+    err.code = 'INVALID_NAME';
+    throw err;
+  }
+  const gateway = input.gateway
+    ? String(input.gateway).trim()
+    : vpnAddress.defaultGatewayForCidr(norm.cidr);
+  if (!gateway || !vpnAddress.ipInCidr(gateway, norm.cidr)) {
+    const err = new Error('Gateway must be an IPv4 inside the pool CIDR');
+    err.code = 'INVALID_GATEWAY';
+    throw err;
+  }
+  vpnPoolsAssertUniqueGateway(gateway);
+  const now = Math.floor(Date.now() / 1000);
+  let sortOrder = input.sort_order;
+  if (sortOrder == null) {
+    const m = getDb().prepare('SELECT COALESCE(MAX(sort_order), -1) AS m FROM vpn_address_pools').get().m;
+    sortOrder = m + 1;
+  }
+  try {
+    const info = getDb()
+      .prepare(
+        `INSERT INTO vpn_address_pools (cidr, gateway, sort_order, created_at, name) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(norm.cidr, gateway, sortOrder, now, name);
+    vpnPoolsSyncInternetOnlyDenies();
+    return vpnPoolsGetById(info.lastInsertRowid);
+  } catch (e) {
+    if (e.code === 'GATEWAY_EXISTS') throw e;
+    if ((e.code || '').includes('CONSTRAINT') || (e.message || '').includes('UNIQUE')) {
+      const err = new Error('Pool CIDR already exists');
+      err.code = 'POOL_EXISTS';
+      throw err;
+    }
+    throw e;
+  }
+}
+
+/**
+ * @param {number} id
+ * @param {{ name?: string, cidr?: string, gateway?: string, sort_order?: number }} fields
+ */
+function vpnPoolsUpdate(id, fields) {
+  const pool = vpnPoolsGetById(id);
+  if (!pool) return null;
+  const vpnAddress = require('./vpnAddress');
+  const oldCidr = pool.cidr;
+  let cidr = pool.cidr;
+  let gateway = pool.gateway;
+  let name = pool.name || '';
+  let sortOrder = pool.sort_order;
+  if (fields.name !== undefined) {
+    name = typeof fields.name === 'string' ? fields.name.trim() : '';
+    if (!name) {
+      const err = new Error('Pool name is required');
+      err.code = 'INVALID_NAME';
+      throw err;
+    }
+  }
+  if (fields.cidr !== undefined) {
+    const norm = vpnAddress.normalizeCidr(fields.cidr, { minPrefix: 8, maxPrefix: 30 });
+    if (!norm.ok) {
+      const err = new Error(norm.message);
+      err.code = 'INVALID_CIDR';
+      throw err;
+    }
+    cidr = norm.cidr;
+  }
+  if (fields.gateway !== undefined && String(fields.gateway).trim()) {
+    gateway = String(fields.gateway).trim();
+  } else if (fields.cidr !== undefined) {
+    gateway = vpnAddress.defaultGatewayForCidr(cidr);
+  }
+  if (!gateway || !vpnAddress.ipInCidr(gateway, cidr)) {
+    const err = new Error('Gateway must be an IPv4 inside the pool CIDR');
+    err.code = 'INVALID_GATEWAY';
+    throw err;
+  }
+  vpnPoolsAssertUniqueGateway(gateway, id);
+  if (fields.sort_order !== undefined) sortOrder = fields.sort_order;
+  try {
+    getDb()
+      .prepare(
+        `UPDATE vpn_address_pools SET name = ?, cidr = ?, gateway = ?, sort_order = ? WHERE id = ?`
+      )
+      .run(name, cidr, gateway, sortOrder, id);
+  } catch (e) {
+    if (e.code === 'GATEWAY_EXISTS') throw e;
+    if ((e.code || '').includes('CONSTRAINT') || (e.message || '').includes('UNIQUE')) {
+      const err = new Error('Pool CIDR already exists');
+      err.code = 'POOL_EXISTS';
+      throw err;
+    }
+    throw e;
+  }
+  if (oldCidr !== cidr) {
+    const { parseAssignedCidrsField, stringifyAssignedCidrs, validateAssignedCidrs } = require('./vpnAddress');
+    const poolCidrs = vpnPoolsList().map((p) => p.cidr);
+    const users = getDb().prepare('SELECT id, assigned_cidrs FROM panel_users').all();
+    const now = Math.floor(Date.now() / 1000);
+    for (const u of users) {
+      let list = parseAssignedCidrsField(u.assigned_cidrs).map((c) => (c === oldCidr ? cidr : c));
+      const validated = validateAssignedCidrs(list, poolCidrs);
+      list = validated.ok ? validated.cidrs : list.filter((c) => poolCidrs.some((p) => vpnAddress.cidrContains(p, c)));
+      getDb()
+        .prepare('UPDATE panel_users SET assigned_cidrs = ?, updated_at = ? WHERE id = ?')
+        .run(stringifyAssignedCidrs(list), now, u.id);
+    }
+  }
+  vpnPoolsSyncInternetOnlyDenies();
+  clientsReconcileAddressesAgainstPools();
+  return vpnPoolsGetById(id);
+}
+
+function vpnPoolsDelete(id) {
+  const pool = vpnPoolsGetById(id);
+  if (!pool) return null;
+  const { parseAssignedCidrsField, stringifyAssignedCidrs } = require('./vpnAddress');
+  getDb().prepare('DELETE FROM vpn_address_pools WHERE id = ?').run(id);
+  // Strip this CIDR from panel user assignments
+  const users = getDb().prepare('SELECT id, assigned_cidrs FROM panel_users').all();
+  for (const u of users) {
+    const list = parseAssignedCidrsField(u.assigned_cidrs).filter((c) => c !== pool.cidr);
+    getDb()
+      .prepare('UPDATE panel_users SET assigned_cidrs = ? WHERE id = ?')
+      .run(stringifyAssignedCidrs(list), u.id);
+  }
+  vpnPoolsSyncInternetOnlyDenies();
+  clientsReconcileAddressesAgainstPools();
+  return pool;
+}
+
+/**
+ * Sync which panel users have this pool.cidr in assigned_cidrs.
+ * Selected users get cidr prepended if missing (default = first).
+ * Unselected users lose this cidr.
+ * @param {number} poolId
+ * @param {string[]} userIds
+ */
+function vpnPoolsSetUsers(poolId, userIds) {
+  const pool = vpnPoolsGetById(poolId);
+  if (!pool) return null;
+  const { parseAssignedCidrsField, stringifyAssignedCidrs } = require('./vpnAddress');
+  const selected = new Set(Array.isArray(userIds) ? userIds.map(String) : []);
+  const allUsers = getDb().prepare('SELECT id, assigned_cidrs FROM panel_users WHERE is_active = 1').all();
+  for (const u of allUsers) {
+    let list = parseAssignedCidrsField(u.assigned_cidrs);
+    const has = list.includes(pool.cidr);
+    if (selected.has(u.id)) {
+      if (!has) list = [pool.cidr, ...list];
+    } else if (has) {
+      list = list.filter((c) => c !== pool.cidr);
+    }
+    getDb()
+      .prepare('UPDATE panel_users SET assigned_cidrs = ?, updated_at = ? WHERE id = ?')
+      .run(stringifyAssignedCidrs(list), Math.floor(Date.now() / 1000), u.id);
+  }
+  return panelUsersList().filter((u) => (u.assigned_cidrs || []).includes(pool.cidr));
+}
+
+function vpnPoolsListUserIds(poolId) {
+  const pool = vpnPoolsGetById(poolId);
+  if (!pool) return [];
+  const { parseAssignedCidrsField } = require('./vpnAddress');
+  return getDb()
+    .prepare('SELECT id, assigned_cidrs FROM panel_users WHERE is_active = 1')
+    .all()
+    .filter((u) => parseAssignedCidrsField(u.assigned_cidrs).includes(pool.cidr))
+    .map((u) => u.id);
+}
+
+/** All client addresses including soft-deleted (for allocator uniqueness). */
+function clientsUsedAddresses(excludeClientId = null) {
+  const rows = getDb().prepare('SELECT id, address FROM clients WHERE address IS NOT NULL').all();
+  const set = new Set();
+  for (const r of rows) {
+    if (excludeClientId && r.id === excludeClientId) continue;
+    if (r.address) set.add(r.address);
+  }
+  return set;
+}
+
 module.exports = {
   getDb,
+  closeDb,
   panelUsers: {
     findByUsername: panelUsersFindByUsername,
     findById: panelUsersFindById,
+    findByIdPublic: panelUsersFindByIdPublic,
+    toPublic: panelUsersToPublic,
+    list: panelUsersList,
     create: panelUsersCreate,
+    update: panelUsersUpdate,
+    deactivate: panelUsersDeactivate,
     updateLastLogin: panelUsersUpdateLastLogin,
     count: panelUsersCount,
+    countActiveAdmins: panelUsersCountActiveAdmins,
     updatePasswordHash: panelUsersUpdatePasswordHash,
+    destroySessions: panelUsersDestroySessions,
+  },
+  clientPanelUsers: {
+    listUserIds: clientPanelUsersListUserIds,
+    listUsers: clientPanelUsersListUsers,
+    listClientIdsForUser: clientPanelUsersListClientIdsForUser,
+    isAssigned: clientPanelUsersIsAssigned,
+    assign: clientPanelUsersAssign,
+    unassign: clientPanelUsersUnassign,
+    setUsers: clientPanelUsersSetUsers,
+    mapForClientIds: clientPanelUsersMapForClientIds,
   },
   serverConfig: {
     get: serverConfigGet,
@@ -474,6 +1034,26 @@ module.exports = {
     update: clientsUpdate,
     delete: clientsDelete,
     replaceAll: clientsReplaceAll,
+    mapCreatedByUsernames: clientsMapCreatedByUsernames,
+    usedAddresses: clientsUsedAddresses,
+    setXrayUuid: clientsSetXrayUuid,
+    getByName: clientsGetByName,
+  },
+  vpnPools: {
+    ensureSeeded: () => {
+      getDb();
+    },
+    list: vpnPoolsList,
+    getPrimary: vpnPoolsGetPrimary,
+    getById: vpnPoolsGetById,
+    create: vpnPoolsCreate,
+    update: vpnPoolsUpdate,
+    delete: vpnPoolsDelete,
+    setUsers: vpnPoolsSetUsers,
+    listUserIds: vpnPoolsListUserIds,
+    syncInternetOnlyDenies: vpnPoolsSyncInternetOnlyDenies,
+    reconcileClientAddresses: clientsReconcileAddressesAgainstPools,
+    assignPrimaryToEmptyAdmins: vpnPoolsAssignPrimaryToEmptyAdmins,
   },
   clientConfigVersions: {
     getByClientId: clientConfigVersionsGetByClientId,

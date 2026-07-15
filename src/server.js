@@ -8,6 +8,7 @@ const { ensureFirstAdmin } = require('./lib/ensureFirstAdmin');
 const WireGuard = require('./lib/WireGuard');
 const { applyFirewall } = require('./lib/firewall');
 const { bootAmneziaDns, stopAmneziaDns, startDnsProfileProbes } = require('./lib/amneziaDns');
+const { bootAmneziaXray, stopAmneziaXray } = require('./lib/amneziaXray');
 const { startTrafficRecorder, stopTrafficRecorder } = require('./lib/trafficRecorder');
 const { stopProbeScheduler } = require('./lib/dnsProfileProbe');
 
@@ -63,6 +64,10 @@ async function main() {
     // eslint-disable-next-line no-console
     console.error('Amnezia DNS boot:', err && err.message ? err.message : err);
   });
+  bootAmneziaXray().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Amnezia Xray boot:', err && err.message ? err.message : err);
+  });
 }
 
 main().catch((err) => {
@@ -77,6 +82,7 @@ process.on('SIGTERM', async () => {
   stopTrafficRecorder();
   stopProbeScheduler();
   stopAmneziaDns();
+  stopAmneziaXray();
   await WireGuard.Shutdown();
   process.exit(0);
 });

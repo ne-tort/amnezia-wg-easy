@@ -93,17 +93,26 @@ class API {
     const res = await fetch(`/api/wireguard/client/${clientId}/qrcode.svg${qs}`, {
       credentials: 'include',
     });
-    if (!res.ok) throw new Error(res.statusText);
-    const data = await res.json();
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      const msg = (data && (data.error || (data.data && data.data.error))) || res.statusText;
+      throw new Error(msg || 'QR generation failed');
+    }
     if (encoding === 'amnezia') {
-      if (!data.svgs || !Array.isArray(data.svgs)) throw new Error('Invalid QR response');
+      if (!data || !data.svgs || !Array.isArray(data.svgs)) throw new Error('Invalid QR response');
       return {
         svgs: data.svgs,
         payloads: Array.isArray(data.payloads) ? data.payloads : [],
+        iLimit: data.iLimit || null,
       };
     }
-    if (!data.svg || typeof data.payload !== 'string') throw new Error('Invalid QR response');
-    return { svg: data.svg, payload: data.payload };
+    if (!data || !data.svg || typeof data.payload !== 'string') throw new Error('Invalid QR response');
+    return { svg: data.svg, payload: data.payload, iLimit: data.iLimit || null };
   }
 
   async getCheckUpdate() {
@@ -168,6 +177,81 @@ class API {
       method: 'post',
       path: '/me/password',
       body: { password, passwordConfirm },
+    });
+  }
+
+  async getPasswordTargets() {
+    return this.call({
+      method: 'get',
+      path: '/users/password-targets',
+    });
+  }
+
+  async changeUserPassword({ userId, password, passwordConfirm }) {
+    return this.call({
+      method: 'post',
+      path: `/users/${userId}/password`,
+      body: { password, passwordConfirm },
+    });
+  }
+
+  async getUsers() {
+    return this.call({
+      method: 'get',
+      path: '/users',
+    });
+  }
+
+  async getRoles(lang) {
+    const qs = lang ? `?lang=${encodeURIComponent(lang)}` : '';
+    return this.call({
+      method: 'get',
+      path: `/roles${qs}`,
+    });
+  }
+
+  async createUser({ username, password, role, assigned_cidrs }) {
+    const body = { username, password, role: role || 'user' };
+    if (assigned_cidrs !== undefined) body.assigned_cidrs = assigned_cidrs;
+    return this.call({
+      method: 'post',
+      path: '/users',
+      body,
+    });
+  }
+
+  async getVpnPools() {
+    return this.call({ method: 'get', path: '/vpn-pools' });
+  }
+
+  async createVpnPool(body) {
+    return this.call({ method: 'post', path: '/vpn-pools', body });
+  }
+
+  async updateVpnPool(id, body) {
+    return this.call({ method: 'put', path: `/vpn-pools/${id}`, body });
+  }
+
+  async deleteVpnPool(id) {
+    return this.call({ method: 'delete', path: `/vpn-pools/${id}` });
+  }
+
+  async setVpnPoolUsers(id, userIds) {
+    return this.call({ method: 'put', path: `/vpn-pools/${id}/users`, body: { userIds } });
+  }
+
+  async getClientUsers({ clientId }) {
+    return this.call({
+      method: 'get',
+      path: `/wireguard/client/${clientId}/users`,
+    });
+  }
+
+  async setClientUsers({ clientId, userIds }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/users`,
+      body: { userIds },
     });
   }
 
@@ -240,6 +324,34 @@ class API {
     });
   }
 
+  async getClientObfuscation({ clientId }) {
+    return this.call({
+      method: 'get',
+      path: `/wireguard/client/${clientId}/obfuscation`,
+    });
+  }
+
+  async previewClientObfuscation({
+    clientId, profile, signature, level, refreshSignature, regenerateJunk, action,
+  }) {
+    return this.call({
+      method: 'post',
+      path: `/wireguard/client/${clientId}/obfuscation/preview`,
+      body: {
+        profile, signature, level, refreshSignature, regenerateJunk, action,
+      },
+    });
+  }
+
+  async applyClientObfuscation({ clientId, profile, signature, level, junk, mtuProfile }) {
+    return this.call({
+      method: 'post',
+      path: `/wireguard/client/${clientId}/obfuscation/apply`,
+      body: { profile, signature, level, junk, mtuProfile },
+    });
+  }
+
+  /** @deprecated Prefer preview + apply (immediate persist). */
   async updateClientObfuscation({ clientId, profile, signature, level }) {
     return this.call({
       method: 'put',
@@ -248,6 +360,7 @@ class API {
     });
   }
 
+  /** @deprecated Prefer preview + apply (immediate persist). */
   async refreshClientSignature({ clientId }) {
     return this.call({
       method: 'post',
@@ -260,6 +373,18 @@ class API {
       method: 'put',
       path: `/wireguard/client/${clientId}/dns`,
       body: { useServerDns },
+    });
+  }
+
+  async getMtuProfiles() {
+    return this.call({ method: 'get', path: '/mtu-profiles' });
+  }
+
+  async updateClientMtu({ clientId, profileId }) {
+    return this.call({
+      method: 'put',
+      path: `/wireguard/client/${clientId}/mtu`,
+      body: { profileId },
     });
   }
 
@@ -286,6 +411,51 @@ class API {
 
   async forceCleanupAmneziaDns() {
     return this.call({ method: 'post', path: '/amnezia-dns/force-cleanup' });
+  }
+
+  async getAmneziaXrayStatus() {
+    return this.call({ method: 'get', path: '/amnezia-xray' });
+  }
+
+  async enableAmneziaXray(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-xray/enable', body });
+  }
+
+  async disableAmneziaXray() {
+    return this.call({ method: 'post', path: '/amnezia-xray/disable' });
+  }
+
+  async forceCleanupAmneziaXray() {
+    return this.call({ method: 'post', path: '/amnezia-xray/force-cleanup' });
+  }
+
+  async resetAmneziaXray() {
+    return this.call({ method: 'post', path: '/amnezia-xray/reset' });
+  }
+
+  async getXraySniCache({ ensureBg } = {}) {
+    const qs = ensureBg ? '?ensureBg=1' : '';
+    return this.call({ method: 'get', path: `/amnezia-xray/sni-cache${qs}` });
+  }
+
+  async getXraySniScanStatus() {
+    return this.call({ method: 'get', path: '/amnezia-xray/sni-scan' });
+  }
+
+  async startXraySniScan(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-xray/sni-scan', body });
+  }
+
+  async cancelXraySniScan() {
+    return this.call({ method: 'post', path: '/amnezia-xray/sni-scan/cancel' });
+  }
+
+  async recheckXraySni(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-xray/sni-recheck', body });
+  }
+
+  async getClientXray(clientId) {
+    return this.call({ method: 'get', path: `/wireguard/client/${clientId}/xray` });
   }
 
   async getRuleProfiles() {

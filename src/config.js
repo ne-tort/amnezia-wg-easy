@@ -16,6 +16,8 @@ module.exports.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 module.exports.WG_DEVICE = process.env.WG_DEVICE || 'eth0';
 module.exports.WG_HOST = process.env.WG_HOST;
 module.exports.WG_PORT = process.env.WG_PORT || '51820';
+// * Host TCP port for amnezia-xray (VLESS Reality). Keep separate from nginx 443.
+module.exports.XRAY_PORT = Math.max(1, parseInt(process.env.XRAY_PORT || '8443', 10) || 8443);
 // * MTU 1280 avoids fragmentation on mobile (large response packets often dropped otherwise). Set WG_MTU=none or empty to omit from client config.
 const _mtu = process.env.WG_MTU;
 module.exports.WG_MTU = (_mtu === '' || _mtu === 'none') ? null : (_mtu || '1280');
@@ -37,24 +39,33 @@ module.exports.WG_ALLOWED_IPS = process.env.WG_ALLOWED_IPS || '0.0.0.0/0';
 
 module.exports.WG_PRE_UP = process.env.WG_PRE_UP || '';
 // * Subnet for NAT/forward (e.g. 10.8.0.0/24). eth1 = amnezia-dns-net.
+// Legacy single-subnet helpers; runtime prefers vpn_address_pools (see buildNatPostUp).
 const WG_SUBNET = module.exports.WG_DEFAULT_ADDRESS.replace('x', '0') + '/24';
 const WG_DEV = module.exports.WG_DEVICE;
 const FIREWALL_BACKEND = (process.env.FIREWALL_BACKEND || 'nftables').toLowerCase();
 
-function getDefaultPostUp() {
+/**
+ * Build PostUp NAT/forward for one or more pool CIDRs.
+ * @param {string[]} [poolCidrs]
+ */
+function buildNatPostUp(poolCidrs) {
+  const cidrs = (Array.isArray(poolCidrs) && poolCidrs.length) ? poolCidrs : [WG_SUBNET];
   if (FIREWALL_BACKEND === 'firewalld') {
     return [
       `firewall-cmd -q --permanent --add-masquerade 2>/dev/null || true`,
       `firewall-cmd -q --reload 2>/dev/null || true`,
     ].join(' ; ');
   }
-  // * Use single quotes around nft chain blocks so shell (wg-quick) does not interpret ; and }
-  return [
+  const parts = [
     `nft delete table ip amnezia_nat 2>/dev/null || true`,
     `nft add table ip amnezia_nat`,
     `nft add chain ip amnezia_nat postrouting '{ type nat hook postrouting priority 100; }'`,
-    `nft add rule ip amnezia_nat postrouting ip saddr ${WG_SUBNET} oifname "${WG_DEV}" masquerade`,
-    `nft add rule ip amnezia_nat postrouting ip saddr ${WG_SUBNET} oifname "eth1" masquerade`,
+  ];
+  for (const subnet of cidrs) {
+    parts.push(`nft add rule ip amnezia_nat postrouting ip saddr ${subnet} oifname "${WG_DEV}" masquerade`);
+    parts.push(`nft add rule ip amnezia_nat postrouting ip saddr ${subnet} oifname "eth1" masquerade`);
+  }
+  parts.push(
     `nft delete table inet amnezia_wg_base 2>/dev/null || true`,
     `nft add table inet amnezia_wg_base`,
     `nft add chain inet amnezia_wg_base input_awg0 '{ type filter hook input priority -100; policy accept; }'`,
@@ -62,8 +73,15 @@ function getDefaultPostUp() {
     `nft add chain inet amnezia_wg_base forward_awg0_base '{ type filter hook forward priority 0; policy accept; }'`,
     `nft add rule inet amnezia_wg_base forward_awg0_base iifname "awg0" accept`,
     `nft add rule inet amnezia_wg_base forward_awg0_base oifname "awg0" accept`,
-    `nft add rule inet amnezia_wg_base forward_awg0_base iifname "awg0" oifname "eth1" ip saddr ${WG_SUBNET} accept`,
-  ].join(' ; ');
+  );
+  for (const subnet of cidrs) {
+    parts.push(`nft add rule inet amnezia_wg_base forward_awg0_base iifname "awg0" oifname "eth1" ip saddr ${subnet} accept`);
+  }
+  return parts.join(' ; ');
+}
+
+function getDefaultPostUp() {
+  return buildNatPostUp([WG_SUBNET]);
 }
 
 function getDefaultPostDown() {
@@ -76,6 +94,9 @@ function getDefaultPostDown() {
   ].join(' ; ');
 }
 
+/** True when WG_POST_UP env fully overrides generated NAT (manual install). */
+module.exports.WG_POST_UP_OVERRIDE = typeof process.env.WG_POST_UP === 'string' && process.env.WG_POST_UP.length > 0;
+module.exports.buildNatPostUp = buildNatPostUp;
 module.exports.WG_POST_UP = process.env.WG_POST_UP || getDefaultPostUp();
 module.exports.WG_POST_DOWN = process.env.WG_POST_DOWN || getDefaultPostDown();
 module.exports.FIREWALL_BACKEND = FIREWALL_BACKEND;
@@ -126,6 +147,25 @@ module.exports.WG_CASCADE_EXIT_TUNNEL_IP = (process.env.WG_CASCADE_EXIT_TUNNEL_I
 module.exports.WG_CASCADE_EXIT_PUBLIC_KEY = (process.env.WG_CASCADE_EXIT_PUBLIC_KEY || '').trim();
 module.exports.WG_CASCADE_EXIT_ENDPOINT = (process.env.WG_CASCADE_EXIT_ENDPOINT || '').trim();
 const _wccs = typeof process.env.WG_CASCADE_CLIENT_SUBNET === 'string' && process.env.WG_CASCADE_CLIENT_SUBNET.trim();
+module.exports.WG_CASCADE_CLIENT_SUBNET_OVERRIDE = !!_wccs;
 module.exports.WG_CASCADE_CLIENT_SUBNET = _wccs
   ? process.env.WG_CASCADE_CLIENT_SUBNET.trim()
   : (module.exports.WG_DEFAULT_ADDRESS.replace('x', '0') + '/24');
+
+/**
+ * Cascade policy-routing subnet: env override or primary VPN pool (v1).
+ * @returns {string}
+ */
+module.exports.resolveCascadeClientSubnet = function resolveCascadeClientSubnet() {
+  if (module.exports.WG_CASCADE_CLIENT_SUBNET_OVERRIDE) {
+    return module.exports.WG_CASCADE_CLIENT_SUBNET;
+  }
+  try {
+    const db = require('./lib/db');
+    const primary = db.vpnPools.getPrimary();
+    if (primary && primary.cidr) return primary.cidr;
+  } catch {
+    /* */
+  }
+  return module.exports.WG_CASCADE_CLIENT_SUBNET;
+};
