@@ -195,10 +195,21 @@ detect_public_ip() {
 clone_or_update_repo() {
   mkdir -p "$(dirname "$INSTALL_DIR")"
   if [[ -d "$INSTALL_DIR/.git" ]]; then
-    logi "Обновление репозитория в ${INSTALL_DIR}..."
-    git -C "$INSTALL_DIR" fetch --depth 1 origin "$GIT_REF" || git -C "$INSTALL_DIR" fetch origin
-    git -C "$INSTALL_DIR" checkout "$GIT_REF" 2>/dev/null || true
-    git -C "$INSTALL_DIR" pull --ff-only origin "$GIT_REF" || true
+    logi "Обновление репозитория в ${INSTALL_DIR} → ${GIT_REF} (hard reset)..."
+    git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" 2>/dev/null || true
+    # Shallow trees often stick on an old tip; force sync to origin/<ref>.
+    if ! git -C "$INSTALL_DIR" fetch --depth 1 origin "$GIT_REF"; then
+      git -C "$INSTALL_DIR" fetch origin "$GIT_REF" || git -C "$INSTALL_DIR" fetch origin
+    fi
+    if git -C "$INSTALL_DIR" rev-parse --verify "origin/${GIT_REF}" >/dev/null 2>&1; then
+      git -C "$INSTALL_DIR" checkout -B "$GIT_REF" "origin/${GIT_REF}"
+      git -C "$INSTALL_DIR" reset --hard "origin/${GIT_REF}"
+    else
+      git -C "$INSTALL_DIR" checkout -B "$GIT_REF" FETCH_HEAD
+      git -C "$INSTALL_DIR" reset --hard FETCH_HEAD
+    fi
+    git -C "$INSTALL_DIR" clean -fd
+    logi "Ревизия: $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
   else
     if [[ -e "$INSTALL_DIR" ]] && [[ ! -d "$INSTALL_DIR/.git" ]]; then
       loge "Каталог ${INSTALL_DIR} занят и это не git-репозиторий"
@@ -207,6 +218,7 @@ clone_or_update_repo() {
     logi "Клонирование ${REPO_URL} → ${INSTALL_DIR}"
     git clone --depth 1 --branch "$GIT_REF" "$REPO_URL" "$INSTALL_DIR" \
       || git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    logi "Ревизия: $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
   fi
 }
 
