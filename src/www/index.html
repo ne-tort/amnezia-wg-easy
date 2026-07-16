@@ -953,8 +953,7 @@
                     </svg>
                     <img v-if="client.avatar" :src="client.avatar" class="w-10 rounded-full absolute top-0 left-0" />
 
-                    <div
-                      v-if="client.latestHandshakeAt && ((new Date() - new Date(client.latestHandshakeAt) < 1000 * 60 * 10))">
+                    <div v-if="client.isOnline">
                       <div
                         class="animate-ping w-4 h-4 p-1 bg-red-100 dark:bg-red-100 rounded-full absolute -bottom-1 -right-1">
                       </div>
@@ -1156,8 +1155,8 @@
                 <div v-if="expandedClientStatsId === client.id"
                   class="w-full text-left text-xs text-gray-500 dark:text-neutral-400 pt-2 mt-1 border-t border-gray-100 dark:border-neutral-600 px-3 pb-2 flex flex-col gap-3">
                   <div class="flex flex-nowrap items-center gap-3">
-                    <span v-if="client.latestHandshakeAt" :title="$t('lastSeen') + ' ' + dateTime(new Date(client.latestHandshakeAt))">
-                      {{ new Date(client.latestHandshakeAt) | timeago }}
+                    <span v-if="client.latestActivityAt" :title="$t('lastSeen') + ' ' + dateTime(new Date(client.latestActivityAt))">
+                      {{ new Date(client.latestActivityAt) | timeago }}
                     </span>
                     <span v-if="client.transferTx" :title="$t('totalDownload') + ' ' + bytes(client.transferTx)">
                       <svg class="align-middle h-3 inline" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">

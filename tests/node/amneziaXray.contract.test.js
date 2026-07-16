@@ -120,6 +120,7 @@ test('buildServerConfigObject lists enabled clients with email', () => {
   assert.ok(obj.stats);
   assert.ok(obj.api && obj.api.services.includes('StatsService'));
   assert.equal(obj.policy.levels['0'].statsUserUplink, true);
+  assert.equal(obj.policy.levels['0'].statsUserOnline, true);
   const apiIn = obj.inbounds.find((i) => i.tag === 'api');
   assert.ok(apiIn);
   assert.equal(apiIn.port, amneziaXray.XRAY_API_PORT);
@@ -138,6 +139,20 @@ test('parseStatsQueryOutput maps user email uplink/downlink', () => {
   assert.equal(map.get('Alice').downlink, 250);
   assert.equal(map.get('Bob').uplink, 10);
   assert.equal(map.get('Bob').downlink, 0);
+});
+
+test('parseOnlineStatsOutput collects online emails', () => {
+  const { amneziaXray } = loadAmneziaXray();
+  const set = amneziaXray.parseOnlineStatsOutput(JSON.stringify({
+    stat: [
+      { name: 'user>>>Alice>>>online', value: '2' },
+      { name: 'user>>>Bob>>>online', value: '0' },
+      { name: 'user>>>Carol>>>traffic>>>uplink', value: '9' },
+    ],
+  }));
+  assert.equal(set.has('Alice'), true);
+  assert.equal(set.has('Bob'), false);
+  assert.equal(set.has('Carol'), false);
 });
 
 test('parseX25519Output accepts Private key / Public key lines', () => {

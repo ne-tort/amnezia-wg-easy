@@ -271,6 +271,14 @@ class API {
         latestHandshakeAt: client.latestHandshakeAt !== null && client.latestHandshakeAt !== undefined
           ? new Date(client.latestHandshakeAt)
           : null,
+        latestXrayActivityAt: client.latestXrayActivityAt !== null && client.latestXrayActivityAt !== undefined
+          ? new Date(client.latestXrayActivityAt)
+          : null,
+        latestActivityAt: client.latestActivityAt !== null && client.latestActivityAt !== undefined
+          ? new Date(client.latestActivityAt)
+          : null,
+        isOnline: client.isOnline === true,
+        onlineSources: Array.isArray(client.onlineSources) ? client.onlineSources : [],
         expiresAt: client.expiresAt !== null && client.expiresAt !== undefined
           ? new Date(client.expiresAt)
           : null,

@@ -14,7 +14,7 @@ let sampleTimer = null;
 let flushTimer = null;
 /** @type {Map<string, { last_rx: number, last_tx: number }>|null} */
 let snapshotMap = null;
-/** @type {Map<string, { last_rx: number, last_tx: number }>|null} */
+/** @type {Map<string, { last_rx: number, last_tx: number, last_activity_at: number|null }>|null} */
 let xraySnapshotMap = null;
 const buffer = [];
 
@@ -26,7 +26,11 @@ function loadSnapshot() {
 function loadXraySnapshot() {
   try {
     const rows = db.traffic.xraySnapshot.getAll();
-    xraySnapshotMap = new Map(rows.map((r) => [r.client_id, { last_rx: r.last_rx, last_tx: r.last_tx }]));
+    xraySnapshotMap = new Map(rows.map((r) => [r.client_id, {
+      last_rx: r.last_rx,
+      last_tx: r.last_tx,
+      last_activity_at: r.last_activity_at != null ? Number(r.last_activity_at) : null,
+    }]));
   } catch {
     xraySnapshotMap = new Map();
   }
@@ -40,6 +44,34 @@ function getPublicKeyToClientId() {
 function getNameToClientId() {
   const clients = db.clients.getAll();
   return new Map(clients.map((c) => [c.name, c.id]));
+}
+
+/**
+ * In-memory (and DB-backed after flush) map of clientId → unix seconds of last Xray activity.
+ * Used by WireGuard.getClients() for online presence without docker exec on every poll.
+ * @returns {Map<string, number>}
+ */
+function getXrayLastActivityMap() {
+  if (xraySnapshotMap === null) loadXraySnapshot();
+  const out = new Map();
+  for (const [clientId, v] of xraySnapshotMap.entries()) {
+    if (v.last_activity_at != null && Number.isFinite(v.last_activity_at)) {
+      out.set(clientId, v.last_activity_at);
+    }
+  }
+  return out;
+}
+
+function noteXrayActivity(clientId, tsSec) {
+  if (!clientId) return;
+  if (xraySnapshotMap === null) loadXraySnapshot();
+  const prev = xraySnapshotMap.get(clientId) || { last_rx: 0, last_tx: 0, last_activity_at: null };
+  const ts = tsSec != null ? tsSec : Math.floor(Date.now() / 1000);
+  xraySnapshotMap.set(clientId, {
+    last_rx: prev.last_rx,
+    last_tx: prev.last_tx,
+    last_activity_at: ts,
+  });
 }
 
 async function sampleAwg() {
@@ -85,6 +117,7 @@ async function sampleAwg() {
 
 /**
  * Xray Stats: uplink = client→server (map to rx), downlink = server→client (map to tx).
+ * Also records last_activity_at from traffic deltas and optional online stats.
  */
 async function sampleXray() {
   let amneziaXray;
@@ -108,31 +141,55 @@ async function sampleXray() {
     }
     return;
   }
-  if (!statsMap || statsMap.size === 0) return;
 
   if (xraySnapshotMap === null) loadXraySnapshot();
 
   const nameToId = getNameToClientId();
   const now = Math.floor(Date.now() / 1000);
 
-  for (const [email, counters] of statsMap.entries()) {
-    const clientId = nameToId.get(email);
-    if (!clientId) continue;
-    const transferRx = Number(counters.uplink) || 0;
-    const transferTx = Number(counters.downlink) || 0;
-    const prev = xraySnapshotMap.get(clientId) || { last_rx: 0, last_tx: 0 };
-    // Counter reset (container restart) → take absolute as new baseline without huge delta
-    let deltaRx = transferRx - prev.last_rx;
-    let deltaTx = transferTx - prev.last_tx;
-    if (deltaRx < 0) deltaRx = 0;
-    if (deltaTx < 0) deltaTx = 0;
+  if (statsMap && statsMap.size > 0) {
+    for (const [email, counters] of statsMap.entries()) {
+      const clientId = nameToId.get(email);
+      if (!clientId) continue;
+      const transferRx = Number(counters.uplink) || 0;
+      const transferTx = Number(counters.downlink) || 0;
+      const prev = xraySnapshotMap.get(clientId) || { last_rx: 0, last_tx: 0, last_activity_at: null };
+      // Counter reset (container restart) → take absolute as new baseline without huge delta
+      let deltaRx = transferRx - prev.last_rx;
+      let deltaTx = transferTx - prev.last_tx;
+      if (deltaRx < 0) deltaRx = 0;
+      if (deltaTx < 0) deltaTx = 0;
 
-    if (deltaRx > 0 || deltaTx > 0) {
-      buffer.push({
-        client_id: clientId, ts: now, rx_delta: deltaRx, tx_delta: deltaTx, source: 'xray',
+      let lastActivity = prev.last_activity_at != null ? prev.last_activity_at : null;
+      if (deltaRx > 0 || deltaTx > 0) {
+        buffer.push({
+          client_id: clientId, ts: now, rx_delta: deltaRx, tx_delta: deltaTx, source: 'xray',
+        });
+        lastActivity = now;
+      }
+      xraySnapshotMap.set(clientId, {
+        last_rx: transferRx,
+        last_tx: transferTx,
+        last_activity_at: lastActivity,
       });
     }
-    xraySnapshotMap.set(clientId, { last_rx: transferRx, last_tx: transferTx });
+  }
+
+  // Idle VLESS sessions: mark activity when Xray reports the user online (if API supported).
+  if (typeof amneziaXray.queryOnlineUserEmails === 'function') {
+    try {
+      const online = await amneziaXray.queryOnlineUserEmails();
+      for (const email of online) {
+        const clientId = nameToId.get(email);
+        if (!clientId) continue;
+        noteXrayActivity(clientId, now);
+      }
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'test') {
+        // eslint-disable-next-line no-console
+        console.error('Traffic recorder: xray online stats failed', err.message);
+      }
+    }
   }
 }
 
@@ -143,26 +200,32 @@ async function sample() {
 }
 
 function flush() {
-  if (buffer.length === 0) return;
-
   const toInsert = buffer.splice(0, buffer.length);
-  const snapshotRows = snapshotMap === null ? [] : Array.from(snapshotMap.entries()).map(([client_id, v]) => ({
-    client_id,
-    last_rx: v.last_rx,
-    last_tx: v.last_tx,
-    sampled_at: Math.floor(Date.now() / 1000),
-  }));
+  const sampledAt = Math.floor(Date.now() / 1000);
+  // AWG snapshots only when we recorded deltas (legacy behaviour).
+  const snapshotRows = (toInsert.length > 0 && snapshotMap !== null)
+    ? Array.from(snapshotMap.entries()).map(([client_id, v]) => ({
+      client_id,
+      last_rx: v.last_rx,
+      last_tx: v.last_tx,
+      sampled_at: sampledAt,
+    }))
+    : [];
+  // Xray snapshots include last_activity_at; persist whenever the map is loaded.
   const xrayRows = xraySnapshotMap === null ? [] : Array.from(xraySnapshotMap.entries()).map(([client_id, v]) => ({
     client_id,
     last_rx: v.last_rx,
     last_tx: v.last_tx,
-    sampled_at: Math.floor(Date.now() / 1000),
+    sampled_at: sampledAt,
+    last_activity_at: v.last_activity_at != null ? v.last_activity_at : null,
   }));
+
+  if (toInsert.length === 0 && xrayRows.length === 0) return;
 
   const database = db.getDb();
   try {
     database.transaction(() => {
-      db.traffic.deltas.insertBatch(toInsert);
+      if (toInsert.length > 0) db.traffic.deltas.insertBatch(toInsert);
       if (snapshotRows.length > 0) db.traffic.snapshot.upsertMany(snapshotRows);
       if (xrayRows.length > 0 && db.traffic.xraySnapshot) {
         db.traffic.xraySnapshot.upsertMany(xrayRows);
@@ -210,7 +273,14 @@ function updateSnapshotForClient(clientId, lastRx, lastTx) {
 }
 
 function updateXraySnapshotForClient(clientId, lastRx, lastTx) {
-  if (xraySnapshotMap !== null) xraySnapshotMap.set(clientId, { last_rx: lastRx, last_tx: lastTx });
+  if (xraySnapshotMap !== null) {
+    const prev = xraySnapshotMap.get(clientId) || { last_activity_at: null };
+    xraySnapshotMap.set(clientId, {
+      last_rx: lastRx,
+      last_tx: lastTx,
+      last_activity_at: prev.last_activity_at != null ? prev.last_activity_at : null,
+    });
+  }
 }
 
 module.exports = {
@@ -218,4 +288,10 @@ module.exports = {
   stopTrafficRecorder,
   updateSnapshotForClient,
   updateXraySnapshotForClient,
+  getXrayLastActivityMap,
+  noteXrayActivity,
+  // test helpers
+  _sampleXray: sampleXray,
+  _flush: flush,
+  _loadXraySnapshot: loadXraySnapshot,
 };

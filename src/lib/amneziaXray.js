@@ -315,6 +315,8 @@ function buildServerConfigObject({ port, sni, privateKey, shortId, flow }) {
         '0': {
           statsUserUplink: true,
           statsUserDownlink: true,
+          // Presence for panel online indicator (idle VLESS sessions).
+          statsUserOnline: true,
         },
       },
       system: {
@@ -652,6 +654,50 @@ function parseStatsQueryOutput(raw) {
 }
 
 /**
+ * Parse online-user stats (`user>>>email>>>online` with value > 0).
+ * OnlineMap may be absent from QueryStats on some builds — empty Set is fine.
+ * @param {string} raw
+ * @returns {Set<string>} client emails currently online
+ */
+function parseOnlineStatsOutput(raw) {
+  const out = new Set();
+  const text = String(raw || '');
+
+  const apply = (name, value) => {
+    const m = String(name).match(/^user>>>(.+)>>>online$/);
+    if (!m) return;
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) out.add(m[1]);
+  };
+
+  try {
+    const json = JSON.parse(text);
+    const list = (json && (json.stat || json.Stat || json.stats)) || [];
+    if (Array.isArray(list)) {
+      for (const s of list) {
+        apply(s.name || s.Name || '', s.value != null ? s.value : s.Value);
+      }
+      if (out.size) return out;
+    }
+    // Single-stat shape from `xray api statsonline`
+    const one = json && (json.stat || json.Stat);
+    if (one && !Array.isArray(one)) {
+      apply(one.name || one.Name || '', one.value != null ? one.value : one.Value);
+      if (out.size) return out;
+    }
+  } catch {
+    /* fall through */
+  }
+
+  const re = /user>>>(.+?)>>>online["'\s,}:]+(?:value|Value)["'\s:=]+"?(\d+)/g;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    apply(`user>>>${match[1]}>>>online`, match[2]);
+  }
+  return out;
+}
+
+/**
  * Query per-user traffic from running amnezia-xray (by inbound email = client name).
  * @returns {Promise<Map<string, { uplink: number, downlink: number }>>}
  */
@@ -676,6 +722,29 @@ async function queryUserTrafficStats() {
     return parseStatsQueryOutput(`${r2.stdout || ''}\n${r2.stderr || ''}`);
   }
   return parseStatsQueryOutput(`${r.stdout || ''}\n${r.stderr || ''}`);
+}
+
+/**
+ * Best-effort set of currently online Xray user emails (client names).
+ * Relies on statsUserOnline; returns empty Set if API/build does not expose it.
+ * @returns {Promise<Set<string>>}
+ */
+async function queryOnlineUserEmails() {
+  if (!(await dockerContainerRunning())) return new Set();
+  const attempts = [
+    ['exec', CONTAINER_NAME, 'xray', 'api', 'statsquery',
+      '--server', `127.0.0.1:${XRAY_API_PORT}`, '-pattern', '>>>online'],
+    ['exec', CONTAINER_NAME, 'xray', 'api', 'statsquery',
+      '--server', `127.0.0.1:${XRAY_API_PORT}`, '-pattern', '>>>online', '-json'],
+  ];
+  for (const args of attempts) {
+    // eslint-disable-next-line no-await-in-loop
+    const r = await runCmd('docker', args, { timeout: 15_000 });
+    if (!r.ok) continue;
+    const set = parseOnlineStatsOutput(`${r.stdout || ''}\n${r.stderr || ''}`);
+    if (set.size) return set;
+  }
+  return new Set();
 }
 
 function normalizePort(raw, fallback = config.XRAY_PORT) {
@@ -1062,7 +1131,9 @@ module.exports = {
   buildServerConfigObject,
   parseX25519Output,
   parseStatsQueryOutput,
+  parseOnlineStatsOutput,
   queryUserTrafficStats,
+  queryOnlineUserEmails,
   probeListenInsideContainer,
   normalizePort,
   getPublicHost,

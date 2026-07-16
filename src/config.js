@@ -109,6 +109,11 @@ module.exports.UI_CHART_TYPE = process.env.UI_CHART_TYPE || 0;
 module.exports.TRAFFIC_SAMPLE_INTERVAL_SEC = Math.max(30, parseInt(process.env.TRAFFIC_SAMPLE_INTERVAL_SEC || '60', 10));
 module.exports.TRAFFIC_FLUSH_INTERVAL_SEC = Math.max(60, parseInt(process.env.TRAFFIC_FLUSH_INTERVAL_SEC || '120', 10));
 module.exports.TRAFFIC_BUFFER_MAX = Math.max(100, parseInt(process.env.TRAFFIC_BUFFER_MAX || '500', 10));
+// * Client online indicator: AWG handshake or Xray activity within this window (ms).
+module.exports.CLIENT_ONLINE_WINDOW_MS = Math.max(
+  60_000,
+  parseInt(process.env.CLIENT_ONLINE_WINDOW_MS || String(10 * 60 * 1000), 10) || (10 * 60 * 1000),
+);
 
 const getRandomInt = (min, max) => min + Math.floor(Math.random() * (max - min));
 const getRandomJunkSize = () => getRandomInt(15, 150);

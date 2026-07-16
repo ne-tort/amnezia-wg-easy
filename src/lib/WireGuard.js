@@ -27,6 +27,8 @@ const {
   syncClientsFromDb: syncAmneziaXrayClients,
   ensureClientUuids: ensureAmneziaXrayClientUuids,
 } = require('./amneziaXray');
+const { computeClientPresence } = require('./clientPresence');
+const { CLIENT_ONLINE_WINDOW_MS } = require('../config');
 
 function scheduleAmneziaXraySync() {
   try {
@@ -735,6 +737,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       downloadableConfig: 'privateKey' in client,
       persistentKeepalive: null,
       latestHandshakeAt: null,
+      latestXrayActivityAt: null,
+      latestActivityAt: null,
+      isOnline: false,
+      onlineSources: [],
       transferRx: null,
       transferTx: null,
       xrayUuid: client.xrayUuid || null,
@@ -770,6 +776,26 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
         client.transferTx = Number(transferTx);
         client.persistentKeepalive = persistentKeepalive;
       });
+
+    // Merge Xray presence (traffic / online stats via trafficRecorder) into online indicator.
+    // Lazy require: avoid WireGuard ↔ trafficRecorder cycle at module load.
+    // eslint-disable-next-line global-require
+    const { getXrayLastActivityMap } = require('./trafficRecorder');
+    const xrayActivity = getXrayLastActivityMap();
+    const now = Date.now();
+    for (const client of clients) {
+      const ts = xrayActivity.get(client.id);
+      client.latestXrayActivityAt = (ts != null && Number.isFinite(ts))
+        ? new Date(ts * 1000)
+        : null;
+      const presence = computeClientPresence({
+        latestHandshakeAt: client.latestHandshakeAt,
+        latestXrayActivityAt: client.latestXrayActivityAt,
+      }, { now, windowMs: CLIENT_ONLINE_WINDOW_MS });
+      client.latestActivityAt = presence.latestActivityAt;
+      client.isOnline = presence.isOnline;
+      client.onlineSources = presence.onlineSources;
+    }
 
     const creatorMap = db.clients.mapCreatedByUsernames(clients.map((c) => c.id));
     for (const c of clients) {

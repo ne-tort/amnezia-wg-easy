@@ -668,23 +668,35 @@ function trafficSnapshotUpsertMany(rows) {
 }
 
 function trafficXraySnapshotGetAll() {
-  return getDb().prepare('SELECT client_id, last_rx, last_tx, sampled_at FROM traffic_xray_snapshot').all();
+  return getDb().prepare(
+    'SELECT client_id, last_rx, last_tx, sampled_at, last_activity_at FROM traffic_xray_snapshot'
+  ).all();
 }
 
-function trafficXraySnapshotUpsert(clientId, lastRx, lastTx, sampledAt) {
+function trafficXraySnapshotUpsert(clientId, lastRx, lastTx, sampledAt, lastActivityAt = null) {
   getDb().prepare(
-    `INSERT INTO traffic_xray_snapshot (client_id, last_rx, last_tx, sampled_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(client_id) DO UPDATE SET last_rx = excluded.last_rx, last_tx = excluded.last_tx, sampled_at = excluded.sampled_at`
-  ).run(clientId, lastRx, lastTx, sampledAt);
+    `INSERT INTO traffic_xray_snapshot (client_id, last_rx, last_tx, sampled_at, last_activity_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(client_id) DO UPDATE SET
+       last_rx = excluded.last_rx,
+       last_tx = excluded.last_tx,
+       sampled_at = excluded.sampled_at,
+       last_activity_at = excluded.last_activity_at`
+  ).run(clientId, lastRx, lastTx, sampledAt, lastActivityAt);
 }
 
 function trafficXraySnapshotUpsertMany(rows) {
   const stmt = getDb().prepare(
-    `INSERT INTO traffic_xray_snapshot (client_id, last_rx, last_tx, sampled_at) VALUES (?, ?, ?, ?)
-     ON CONFLICT(client_id) DO UPDATE SET last_rx = excluded.last_rx, last_tx = excluded.last_tx, sampled_at = excluded.sampled_at`
+    `INSERT INTO traffic_xray_snapshot (client_id, last_rx, last_tx, sampled_at, last_activity_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(client_id) DO UPDATE SET
+       last_rx = excluded.last_rx,
+       last_tx = excluded.last_tx,
+       sampled_at = excluded.sampled_at,
+       last_activity_at = excluded.last_activity_at`
   );
   for (const r of rows) {
-    stmt.run(r.client_id, r.last_rx, r.last_tx, r.sampled_at);
+    stmt.run(r.client_id, r.last_rx, r.last_tx, r.sampled_at, r.last_activity_at ?? null);
   }
 }
 
