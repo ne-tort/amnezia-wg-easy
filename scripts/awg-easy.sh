@@ -133,21 +133,24 @@ cmd_ssl() {
 
 cmd_dns_on() {
   need_root
-  local catalog profile_id="1"
-  catalog=$(api GET /api/amnezia-dns/profiles 2>/dev/null || true)
-  profile_id=$(printf '%s' "$catalog" | sed -n 's/.*"defaultProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  profile_id="${profile_id:-1}"
-  api POST /api/amnezia-dns/enable "{\"profileId\":\"${profile_id}\"}"
+  # Empty body → keep stored profileId, else bank default
+  api POST /api/amnezia-dns/enable '{}'
 }
 cmd_dns_off() { need_root; api POST /api/amnezia-dns/disable '{}'; }
 
 cmd_xray_on() {
   need_root
   load_conf
-  local host port sni
+  local host port sni status sni_stored
   host=$(grep -E '^WG_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   port=$(grep -E '^XRAY_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   port="${port:-443}"
+  status=$(api GET /api/amnezia-xray 2>/dev/null || true)
+  sni_stored=$(printf '%s' "$status" | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if [[ -n "$sni_stored" ]]; then
+    api POST /api/amnezia-xray/enable "{\"port\":${port}}"
+    return 0
+  fi
   api GET '/api/amnezia-xray/sni-cache?ensureBg=1' >/tmp/awg-sni-cache.json || true
   sni=$(sed -n 's/.*"defaultSni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/awg-sni-cache.json 2>/dev/null | head -1)
   sni="${sni:-www.gov.uk}"

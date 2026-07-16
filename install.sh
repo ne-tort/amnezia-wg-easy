@@ -107,6 +107,7 @@ prompt_or_default() {
 
 confirm_yn() {
   # confirm_yn "prompt" default_y_or_n ENV → sets CONFIRM_RESULT=0/1
+  # Empty Enter always accepts the default (Y/n → yes, y/N → no).
   local prompt="$1" def="${2:-y}" envn="${3:-}"
   local ans=""
   if [[ -n "$envn" && -n "${!envn+x}" ]]; then
@@ -121,10 +122,15 @@ confirm_yn() {
   fi
   if [[ "$def" == "y" || "$def" == "Y" ]]; then
     read -rp "${prompt} [Y/n]: " ans || true
-    ans="${ans:-y}"
   else
     read -rp "${prompt} [y/N]: " ans || true
-    ans="${ans:-n}"
+  fi
+  # Trim whitespace; bare Enter → default
+  ans="${ans#"${ans%%[![:space:]]*}"}"
+  ans="${ans%"${ans##*[![:space:]]}"}"
+  if [[ -z "$ans" ]]; then
+    [[ "$def" == "y" || "$def" == "Y" ]] && CONFIRM_RESULT=1 || CONFIRM_RESULT=0
+    return 0
   fi
   case "$ans" in
     y|Y|yes|YES) CONFIRM_RESULT=1 ;;
@@ -1441,20 +1447,24 @@ api_login() {
 
 enable_dns() {
   logi "Включение Amnezia DNS..."
-  local catalog profile_id="1" resp code
-  catalog=$(api_curl GET /api/amnezia-dns/profiles || true)
-  profile_id=$(printf '%s' "$catalog" | sed -n 's/.*"defaultProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  profile_id="${profile_id:-1}"
-  logi "DNS profileId=${profile_id}"
+  local status profile_id="" resp
+  status=$(api_curl GET /api/amnezia-dns || true)
+  profile_id=$(printf '%s' "$status" | sed -n 's/.*"profileId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if [[ -n "$profile_id" ]]; then
+    logi "DNS: оставляю profileId=${profile_id}"
+  else
+    logi "DNS: profileId не задан — API возьмёт bank default"
+  fi
+  # Empty body → stored profile, else bank default (do not force catalog default on redeploy).
   # Enable can take minutes (Unbound pull/smoke); give curl enough time.
-  resp=$(api_curl POST /api/amnezia-dns/enable "{\"profileId\":\"${profile_id}\"}" || true)
+  resp=$(api_curl POST /api/amnezia-dns/enable '{}' || true)
   logi "DNS: ${resp:0:240}"
   if echo "$resp" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true|"phase"[[:space:]]*:[[:space:]]*"running"'; then
     return 0
   fi
   logw "DNS enable не подтверждён — повтор через 5с..."
   sleep 5
-  resp=$(api_curl POST /api/amnezia-dns/enable "{\"profileId\":\"${profile_id}\"}" || true)
+  resp=$(api_curl POST /api/amnezia-dns/enable '{}' || true)
   logi "DNS retry: ${resp:0:240}"
   if echo "$resp" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true|"phase"[[:space:]]*:[[:space:]]*"running"'; then
     return 0
@@ -1470,14 +1480,25 @@ base24_from_ip() {
 }
 
 enable_xray() {
-  logi "Подготовка Xray (SNI Finder + enable)..."
+  logi "Подготовка Xray..."
   local sni="" address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
-  local cidr port=443
+  local cidr port=443 status sni_stored body resp
   port=$(grep -E '^XRAY_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   port="${port:-443}"
-  cidr=$(base24_from_ip "${SERVER_IP:-0.0.0.0}")
 
-  # Trigger / wait for cache
+  # Reuse persisted SNI/fp/flow/address on redeploy — never force a new scan.
+  status=$(api_curl GET /api/amnezia-xray || true)
+  sni_stored=$(printf '%s' "$status" | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if [[ -n "$sni_stored" ]]; then
+    logi "Xray: оставляю SNI ${sni_stored} (без скана)"
+    body=$(printf '{"port":%s}' "$port")
+    resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
+    logi "Xray enable: ${resp:0:300}"
+    return 0
+  fi
+
+  logi "Xray: SNI ещё не задан — SNI Finder + enable"
+  cidr=$(base24_from_ip "${SERVER_IP:-0.0.0.0}")
   api_curl GET "/api/amnezia-xray/sni-cache?ensureBg=1" >/tmp/awg-sni-cache.json || true
   if [[ -n "$SERVER_IP" && "$cidr" != "0.0.0.0/24" ]]; then
     logi "SNI scan ${cidr}..."
@@ -1509,10 +1530,8 @@ PY
     logi "Выбран SNI: ${sni}"
   fi
 
-  local body
   body=$(printf '{"sni":"%s","fingerprint":"chrome","flow":"xtls-rprx-vision","port":%s,"address":"%s"}' \
     "$sni" "$port" "$address")
-  local resp
   resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
   logi "Xray enable: ${resp:0:300}"
 }
@@ -1569,13 +1588,21 @@ main() {
   prompt_admin
   prompt_ports
   prompt_and_setup_ssl
-  local dns_def xray_def
-  dns_def=$(detect_service_enabled_default dns)
-  xray_def=$(detect_service_enabled_default xray)
-  confirm_yn "Включить Amnezia DNS после установки?" "$dns_def" AWG_ENABLE_DNS
-  ENABLE_DNS=$CONFIRM_RESULT
-  confirm_yn "Включить Xray (VLESS Reality + SNI Finder) после установки?" "$xray_def" AWG_ENABLE_XRAY
-  ENABLE_XRAY=$CONFIRM_RESULT
+  if is_redeploy; then
+    # Skip DNS/Xray prompts on redeploy — keep first-install choices from install.conf / containers.
+    local dns_def xray_def
+    dns_def=$(detect_service_enabled_default dns)
+    xray_def=$(detect_service_enabled_default xray)
+    [[ "$dns_def" == "y" || "$dns_def" == "Y" ]] && ENABLE_DNS=1 || ENABLE_DNS=0
+    [[ "$xray_def" == "y" || "$xray_def" == "Y" ]] && ENABLE_XRAY=1 || ENABLE_XRAY=0
+    logi "Редеплой: DNS=${ENABLE_DNS}, Xray=${ENABLE_XRAY} (без вопросов; настройки из первого деплоя)"
+  else
+    # Enter = yes ([Y/n]).
+    confirm_yn "Включить Amnezia DNS после установки?" y AWG_ENABLE_DNS
+    ENABLE_DNS=$CONFIRM_RESULT
+    confirm_yn "Включить Xray (VLESS Reality + SNI Finder) после установки?" y AWG_ENABLE_XRAY
+    ENABLE_XRAY=$CONFIRM_RESULT
+  fi
   write_env
   run_deploy
   install_cli
