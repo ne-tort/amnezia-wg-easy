@@ -209,15 +209,18 @@ clone_or_update_repo() {
   if [[ -d "$INSTALL_DIR/.git" ]]; then
     logi "Обновление репозитория в ${INSTALL_DIR} → ${GIT_REF} (hard reset)..."
     git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" 2>/dev/null || true
+    # Drop local edits (e.g. installed /usr copy touching scripts/) so checkout cannot abort.
+    git -C "$INSTALL_DIR" reset --hard HEAD >/dev/null 2>&1 || true
+    git -C "$INSTALL_DIR" clean -fd >/dev/null 2>&1 || true
     # Shallow trees often stick on an old tip; force sync to origin/<ref>.
     if ! git -C "$INSTALL_DIR" fetch --depth 1 origin "$GIT_REF"; then
       git -C "$INSTALL_DIR" fetch origin "$GIT_REF" || git -C "$INSTALL_DIR" fetch origin
     fi
     if git -C "$INSTALL_DIR" rev-parse --verify "origin/${GIT_REF}" >/dev/null 2>&1; then
-      git -C "$INSTALL_DIR" checkout -B "$GIT_REF" "origin/${GIT_REF}"
+      git -C "$INSTALL_DIR" checkout -f -B "$GIT_REF" "origin/${GIT_REF}"
       git -C "$INSTALL_DIR" reset --hard "origin/${GIT_REF}"
     else
-      git -C "$INSTALL_DIR" checkout -B "$GIT_REF" FETCH_HEAD
+      git -C "$INSTALL_DIR" checkout -f -B "$GIT_REF" FETCH_HEAD
       git -C "$INSTALL_DIR" reset --hard FETCH_HEAD
     fi
     git -C "$INSTALL_DIR" clean -fd
