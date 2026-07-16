@@ -372,8 +372,11 @@ function writeServerJson(obj) {
 }
 
 /**
- * Minimal client JSON (one VLESS Reality outbound) for subscription / Preview.
- * spiderX left empty (Amnezia / Xray default → "/"); do not put spiderX in vless://.
+ * Client Xray JSON for Amnezia `.vpn` / Preview / subscription.
+ * Must match amnezia-client `server_scripts/xray/template.json` +
+ * `serialization::inbounds::GenerateInboundEntry()` (SOCKS 127.0.0.1:10808):
+ * Amnezia XrayProtocol starts this JSON as-is, then tun2socks → socks5://127.0.0.1:10808.
+ * spiderX left empty (Xray default "/"); omit spiderX from vless://.
  */
 function buildClientJson({ uuid, host, port, sni, publicKey, shortId, fingerprint, flow, remark }) {
   /** @type {Record<string, unknown>} */
@@ -383,34 +386,44 @@ function buildClientJson({ uuid, host, port, sni, publicKey, shortId, fingerprin
   };
   if (flow) user.flow = flow;
 
+  /** @type {Record<string, unknown>} */
+  const outbound = {
+    protocol: 'vless',
+    settings: {
+      vnext: [
+        {
+          address: host,
+          port,
+          users: [user],
+        },
+      ],
+    },
+    streamSettings: {
+      network: 'tcp',
+      security: 'reality',
+      realitySettings: {
+        fingerprint,
+        serverName: sni,
+        publicKey,
+        shortId,
+        spiderX: '',
+      },
+    },
+  };
+  // Amnezia template has no outbound tag; keep optional remark only for non-Amnezia preview.
+  if (remark) outbound.tag = remark;
+
   return {
-    log: { loglevel: 'warning' },
-    outbounds: [
+    log: { loglevel: 'error' },
+    inbounds: [
       {
-        protocol: 'vless',
-        settings: {
-          vnext: [
-            {
-              address: host,
-              port,
-              users: [user],
-            },
-          ],
-        },
-        streamSettings: {
-          network: 'tcp',
-          security: 'reality',
-          realitySettings: {
-            fingerprint,
-            serverName: sni,
-            publicKey,
-            shortId,
-            spiderX: '',
-          },
-        },
-        tag: remark || 'proxy',
+        listen: '127.0.0.1',
+        port: 10808,
+        protocol: 'socks',
+        settings: { udp: true },
       },
     ],
+    outbounds: [outbound],
   };
 }
 
@@ -511,16 +524,25 @@ function getClientXrayPayload(client, opts = {}) {
 }
 
 /**
- * Amnezia `.vpn` xray container block (client template last_config).
+ * Amnezia `.vpn` xray container block.
+ * Shape matches ImportController::extractXrayConfig + XrayConfigurator::createConfig:
+ *   { container: "amnezia-xray", xray: { last_config: "<full client json>", isThirdPartyConfig, port, site, transport_proto } }
+ * last_config is the stringified client template (inbounds SOCKS + VLESS Reality outbound).
  */
 function buildAmneziaXrayContainer(client) {
   const payload = getClientXrayPayload(client);
   if (!payload) return null;
   const last = payload.clientJson;
+  // Amnezia template has no outbound tag — strip before embedding in .vpn
+  const forVpn = JSON.parse(JSON.stringify(last));
+  if (forVpn.outbounds && forVpn.outbounds[0] && forVpn.outbounds[0].tag) {
+    delete forVpn.outbounds[0].tag;
+  }
   return {
     container: 'amnezia-xray',
     xray: {
-      last_config: JSON.stringify(last),
+      last_config: JSON.stringify(forVpn),
+      isThirdPartyConfig: true,
       port: String(payload.port),
       site: payload.sni,
       transport_proto: 'tcp',

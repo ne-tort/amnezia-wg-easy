@@ -199,6 +199,35 @@ test('buildVlessUrl omits spiderX; clientJson keeps empty spiderX', () => {
     flow: 'xtls-rprx-vision',
   });
   assert.equal(json.outbounds[0].streamSettings.realitySettings.spiderX, '');
+  assert.ok(Array.isArray(json.inbounds));
+  assert.equal(json.inbounds[0].listen, '127.0.0.1');
+  assert.equal(json.inbounds[0].port, 10808);
+  assert.equal(json.inbounds[0].protocol, 'socks');
+  assert.equal(json.inbounds[0].settings.udp, true);
+  assert.equal(json.log.loglevel, 'error');
+});
+
+test('buildAmneziaXrayContainer matches Amnezia extractXrayConfig shape', () => {
+  const { amneziaXray, settings } = loadAmneziaXray();
+  settings.amnezia_xray_desired = '1';
+  settings.amnezia_xray_public_key = 'pub';
+  settings.amnezia_xray_short_id = 'sid1234';
+  settings.amnezia_xray_sni = 'www.example.com';
+  settings.amnezia_xray_port = '443';
+  settings.amnezia_xray_address = '1.2.3.4';
+  const el = amneziaXray.buildAmneziaXrayContainer({
+    name: 'alice',
+    xray_uuid: '11111111-1111-1111-1111-111111111111',
+  });
+  assert.equal(el.container, 'amnezia-xray');
+  assert.equal(el.xray.isThirdPartyConfig, true);
+  assert.equal(el.xray.port, '443');
+  assert.equal(el.xray.site, 'www.example.com');
+  assert.equal(el.xray.transport_proto, 'tcp');
+  const lc = JSON.parse(el.xray.last_config);
+  assert.equal(lc.inbounds[0].port, 10808);
+  assert.equal(lc.outbounds[0].settings.vnext[0].address, '1.2.3.4');
+  assert.equal(lc.outbounds[0].tag, undefined);
 });
 
 test('disable-shaped settings: address and keys survive in app_settings map', () => {
