@@ -1004,11 +1004,22 @@ module.exports = class Server {
         acl.requireCapability(event, acl.CAP.SYSTEM_DNS);
         try {
           const body = await readBody(event).catch(() => ({}));
-          const profileId = body && body.profileId != null ? body.profileId : undefined;
-          if (profileId === undefined || profileId === null || String(profileId).trim() === '') {
+          let profileId = body && body.profileId != null ? String(body.profileId).trim() : '';
+          // Empty body / omitted profileId → bank default (installer & awg-easy send {}).
+          if (!profileId) {
+            try {
+              const catalog = require('./dnsProfilesBank').getProfilesCatalog();
+              profileId = catalog && catalog.defaultProfile
+                ? String(catalog.defaultProfile)
+                : '';
+            } catch {
+              profileId = '';
+            }
+          }
+          if (!profileId) {
             throw httpError(400, 'profileId is required');
           }
-          const status = await amneziaDns.enable({ profileId: String(profileId).trim() });
+          const status = await amneziaDns.enable({ profileId });
           return { success: true, ...status };
         } catch (err) {
           if (err && err.statusCode) throw err;

@@ -131,7 +131,14 @@ cmd_ssl() {
   echo "  bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)"
 }
 
-cmd_dns_on() { need_root; api POST /api/amnezia-dns/enable '{}'; }
+cmd_dns_on() {
+  need_root
+  local catalog profile_id="1"
+  catalog=$(api GET /api/amnezia-dns/profiles 2>/dev/null || true)
+  profile_id=$(printf '%s' "$catalog" | sed -n 's/.*"defaultProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  profile_id="${profile_id:-1}"
+  api POST /api/amnezia-dns/enable "{\"profileId\":\"${profile_id}\"}"
+}
 cmd_dns_off() { need_root; api POST /api/amnezia-dns/disable '{}'; }
 
 cmd_xray_on() {

@@ -11,6 +11,8 @@
 #   AWG_ENABLE_DNS=1|0  AWG_ENABLE_XRAY=1|0
 #   AWG_INSTALL_DIR=/opt/amnezia-wg-easy  AWG_GIT_REF=master
 #   AWG_REPO_URL=https://github.com/ne-tort/amnezia-wg-easy.git
+#   AWG_SSL_FORCE_RENEW=1  — принудительный повторный выпуск LE (по умолчанию reuse)
+#   AWG_SSL_REUSE_MIN_DAYS / AWG_SSL_REUSE_MIN_DAYS_IP — мин. остаток дней для reuse
 
 set -euo pipefail
 
@@ -298,6 +300,105 @@ volume_name_certbot() {
   echo "${COMPOSE_PROJECT_NAME}_certbot_conf"
 }
 
+# Min remaining lifetime before we refuse to reuse (days). Domain ≈14, IP shortlived ≈1.
+CERT_REUSE_MIN_DAYS_DOMAIN="${AWG_SSL_REUSE_MIN_DAYS:-14}"
+CERT_REUSE_MIN_DAYS_IP="${AWG_SSL_REUSE_MIN_DAYS_IP:-1}"
+
+cert_pair_usable() {
+  # cert_pair_usable DIR [min_days]
+  local dir="$1" min_days="${2:-7}"
+  local pem="${dir}/fullchain.pem" key="${dir}/privkey.pem"
+  [[ -f "$pem" && -f "$key" && -s "$pem" && -s "$key" ]] || return 1
+  command -v openssl >/dev/null 2>&1 || return 1
+  openssl x509 -in "$pem" -noout -checkend $((min_days * 86400)) >/dev/null 2>&1
+}
+
+export_certs_from_volume() {
+  local domain="$1" dest="$2"
+  local vol
+  vol=$(volume_name_certbot)
+  docker volume inspect "$vol" >/dev/null 2>&1 || return 1
+  mkdir -p "$dest"
+  docker run --rm \
+    -v "${vol}:/etc/letsencrypt:ro" \
+    -v "${dest}:/out" \
+    alpine:3.20 sh -c "
+      set -e
+      src='/etc/letsencrypt/live/${domain}'
+      if [ ! -f \"\$src/fullchain.pem\" ] || [ ! -f \"\$src/privkey.pem\" ]; then
+        exit 1
+      fi
+      cp \"\$src/fullchain.pem\" /out/fullchain.pem
+      cp \"\$src/privkey.pem\" /out/privkey.pem
+    " >/dev/null 2>&1
+}
+
+installcert_from_acme() {
+  # Copy already-issued acme.sh cert into host dir (no LE request).
+  local name="$1" dest_dir="$2"
+  local reload_cmd="docker exec nginx nginx -s reload 2>/dev/null || true"
+  mkdir -p "$dest_dir"
+  "$(acme_bin)" --install-cert -d "$name" \
+    --key-file "${dest_dir}/privkey.pem" \
+    --fullchain-file "${dest_dir}/fullchain.pem" \
+    --reloadcmd "$reload_cmd" >/dev/null 2>&1
+}
+
+try_reuse_certificate() {
+  # try_reuse_certificate NAME HOST_DIR MIN_DAYS
+  # Looks in: HOST_DIR → docker volume → acme.sh home. On success injects volume.
+  local name="$1" host_dir="$2" min_days="${3:-14}"
+  local tmp
+
+  if [[ "${AWG_SSL_FORCE_RENEW:-0}" == "1" ]]; then
+    logw "AWG_SSL_FORCE_RENEW=1 — пропуск переиспользования сертификата"
+    return 1
+  fi
+
+  if cert_pair_usable "$host_dir" "$min_days"; then
+    logi "Переиспользую действующий сертификат: ${host_dir}"
+    inject_certs_to_volume "$name" "$host_dir" || return 1
+    return 0
+  fi
+
+  # Domain/IP name under CERT_HOST_DIR may already exist with correct files
+  if [[ "$host_dir" != "${CERT_HOST_DIR}/${name}" ]] \
+    && cert_pair_usable "${CERT_HOST_DIR}/${name}" "$min_days"; then
+    logi "Переиспользую сертификат: ${CERT_HOST_DIR}/${name}"
+    mkdir -p "$host_dir"
+    cp "${CERT_HOST_DIR}/${name}/fullchain.pem" "${host_dir}/fullchain.pem"
+    cp "${CERT_HOST_DIR}/${name}/privkey.pem" "${host_dir}/privkey.pem"
+    inject_certs_to_volume "$name" "$host_dir" || return 1
+    return 0
+  fi
+
+  tmp=$(mktemp -d)
+  if export_certs_from_volume "$name" "$tmp" && cert_pair_usable "$tmp" "$min_days"; then
+    logi "Переиспользую сертификат из Docker volume $(volume_name_certbot)/live/${name}"
+    mkdir -p "$host_dir"
+    cp "${tmp}/fullchain.pem" "${host_dir}/fullchain.pem"
+    cp "${tmp}/privkey.pem" "${host_dir}/privkey.pem"
+    rm -rf "$tmp"
+    inject_certs_to_volume "$name" "$host_dir" || return 1
+    return 0
+  fi
+  rm -rf "$tmp"
+
+  if [[ -x "$(acme_bin)" ]] || [[ -x "${ACME_HOME}/acme.sh" ]]; then
+    install_acme || true
+    if [[ -d "${ACME_HOME}/${name}_ecc" || -d "${ACME_HOME}/${name}" \
+      || -d "${ACME_HOME}/${name}_rsa" ]]; then
+      logi "Найден сертификат acme.sh для ${name} — устанавливаю без повторного выпуска"
+      if installcert_from_acme "$name" "$host_dir" && cert_pair_usable "$host_dir" "$min_days"; then
+        inject_certs_to_volume "$name" "$host_dir" || return 1
+        return 0
+      fi
+    fi
+  fi
+
+  return 1
+}
+
 inject_certs_to_volume() {
   local domain="$1"
   local src_dir="$2"
@@ -325,24 +426,49 @@ inject_certs_to_volume() {
 setup_domain_certificate() {
   local domain="$1"
   local email="$2"
+  local host_dir="${CERT_HOST_DIR}/${domain}"
+  mkdir -p "$host_dir"
+
+  if try_reuse_certificate "$domain" "$host_dir" "$CERT_REUSE_MIN_DAYS_DOMAIN"; then
+    SSL_MODE="acme"
+    SSL_HOST="$domain"
+    PANEL_DOMAIN_VAL="$domain"
+    return 0
+  fi
+
   install_acme || return 1
   free_port_80
-  mkdir -p "${CERT_HOST_DIR}/${domain}"
-  "$(acme_bin)" --set-default-ca --server letsencrypt --force >/dev/null 2>&1 || true
+  "$(acme_bin)" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
   if [[ -n "$email" ]]; then
     "$(acme_bin)" --register-account -m "$email" >/dev/null 2>&1 || true
   fi
-  logi "Выпуск LE-сертификата для домена ${domain}..."
-  if ! "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 --force; then
+  logi "Выпуск LE-сертификата для домена ${domain} (без --force; повторный выпуск только если нет действующего)..."
+  # Do NOT pass --force: acme.sh will reuse its own cert when still valid.
+  local issue_ok=0
+  if [[ "${AWG_SSL_FORCE_RENEW:-0}" == "1" ]]; then
+    logw "Принудительный выпуск (AWG_SSL_FORCE_RENEW=1)"
+    "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 --force && issue_ok=1
+  else
+    "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 && issue_ok=1
+  fi
+  if [[ "$issue_ok" -ne 1 ]]; then
+    # Last chance: maybe issue failed due to rate limit but local cert still usable with shorter TTL
+    if try_reuse_certificate "$domain" "$host_dir" 1; then
+      logw "Выпуск не удался — использую имеющийся сертификат (осталось >=1 дня)"
+      SSL_MODE="acme"
+      SSL_HOST="$domain"
+      PANEL_DOMAIN_VAL="$domain"
+      return 0
+    fi
     loge "Не удалось выпустить сертификат для ${domain} (порт 80 должен быть открыт)"
     return 1
   fi
   local reload_cmd="docker exec nginx nginx -s reload 2>/dev/null || true"
-  "$(acme_bin)" --installcert --force -d "$domain" \
-    --key-file "${CERT_HOST_DIR}/${domain}/privkey.pem" \
-    --fullchain-file "${CERT_HOST_DIR}/${domain}/fullchain.pem" \
+  "$(acme_bin)" --install-cert -d "$domain" \
+    --key-file "${host_dir}/privkey.pem" \
+    --fullchain-file "${host_dir}/fullchain.pem" \
     --reloadcmd "$reload_cmd" || true
-  inject_certs_to_volume "$domain" "${CERT_HOST_DIR}/${domain}" || return 1
+  inject_certs_to_volume "$domain" "$host_dir" || return 1
   "$(acme_bin)" --upgrade --auto-upgrade >/dev/null 2>&1 || true
   SSL_MODE="acme"
   SSL_HOST="$domain"
@@ -353,35 +479,63 @@ setup_domain_certificate() {
 setup_ip_certificate() {
   local ipv4="$1"
   local ipv6="${2:-}"
+  local host_dir="${CERT_HOST_DIR}/ip"
+  mkdir -p "$host_dir"
+
+  if try_reuse_certificate "$ipv4" "$host_dir" "$CERT_REUSE_MIN_DAYS_IP"; then
+    SSL_MODE="acme"
+    SSL_HOST="$ipv4"
+    PANEL_DOMAIN_VAL="$ipv4"
+    return 0
+  fi
+
   install_acme || return 1
   free_port_80
-  mkdir -p "${CERT_HOST_DIR}/ip"
-  local domain_args="-d ${ipv4}"
+  local domain_args=(-d "$ipv4")
   if [[ -n "$ipv6" ]] && is_ipv6 "$ipv6"; then
-    domain_args="${domain_args} -d ${ipv6}"
+    domain_args+=(-d "$ipv6")
   fi
-  "$(acme_bin)" --set-default-ca --server letsencrypt --force >/dev/null 2>&1 || true
+  "$(acme_bin)" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
   if [[ -n "${CERTBOT_EMAIL_VAL}" ]]; then
     "$(acme_bin)" --register-account -m "${CERTBOT_EMAIL_VAL}" >/dev/null 2>&1 || true
   fi
   logi "Выпуск LE IP-сертификата (shortlived ~6 дней) для ${ipv4}..."
-  if ! "$(acme_bin)" --issue \
-    ${domain_args} \
-    --standalone \
-    --server letsencrypt \
-    --certificate-profile shortlived \
-    --days 6 \
-    --httpport 80 \
-    --force; then
+  local issue_ok=0
+  if [[ "${AWG_SSL_FORCE_RENEW:-0}" == "1" ]]; then
+    "$(acme_bin)" --issue \
+      "${domain_args[@]}" \
+      --standalone \
+      --server letsencrypt \
+      --certificate-profile shortlived \
+      --days 6 \
+      --httpport 80 \
+      --force && issue_ok=1
+  else
+    "$(acme_bin)" --issue \
+      "${domain_args[@]}" \
+      --standalone \
+      --server letsencrypt \
+      --certificate-profile shortlived \
+      --days 6 \
+      --httpport 80 && issue_ok=1
+  fi
+  if [[ "$issue_ok" -ne 1 ]]; then
+    if try_reuse_certificate "$ipv4" "$host_dir" 0; then
+      logw "Выпуск IP-серта не удался — использую имеющийся (ещё не истёк)"
+      SSL_MODE="acme"
+      SSL_HOST="$ipv4"
+      PANEL_DOMAIN_VAL="$ipv4"
+      return 0
+    fi
     loge "Не удалось выпустить IP-сертификат (нужен открытый TCP/80 с интернета)"
     return 1
   fi
   local reload_cmd="docker exec nginx nginx -s reload 2>/dev/null || true"
-  "$(acme_bin)" --installcert --force -d "$ipv4" \
-    --key-file "${CERT_HOST_DIR}/ip/privkey.pem" \
-    --fullchain-file "${CERT_HOST_DIR}/ip/fullchain.pem" \
+  "$(acme_bin)" --install-cert -d "$ipv4" \
+    --key-file "${host_dir}/privkey.pem" \
+    --fullchain-file "${host_dir}/fullchain.pem" \
     --reloadcmd "$reload_cmd" || true
-  inject_certs_to_volume "$ipv4" "${CERT_HOST_DIR}/ip" || return 1
+  inject_certs_to_volume "$ipv4" "$host_dir" || return 1
   "$(acme_bin)" --upgrade --auto-upgrade >/dev/null 2>&1 || true
   SSL_MODE="acme"
   SSL_HOST="$ipv4"
@@ -601,12 +755,14 @@ api_curl() {
   base=$(panel_probe_url)
   base="${base%/}"
   cookie="${CONF_DIR}/session.cj"
+  local maxtime=120
+  [[ "$path" == *"/amnezia-dns/enable"* ]] && maxtime=180
   if [[ -n "$body" ]]; then
     curl -sk -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" \
       -H 'Content-Type: application/json' \
-      -d "$body" --max-time 120
+      -d "$body" --max-time "$maxtime"
   else
-    curl -sk -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" --max-time 120
+    curl -sk -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" --max-time "$maxtime"
   fi
 }
 
@@ -628,9 +784,25 @@ api_login() {
 
 enable_dns() {
   logi "Включение Amnezia DNS..."
-  local resp
-  resp=$(api_curl POST /api/amnezia-dns/enable '{}' || true)
+  local catalog profile_id="1" resp code
+  catalog=$(api_curl GET /api/amnezia-dns/profiles || true)
+  profile_id=$(printf '%s' "$catalog" | sed -n 's/.*"defaultProfile"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  profile_id="${profile_id:-1}"
+  logi "DNS profileId=${profile_id}"
+  # Enable can take minutes (Unbound pull/smoke); give curl enough time.
+  resp=$(api_curl POST /api/amnezia-dns/enable "{\"profileId\":\"${profile_id}\"}" || true)
   logi "DNS: ${resp:0:240}"
+  if echo "$resp" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true|"phase"[[:space:]]*:[[:space:]]*"running"'; then
+    return 0
+  fi
+  logw "DNS enable не подтверждён — повтор через 5с..."
+  sleep 5
+  resp=$(api_curl POST /api/amnezia-dns/enable "{\"profileId\":\"${profile_id}\"}" || true)
+  logi "DNS retry: ${resp:0:240}"
+  if echo "$resp" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true|"phase"[[:space:]]*:[[:space:]]*"running"'; then
+    return 0
+  fi
+  return 1
 }
 
 base24_from_ip() {
