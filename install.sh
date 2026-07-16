@@ -312,8 +312,10 @@ REUSE_SSL_SOURCE=""
 
 cert_pair_usable() {
   # cert_pair_usable DIR [min_days]
-  local dir="$1" min_days="${2:-7}"
-  local pem="${dir}/fullchain.pem" key="${dir}/privkey.pem"
+  local dir="$1"
+  local min_days="${2:-7}"
+  local pem="${dir}/fullchain.pem"
+  local key="${dir}/privkey.pem"
   [[ -f "$pem" && -f "$key" && -s "$pem" && -s "$key" ]] || return 1
   command -v openssl >/dev/null 2>&1 || return 1
   openssl x509 -in "$pem" -noout -checkend $((min_days * 86400)) >/dev/null 2>&1
@@ -339,7 +341,9 @@ cert_cn_or_name() {
 
 apply_reuse_from_dir() {
   # apply_reuse_from_dir NAME SRC_DIR — copy into CERT_HOST_DIR + inject compose volume
-  local name="$1" src="$2" dest="${CERT_HOST_DIR}/${name}"
+  local name="$1"
+  local src="$2"
+  local dest="${CERT_HOST_DIR}/${name}"
   mkdir -p "$dest"
   if [[ "$(readlink -f "$src" 2>/dev/null || echo "$src")" != "$(readlink -f "$dest" 2>/dev/null || echo "$dest")" ]]; then
     cp -f "${src}/fullchain.pem" "${dest}/fullchain.pem"
