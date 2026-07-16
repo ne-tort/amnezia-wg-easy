@@ -191,6 +191,11 @@ install_docker() {
 }
 
 detect_public_ip() {
+  if [[ -n "${AWG_SERVER_IP_PRESET:-}" ]] && is_ipv4 "${AWG_SERVER_IP_PRESET}"; then
+    SERVER_IP="$AWG_SERVER_IP_PRESET"
+    logi "Публичный IP: ${SERVER_IP}"
+    return 0
+  fi
   SERVER_IP=$(curl -4 -fsS --max-time 8 https://ifconfig.me 2>/dev/null \
     || curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null \
     || curl -4 -fsS --max-time 8 https://icanhazip.com 2>/dev/null \
@@ -202,6 +207,25 @@ detect_public_ip() {
   else
     logi "Публичный IP: ${SERVER_IP}"
   fi
+}
+
+# bash <(curl …) keeps running the downloaded fd even after git updates INSTALL_DIR.
+# Re-exec the repo copy once so prompts/ports logic always match origin/master.
+reexec_from_repo_if_needed() {
+  local repo_script="${INSTALL_DIR}/install.sh"
+  local self target
+  [[ -f "$repo_script" ]] || return 0
+  [[ "${AWG_REEXECED:-0}" == "1" ]] && return 0
+  # BASH_SOURCE[0] is this file (e.g. /dev/fd/N for curl|bash, or INSTALL_DIR/install.sh).
+  self=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
+  target=$(readlink -f "$repo_script" 2>/dev/null || echo "$repo_script")
+  if [[ "$self" == "$target" ]]; then
+    return 0
+  fi
+  logi "Перезапуск актуального установщика: ${repo_script}"
+  export AWG_REEXECED=1
+  export AWG_SERVER_IP_PRESET="${SERVER_IP:-}"
+  exec bash "$repo_script" "$@"
 }
 
 clone_or_update_repo() {
@@ -1541,6 +1565,7 @@ main() {
   install_docker
   detect_public_ip
   clone_or_update_repo
+  reexec_from_repo_if_needed "$@"
   prompt_admin
   prompt_ports
   prompt_and_setup_ssl
