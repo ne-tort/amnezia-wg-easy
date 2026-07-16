@@ -207,7 +207,7 @@ test('buildVlessUrl omits spiderX; clientJson keeps empty spiderX', () => {
   assert.equal(json.log.loglevel, 'error');
 });
 
-test('buildAmneziaXrayContainer matches Amnezia extractXrayConfig shape', () => {
+test('buildAmneziaXrayContainer matches official Amnezia connection .vpn shape', () => {
   const { amneziaXray, settings } = loadAmneziaXray();
   settings.amnezia_xray_desired = '1';
   settings.amnezia_xray_public_key = 'pub';
@@ -220,13 +220,20 @@ test('buildAmneziaXrayContainer matches Amnezia extractXrayConfig shape', () => 
     xray_uuid: '11111111-1111-1111-1111-111111111111',
   });
   assert.equal(el.container, 'amnezia-xray');
-  assert.equal(el.xray.isThirdPartyConfig, true);
+  assert.deepEqual(Object.keys(el.xray), ['last_config', 'port', 'subnet_address', 'transport_proto']);
   assert.equal(el.xray.port, '443');
-  assert.equal(el.xray.site, 'www.example.com');
+  assert.equal(el.xray.subnet_address, '10.8.1.0');
   assert.equal(el.xray.transport_proto, 'tcp');
+  assert.equal(el.xray.isThirdPartyConfig, undefined);
+  assert.equal(el.xray.site, undefined);
+  assert.ok(el.xray.last_config.includes('\n'), 'last_config must be pretty-printed like official export');
   const lc = JSON.parse(el.xray.last_config);
   assert.equal(lc.inbounds[0].port, 10808);
   assert.equal(lc.outbounds[0].settings.vnext[0].address, '1.2.3.4');
+  assert.deepEqual(
+    Object.keys(lc.outbounds[0].settings.vnext[0].users[0]),
+    ['id', 'flow', 'encryption'],
+  );
   assert.equal(lc.outbounds[0].tag, undefined);
 });
 

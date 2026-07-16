@@ -379,12 +379,11 @@ function writeServerJson(obj) {
  * spiderX left empty (Xray default "/"); omit spiderX from vless://.
  */
 function buildClientJson({ uuid, host, port, sni, publicKey, shortId, fingerprint, flow, remark }) {
+  // Field order matches amnezia-client server_scripts/xray/template.json
   /** @type {Record<string, unknown>} */
-  const user = {
-    id: uuid,
-    encryption: 'none',
-  };
+  const user = { id: uuid };
   if (flow) user.flow = flow;
+  user.encryption = 'none';
 
   /** @type {Record<string, unknown>} */
   const outbound = {
@@ -523,11 +522,14 @@ function getClientXrayPayload(client, opts = {}) {
   };
 }
 
+/** Default subnet_address in official Amnezia Xray connection .vpn exports. */
+const AMNEZIA_XRAY_SUBNET = '10.8.1.0';
+
 /**
  * Amnezia `.vpn` xray container block.
- * Shape matches ImportController::extractXrayConfig + XrayConfigurator::createConfig:
- *   { container: "amnezia-xray", xray: { last_config: "<full client json>", isThirdPartyConfig, port, site, transport_proto } }
- * last_config is the stringified client template (inbounds SOCKS + VLESS Reality outbound).
+ * Matches official ExportController::generateConnectionConfig for amnezia-xray:
+ *   { container, xray: { last_config, port, subnet_address, transport_proto } }
+ * last_config = pretty-printed template.json (SOCKS 10808 + VLESS Reality outbound).
  */
 function buildAmneziaXrayContainer(client) {
   const payload = getClientXrayPayload(client);
@@ -538,13 +540,13 @@ function buildAmneziaXrayContainer(client) {
   if (forVpn.outbounds && forVpn.outbounds[0] && forVpn.outbounds[0].tag) {
     delete forVpn.outbounds[0].tag;
   }
+  // Official client stores last_config as indented template JSON (4 spaces).
   return {
     container: 'amnezia-xray',
     xray: {
-      last_config: JSON.stringify(forVpn),
-      isThirdPartyConfig: true,
+      last_config: `${JSON.stringify(forVpn, null, 4)}\n`,
       port: String(payload.port),
-      site: payload.sni,
+      subnet_address: AMNEZIA_XRAY_SUBNET,
       transport_proto: 'tcp',
     },
   };
