@@ -1,7 +1,7 @@
 # Amnezia WG-Easy — ./deploy.sh or: docker compose up -d --build
 # Amnezia DNS / Xray match amnezia-client: optional containers via docker run (not compose services).
 # Network amnezia-dns-net is created by deploy.sh (same as client prepare_host.sh); panel attaches as external.
-# Xray publishes XRAY_PORT on the host when enabled from the panel (default 8443).
+# Xray publishes XRAY_PORT on the host when enabled from the panel (default 443).
 
 services:
   amnezia-wg-easy:
@@ -51,7 +51,7 @@ services:
     restart: unless-stopped
     ports:
       - "${PANEL_HTTP_PORT:-80}:80"
-      - "${PANEL_HTTPS_PORT:-443}:443"
+      - "${PANEL_HTTPS_PORT:-10123}:443"
     environment:
       # Leave empty by default to allow self-signed cert to match WG_HOST in nginx entrypoint.
       PANEL_DOMAIN: ${PANEL_DOMAIN:-}

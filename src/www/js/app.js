@@ -208,7 +208,7 @@ new Vue({
     amneziaXrayAddress: '',
     amneziaXrayFingerprint: 'chrome',
     amneziaXrayFlow: 'xtls-rprx-vision',
-    amneziaXrayPort: 8443,
+    amneziaXrayPort: 443,
     amneziaXrayInstallOpen: false,
     amneziaXrayFingerprints: ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'],
     amneziaXrayFlows: [

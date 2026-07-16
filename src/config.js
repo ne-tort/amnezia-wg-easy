@@ -17,7 +17,7 @@ module.exports.WG_DEVICE = process.env.WG_DEVICE || 'eth0';
 module.exports.WG_HOST = process.env.WG_HOST;
 module.exports.WG_PORT = process.env.WG_PORT || '51820';
 // * Host TCP port for amnezia-xray (VLESS Reality). Keep separate from nginx 443.
-module.exports.XRAY_PORT = Math.max(1, parseInt(process.env.XRAY_PORT || '8443', 10) || 8443);
+module.exports.XRAY_PORT = Math.max(1, parseInt(process.env.XRAY_PORT || '443', 10) || 443);
 // * MTU 1280 avoids fragmentation on mobile (large response packets often dropped otherwise). Set WG_MTU=none or empty to omit from client config.
 const _mtu = process.env.WG_MTU;
 module.exports.WG_MTU = (_mtu === '' || _mtu === 'none') ? null : (_mtu || '1280');

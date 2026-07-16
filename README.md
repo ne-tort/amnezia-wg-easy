@@ -60,10 +60,10 @@ cd amnezia-wg-easy
 
 | Порт | Назначение |
 |------|------------|
-| `WG_PORT`/udp | VPN |
-| `XRAY_PORT`/tcp | Xray VLESS Reality (default **8443**; не 443 — занят nginx) |
+| `WG_PORT`/udp | VPN (install.sh: случайный свободный 20000–50000, если не задан) |
+| `XRAY_PORT`/tcp | Xray VLESS Reality (default **443**, если свободен) |
 | `PANEL_HTTP_PORT` (80) | редирект на HTTPS, ACME |
-| `PANEL_HTTPS_PORT` (443) | веб-панель |
+| `PANEL_HTTPS_PORT` (**10123**) | веб-панель |
 
 ## Amnezia DNS
 
@@ -77,7 +77,7 @@ DNS **не** отдельный compose-сервис. После установ�
 
 ## Amnezia Xray (VLESS Reality)
 
-Образ `amnezia-xray` собирается в `deploy.sh`, контейнер — из шапки панели или `install.sh`/`awg-easy` (admin). Порт хоста — `XRAY_PORT` (по умолчанию 8443). Публичная подписка: `GET /sub/{clientName}` и `GET /sub/{clientName}/vless`.
+Образ `amnezia-xray` собирается в `deploy.sh`, контейнер — из шапки панели или `install.sh`/`awg-easy` (admin). Порт хоста — `XRAY_PORT` (по умолчанию 443). Публичная подписка: `GET /sub/{clientName}` и `GET /sub/{clientName}/vless`.
 
 ## Настройка
 

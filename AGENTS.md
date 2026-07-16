@@ -4,7 +4,7 @@
 
 Integrate Docker `amnezia-xray` (VLESS + REALITY) similar to Amnezia DNS: UI install toggle, per-client UUID synced with AWG clients, public `/sub/{name}`, `vless://`, QR, and Amnezia `.vpn` export.
 
-Defaults: `XRAY_PORT=8443` (nginx already uses host 443). SNI/fp/flow/address/port configurable from UI.
+Defaults: `PANEL_HTTPS_PORT=10123`, `XRAY_PORT=443` (if free; else random 20000–50000), `WG_PORT` random free UDP in 20000–50000 unless set. SNI/fp/flow/address/port configurable from UI.
 
 **Persistence (source of truth):** `app_settings` + `clients.xray_uuid` + `{WG_PATH}/xray/server.json` on volume `amnezia-wg-data`. Disable/redeploy panel must **not** wipe Reality keys or client UUIDs. `WireGuard.__saveConfig` / `clients.replaceAll` must round-trip `xray_uuid` (otherwise every Xray toggle regen’d UUIDs). Deploy only builds the `amnezia-xray` image; the panel starts/stops the container by `desired`.
 

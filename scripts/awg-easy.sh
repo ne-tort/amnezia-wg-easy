@@ -35,7 +35,7 @@ compose() {
 panel_base() {
   local https_port
   https_port=$(grep -E '^PANEL_HTTPS_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  https_port="${https_port:-443}"
+  https_port="${https_port:-10123}"
   if [[ "$https_port" == "443" ]]; then
     echo "https://127.0.0.1"
   else
@@ -97,15 +97,15 @@ cmd_show() {
   domain=$(grep -E '^PANEL_DOMAIN=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   host=$(grep -E '^WG_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   https_port=$(grep -E '^PANEL_HTTPS_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  https_port="${https_port:-443}"
+  https_port="${https_port:-10123}"
   [[ "$https_port" != "443" ]] && suffix=":${https_port}"
   wg_port=$(grep -E '^WG_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   xray_port=$(grep -E '^XRAY_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   echo -e "${green}URL:${plain}    https://${domain:-$host}${suffix}/"
   echo -e "${green}User:${plain}   $(admin_user)"
   echo -e "${green}Pass:${plain}   $(admin_pass)"
-  echo -e "${green}VPN:${plain}    ${host}:${wg_port:-51820}/udp"
-  echo -e "${green}Xray:${plain}   ${host}:${xray_port:-8443}/tcp"
+  echo -e "${green}VPN:${plain}    ${host}:${wg_port:-?}/udp"
+  echo -e "${green}Xray:${plain}   ${host}:${xray_port:-443}/tcp"
   echo -e "${green}Dir:${plain}    ${INSTALL_DIR}"
   if [[ -f "${CONF_DIR}/install.conf" ]]; then
     grep -E '^(SSL_MODE|SSL_HOST)=' "${CONF_DIR}/install.conf" || true
@@ -147,7 +147,7 @@ cmd_xray_on() {
   local host port sni
   host=$(grep -E '^WG_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   port=$(grep -E '^XRAY_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  port="${port:-8443}"
+  port="${port:-443}"
   api GET '/api/amnezia-xray/sni-cache?ensureBg=1' >/tmp/awg-sni-cache.json || true
   sni=$(sed -n 's/.*"defaultSni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/awg-sni-cache.json 2>/dev/null | head -1)
   sni="${sni:-www.gov.uk}"

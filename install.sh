@@ -7,6 +7,7 @@
 #   AWG_NONINTERACTIVE=1
 #   AWG_SSL_MODE=ip|domain|none|custom|reuse
 #   AWG_ADMIN_USER AWG_ADMIN_PASSWORD
+#   AWG_WG_PORT AWG_PANEL_HTTPS_PORT AWG_XRAY_PORT
 #   AWG_DOMAIN AWG_EMAIL AWG_SSL_IPV6
 #   AWG_ENABLE_DNS=1|0  AWG_ENABLE_XRAY=1|0
 #   AWG_INSTALL_DIR=/opt/amnezia-wg-easy  AWG_GIT_REF=master
@@ -40,6 +41,15 @@ PANEL_DOMAIN_VAL=""
 CERTBOT_EMAIL_VAL=""
 ENABLE_DNS=1
 ENABLE_XRAY=1
+WG_PORT_VAL=""
+PANEL_HTTPS_PORT_VAL=""
+XRAY_PORT_VAL=""
+
+# Random free ports (user/dynamic range) for AWG UDP / fallback Xray TCP.
+PORT_RAND_MIN=20000
+PORT_RAND_MAX=50000
+DEFAULT_PANEL_HTTPS_PORT=10123
+DEFAULT_XRAY_PORT=443
 
 [[ "${EUID:-$(id -u)}" -ne 0 ]] && echo -e "${red}Запустите скрипт от root.${plain}" && exit 1
 
@@ -238,12 +248,50 @@ env_set() {
 }
 
 prompt_admin() {
-  local custom=""
+  local existing_user="" existing_pass="" custom=""
+  if [[ -f "${CONF_DIR}/admin.cred" ]]; then
+    existing_user=$(grep -E '^ADMIN_USERNAME=' "${CONF_DIR}/admin.cred" 2>/dev/null | cut -d= -f2- || true)
+    existing_pass=$(grep -E '^ADMIN_PASSWORD=' "${CONF_DIR}/admin.cred" 2>/dev/null | cut -d= -f2- || true)
+  fi
+  if [[ -z "$existing_user" || -z "$existing_pass" ]] && [[ -f "${INSTALL_DIR}/.env" ]]; then
+    existing_user=$(grep -E '^ADMIN_USERNAME=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
+    existing_pass=$(grep -E '^ADMIN_PASSWORD=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
+  fi
+  existing_user="${existing_user//$'\r'/}"
+  existing_pass="${existing_pass//$'\r'/}"
+
   if [[ "$NONINTERACTIVE" == "1" ]]; then
-    ADMIN_USER="${AWG_ADMIN_USER:-$(gen_random_string 10)}"
-    ADMIN_PASS="${AWG_ADMIN_PASSWORD:-$(gen_random_string 16)}"
+    if [[ -n "${AWG_ADMIN_USER:-}" || -n "${AWG_ADMIN_PASSWORD:-}" ]]; then
+      ADMIN_USER="${AWG_ADMIN_USER:-${existing_user:-$(gen_random_string 10)}}"
+      ADMIN_PASS="${AWG_ADMIN_PASSWORD:-${existing_pass:-$(gen_random_string 16)}}"
+    elif [[ -n "$existing_user" && -n "$existing_pass" ]]; then
+      ADMIN_USER="$existing_user"
+      ADMIN_PASS="$existing_pass"
+      logi "Оставляю существующие учётные данные (${ADMIN_USER})"
+    else
+      ADMIN_USER=$(gen_random_string 10)
+      ADMIN_PASS=$(gen_random_string 16)
+    fi
     return 0
   fi
+
+  if [[ -n "$existing_user" && -n "$existing_pass" ]]; then
+    confirm_yn "Задать новый логин/пароль admin? (Enter = оставить «${existing_user}»)" n
+    if [[ "$CONFIRM_RESULT" -eq 0 ]]; then
+      ADMIN_USER="$existing_user"
+      ADMIN_PASS="$existing_pass"
+      logi "Оставляю существующие учётные данные (${ADMIN_USER})"
+      return 0
+    fi
+    prompt_or_default ADMIN_USER "Логин admin: " "$existing_user" AWG_ADMIN_USER
+    prompt_or_default ADMIN_PASS "Пароль admin: " "" AWG_ADMIN_PASSWORD
+    if [[ -z "$ADMIN_PASS" ]]; then
+      ADMIN_PASS="$existing_pass"
+      logi "Пароль пустой → оставлен прежний"
+    fi
+    return 0
+  fi
+
   confirm_yn "Задать логин/пароль admin вручную? (иначе случайные)" n
   if [[ "$CONFIRM_RESULT" -eq 1 ]]; then
     prompt_or_default ADMIN_USER "Логин admin: " "admin" AWG_ADMIN_USER
@@ -277,14 +325,201 @@ acme_bin() {
 }
 
 is_port_in_use() {
-  local port="$1"
+  # is_port_in_use PORT [tcp|udp|both]
+  # Returns 0 if busy by something other than our stack containers.
+  local port="$1" proto="${2:-tcp}"
+  local busy=0
+
   if command -v ss >/dev/null 2>&1; then
-    ss -ltn "sport = :${port}" 2>/dev/null | grep -q LISTEN && return 0
+    case "$proto" in
+      udp)
+        ss -lun "sport = :${port}" 2>/dev/null | grep -q UNCONN && busy=1
+        ;;
+      both)
+        ss -ltn "sport = :${port}" 2>/dev/null | grep -q LISTEN && busy=1
+        ss -lun "sport = :${port}" 2>/dev/null | grep -q UNCONN && busy=1
+        ;;
+      *)
+        ss -ltn "sport = :${port}" 2>/dev/null | grep -q LISTEN && busy=1
+        ;;
+    esac
+  elif command -v lsof >/dev/null 2>&1; then
+    case "$proto" in
+      udp) lsof -iUDP:"${port}" -sUDP:Idle >/dev/null 2>&1 && busy=1 ;;
+      both)
+        lsof -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && busy=1
+        lsof -iUDP:"${port}" >/dev/null 2>&1 && busy=1
+        ;;
+      *) lsof -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && busy=1 ;;
+    esac
   fi
-  if command -v lsof >/dev/null 2>&1; then
-    lsof -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1 && return 0
+
+  if [[ "$busy" -eq 0 ]]; then
+    return 1
   fi
+
+  # Ports already published by our stack are reusable on redeploy.
+  if docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null \
+    | grep -E '^(nginx|amnezia-awg|amnezia-xray) ' \
+    | grep -Eq "(:|^)${port}->|:${port}/"; then
+    return 1
+  fi
+  return 0
+}
+
+port_excluded() {
+  local port="$1" ex
+  shift
+  for ex in "$@"; do
+    [[ -n "$ex" && "$ex" == "$port" ]] && return 0
+  done
   return 1
+}
+
+random_free_port() {
+  # random_free_port PROTO [exclude_port ...]
+  local proto="${1:-tcp}"
+  shift || true
+  local i port
+  for i in $(seq 1 100); do
+    port=$((PORT_RAND_MIN + RANDOM % (PORT_RAND_MAX - PORT_RAND_MIN + 1)))
+    port_excluded "$port" "$@" && continue
+    if ! is_port_in_use "$port" "$proto"; then
+      echo "$port"
+      return 0
+    fi
+  done
+  loge "Не удалось найти свободный порт ${PORT_RAND_MIN}-${PORT_RAND_MAX} (${proto})"
+  return 1
+}
+
+ensure_free_port() {
+  # ensure_free_port PORT PROTO LABEL [exclude...]
+  # Echoes PORT if free, else picks random free.
+  local want="$1" proto="$2" label="$3"
+  shift 3 || true
+  if [[ -n "$want" ]] && ! port_excluded "$want" "$@" && ! is_port_in_use "$want" "$proto"; then
+    echo "$want"
+    return 0
+  fi
+  if [[ -n "$want" ]] && is_port_in_use "$want" "$proto"; then
+    logw "${label}: порт ${want} занят — подбираю случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
+  fi
+  random_free_port "$proto" "$@"
+}
+
+read_existing_env_port() {
+  local key="$1"
+  grep -E "^${key}=" "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true
+}
+
+prompt_ports() {
+  local cur_wg cur_https cur_xray ans=""
+  cur_wg=$(read_existing_env_port WG_PORT)
+  cur_https=$(read_existing_env_port PANEL_HTTPS_PORT)
+  cur_xray=$(read_existing_env_port XRAY_PORT)
+
+  echo ""
+  echo -e "${green}════════ Порты ════════${plain}"
+
+  # --- Panel HTTPS ---
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    PANEL_HTTPS_PORT_VAL="${AWG_PANEL_HTTPS_PORT:-$DEFAULT_PANEL_HTTPS_PORT}"
+  else
+    local hint="Enter=${DEFAULT_PANEL_HTTPS_PORT}"
+    [[ -n "$cur_https" ]] && hint="${hint}, сейчас ${cur_https}"
+    read -rp "HTTPS порт панели [${hint}]: " ans || true
+    ans="${ans// /}"
+    if [[ -z "$ans" ]]; then
+      PANEL_HTTPS_PORT_VAL="$DEFAULT_PANEL_HTTPS_PORT"
+    elif [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 && "$ans" -le 65535 ]]; then
+      PANEL_HTTPS_PORT_VAL="$ans"
+    else
+      logw "Некорректный порт — ${DEFAULT_PANEL_HTTPS_PORT}"
+      PANEL_HTTPS_PORT_VAL="$DEFAULT_PANEL_HTTPS_PORT"
+    fi
+  fi
+  if is_port_in_use "$PANEL_HTTPS_PORT_VAL" tcp; then
+    logw "HTTPS панели: ${PANEL_HTTPS_PORT_VAL} занят — случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
+    PANEL_HTTPS_PORT_VAL=$(random_free_port tcp) \
+      || { loge "Нет свободного TCP для панели"; exit 1; }
+  fi
+  logi "HTTPS панели: ${PANEL_HTTPS_PORT_VAL}/tcp"
+
+  # --- Xray ---
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    if [[ -n "${AWG_XRAY_PORT:-}" ]]; then
+      XRAY_PORT_VAL="$AWG_XRAY_PORT"
+    else
+      XRAY_PORT_VAL="$DEFAULT_XRAY_PORT"
+    fi
+  else
+    ans=""
+    local xhint="Enter=${DEFAULT_XRAY_PORT} если свободен"
+    [[ -n "$cur_xray" ]] && xhint="${xhint}, сейчас ${cur_xray}"
+    read -rp "Xray TCP порт [${xhint}]: " ans || true
+    ans="${ans// /}"
+    if [[ -z "$ans" ]]; then
+      XRAY_PORT_VAL="$DEFAULT_XRAY_PORT"
+    elif [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 && "$ans" -le 65535 ]]; then
+      XRAY_PORT_VAL="$ans"
+    else
+      logw "Некорректный порт — пробую ${DEFAULT_XRAY_PORT}"
+      XRAY_PORT_VAL="$DEFAULT_XRAY_PORT"
+    fi
+  fi
+  if [[ "$XRAY_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]] \
+    || is_port_in_use "$XRAY_PORT_VAL" tcp; then
+    if [[ "$XRAY_PORT_VAL" == "$DEFAULT_XRAY_PORT" ]] || [[ -z "${AWG_XRAY_PORT:-}" ]]; then
+      logw "Xray: ${XRAY_PORT_VAL} недоступен — случайный порт"
+    else
+      logw "Xray: ${XRAY_PORT_VAL} занят — случайный порт"
+    fi
+    XRAY_PORT_VAL=$(random_free_port tcp "$PANEL_HTTPS_PORT_VAL") \
+      || { loge "Нет свободного TCP для Xray"; exit 1; }
+  fi
+  logi "Xray: ${XRAY_PORT_VAL}/tcp"
+
+  # --- WireGuard / AWG UDP ---
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    if [[ -n "${AWG_WG_PORT:-}" ]]; then
+      WG_PORT_VAL="$AWG_WG_PORT"
+      if is_port_in_use "$WG_PORT_VAL" udp \
+        || [[ "$WG_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]] \
+        || [[ "$WG_PORT_VAL" == "$XRAY_PORT_VAL" ]]; then
+        logw "AWG UDP ${WG_PORT_VAL} недоступен — случайный"
+        WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+          || { loge "Нет свободного UDP для AWG"; exit 1; }
+      fi
+    else
+      WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+        || { loge "Нет свободного UDP для AWG"; exit 1; }
+    fi
+  else
+    ans=""
+    local whint="Enter=случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
+    [[ -n "$cur_wg" ]] && whint="${whint}, сейчас ${cur_wg}"
+    read -rp "AWG UDP порт [${whint}]: " ans || true
+    ans="${ans// /}"
+    if [[ -z "$ans" ]]; then
+      WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+        || { loge "Нет свободного UDP для AWG"; exit 1; }
+    elif [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 && "$ans" -le 65535 ]]; then
+      WG_PORT_VAL="$ans"
+      if is_port_in_use "$WG_PORT_VAL" udp \
+        || [[ "$WG_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]] \
+        || [[ "$WG_PORT_VAL" == "$XRAY_PORT_VAL" ]]; then
+        logw "AWG UDP ${WG_PORT_VAL} занят/занят другим сервисом — случайный"
+        WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+          || { loge "Нет свободного UDP для AWG"; exit 1; }
+      fi
+    else
+      logw "Некорректный порт — случайный"
+      WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+        || { loge "Нет свободного UDP для AWG"; exit 1; }
+    fi
+  fi
+  logi "AWG: ${WG_PORT_VAL}/udp"
 }
 
 free_port_80() {
@@ -932,6 +1167,9 @@ write_env() {
   env_set "$envf" WG_HOST "${SERVER_IP:-$PANEL_DOMAIN_VAL}"
   env_set "$envf" PANEL_DOMAIN "$PANEL_DOMAIN_VAL"
   env_set "$envf" SSL_MODE "$SSL_MODE"
+  env_set "$envf" WG_PORT "${WG_PORT_VAL}"
+  env_set "$envf" PANEL_HTTPS_PORT "${PANEL_HTTPS_PORT_VAL}"
+  env_set "$envf" XRAY_PORT "${XRAY_PORT_VAL}"
   if [[ -n "$CERTBOT_EMAIL_VAL" ]]; then
     env_set "$envf" CERTBOT_EMAIL "$CERTBOT_EMAIL_VAL"
   fi
@@ -947,6 +1185,9 @@ SSL_MODE=${SSL_MODE}
 SSL_HOST=${SSL_HOST}
 PANEL_DOMAIN=${PANEL_DOMAIN_VAL}
 WG_HOST=${SERVER_IP:-$PANEL_DOMAIN_VAL}
+WG_PORT=${WG_PORT_VAL}
+PANEL_HTTPS_PORT=${PANEL_HTTPS_PORT_VAL}
+XRAY_PORT=${XRAY_PORT_VAL}
 ADMIN_USERNAME=${ADMIN_USER}
 INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
@@ -958,7 +1199,7 @@ ADMIN_USERNAME=${ADMIN_USER}
 ADMIN_PASSWORD=${ADMIN_PASS}
 EOF
   chmod 600 "${CONF_DIR}/admin.cred"
-  logi "Записан ${envf} (SSL_MODE=${SSL_MODE})"
+  logi "Записан ${envf} (SSL_MODE=${SSL_MODE}, HTTPS=${PANEL_HTTPS_PORT_VAL}, WG=${WG_PORT_VAL}/udp, Xray=${XRAY_PORT_VAL}/tcp)"
 }
 
 run_deploy() {
@@ -983,7 +1224,7 @@ install_cli() {
 panel_probe_url() {
   local https_port
   https_port=$(grep -E '^PANEL_HTTPS_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  https_port="${https_port:-443}"
+  https_port="${https_port:-10123}"
   if [[ "$https_port" == "443" ]]; then
     echo "https://127.0.0.1/"
   else
@@ -1074,9 +1315,9 @@ base24_from_ip() {
 enable_xray() {
   logi "Подготовка Xray (SNI Finder + enable)..."
   local sni="" address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
-  local cidr port=8443
+  local cidr port=443
   port=$(grep -E '^XRAY_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  port="${port:-8443}"
+  port="${port:-443}"
   cidr=$(base24_from_ip "${SERVER_IP:-0.0.0.0}")
 
   # Trigger / wait for cache
@@ -1136,13 +1377,13 @@ post_configure() {
 print_summary() {
   local https_port https_suffix=""
   https_port=$(grep -E '^PANEL_HTTPS_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  https_port="${https_port:-443}"
+  https_port="${https_port:-10123}"
   [[ "$https_port" != "443" ]] && https_suffix=":${https_port}"
   local wg_port xray_port
   wg_port=$(grep -E '^WG_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  wg_port="${wg_port:-51820}"
+  wg_port="${wg_port:-?}"
   xray_port=$(grep -E '^XRAY_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  xray_port="${xray_port:-8443}"
+  xray_port="${xray_port:-443}"
 
   echo ""
   echo -e "${green}═══════════════════════════════════════════${plain}"
@@ -1168,6 +1409,7 @@ main() {
   detect_public_ip
   clone_or_update_repo
   prompt_admin
+  prompt_ports
   prompt_and_setup_ssl
   write_env
   confirm_yn "Включить Amnezia DNS после установки?" y AWG_ENABLE_DNS
