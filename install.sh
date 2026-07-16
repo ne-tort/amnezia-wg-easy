@@ -5,7 +5,7 @@
 #
 # Env overrides (non-interactive / CI):
 #   AWG_NONINTERACTIVE=1
-#   AWG_SSL_MODE=ip|domain|none|custom
+#   AWG_SSL_MODE=ip|domain|none|custom|reuse
 #   AWG_ADMIN_USER AWG_ADMIN_PASSWORD
 #   AWG_DOMAIN AWG_EMAIL AWG_SSL_IPV6
 #   AWG_ENABLE_DNS=1|0  AWG_ENABLE_XRAY=1|0
@@ -304,6 +304,12 @@ volume_name_certbot() {
 CERT_REUSE_MIN_DAYS_DOMAIN="${AWG_SSL_REUSE_MIN_DAYS:-14}"
 CERT_REUSE_MIN_DAYS_IP="${AWG_SSL_REUSE_MIN_DAYS_IP:-1}"
 
+# Filled by discover_reusable_certs() — first good candidate used as menu default.
+REUSE_SSL_NAME=""
+REUSE_SSL_DIR=""
+REUSE_SSL_EXPIRES=""
+REUSE_SSL_SOURCE=""
+
 cert_pair_usable() {
   # cert_pair_usable DIR [min_days]
   local dir="$1" min_days="${2:-7}"
@@ -313,24 +319,80 @@ cert_pair_usable() {
   openssl x509 -in "$pem" -noout -checkend $((min_days * 86400)) >/dev/null 2>&1
 }
 
-export_certs_from_volume() {
-  local domain="$1" dest="$2"
-  local vol
-  vol=$(volume_name_certbot)
-  docker volume inspect "$vol" >/dev/null 2>&1 || return 1
+cert_not_after() {
+  local pem="$1"
+  openssl x509 -in "$pem" -noout -enddate 2>/dev/null | cut -d= -f2-
+}
+
+cert_cn_or_name() {
+  # Prefer leaf CN; fall back to directory basename.
+  local pem="$1" fallback="$2"
+  local cn
+  cn=$(openssl x509 -in "$pem" -noout -subject 2>/dev/null \
+    | sed -n 's/.*CN[[:space:]]*=[[:space:]]*\([^,\/]*\).*/\1/p' | head -1 | tr -d ' ')
+  if [[ -n "$cn" ]]; then
+    echo "$cn"
+  else
+    echo "$fallback"
+  fi
+}
+
+apply_reuse_from_dir() {
+  # apply_reuse_from_dir NAME SRC_DIR — copy into CERT_HOST_DIR + inject compose volume
+  local name="$1" src="$2" dest="${CERT_HOST_DIR}/${name}"
   mkdir -p "$dest"
-  docker run --rm \
-    -v "${vol}:/etc/letsencrypt:ro" \
-    -v "${dest}:/out" \
-    alpine:3.20 sh -c "
-      set -e
-      src='/etc/letsencrypt/live/${domain}'
-      if [ ! -f \"\$src/fullchain.pem\" ] || [ ! -f \"\$src/privkey.pem\" ]; then
-        exit 1
-      fi
-      cp \"\$src/fullchain.pem\" /out/fullchain.pem
-      cp \"\$src/privkey.pem\" /out/privkey.pem
-    " >/dev/null 2>&1
+  if [[ "$(readlink -f "$src" 2>/dev/null || echo "$src")" != "$(readlink -f "$dest" 2>/dev/null || echo "$dest")" ]]; then
+    cp -f "${src}/fullchain.pem" "${dest}/fullchain.pem"
+    cp -f "${src}/privkey.pem" "${dest}/privkey.pem"
+  fi
+  chmod 644 "${dest}/fullchain.pem" 2>/dev/null || true
+  chmod 600 "${dest}/privkey.pem" 2>/dev/null || true
+  inject_certs_to_volume "$name" "$dest" || return 1
+  SSL_MODE="acme"
+  SSL_HOST="$name"
+  PANEL_DOMAIN_VAL="$name"
+  logi "SSL: переиспользован ${name} ← ${src}"
+  return 0
+}
+
+list_certbot_volumes() {
+  # Prefer project volume first, then any *certbot_conf leftover (e.g. *-entry_*).
+  local primary other
+  primary=$(volume_name_certbot)
+  echo "$primary"
+  while IFS= read -r other; do
+    [[ -n "$other" && "$other" != "$primary" ]] && echo "$other"
+  done < <(docker volume ls -q 2>/dev/null | grep -E 'certbot_conf$' || true)
+}
+
+export_certs_from_volume() {
+  # export_certs_from_volume DOMAIN DEST [VOLUME]
+  local domain="$1" dest="$2" vol="${3:-}"
+  local v
+  mkdir -p "$dest"
+  if [[ -n "$vol" ]]; then
+    docker volume inspect "$vol" >/dev/null 2>&1 || return 1
+    docker run --rm \
+      -v "${vol}:/etc/letsencrypt:ro" \
+      -v "${dest}:/out" \
+      alpine:3.20 sh -c "
+        set -e
+        src='/etc/letsencrypt/live/${domain}'
+        if [ ! -f \"\$src/fullchain.pem\" ] || [ ! -f \"\$src/privkey.pem\" ]; then
+          exit 1
+        fi
+        cp \"\$src/fullchain.pem\" /out/fullchain.pem
+        cp \"\$src/privkey.pem\" /out/privkey.pem
+      " >/dev/null 2>&1
+    return $?
+  fi
+  while IFS= read -r v; do
+    [[ -z "$v" ]] && continue
+    if export_certs_from_volume "$domain" "$dest" "$v"; then
+      return 0
+    fi
+  done < <(list_certbot_volumes)
+  return 1
 }
 
 installcert_from_acme() {
@@ -344,44 +406,173 @@ installcert_from_acme() {
     --reloadcmd "$reload_cmd" >/dev/null 2>&1
 }
 
+remember_reuse_candidate() {
+  # remember_reuse_candidate NAME DIR SOURCE [min_days]
+  local name="$1" dir="$2" source="$3" min_days="${4:-$CERT_REUSE_MIN_DAYS_DOMAIN}"
+  [[ -n "$name" && -n "$dir" ]] || return 1
+  cert_pair_usable "$dir" "$min_days" || return 1
+  # Keep the first (highest priority) candidate.
+  if [[ -n "$REUSE_SSL_NAME" ]]; then
+    return 0
+  fi
+  REUSE_SSL_NAME="$name"
+  REUSE_SSL_DIR="$dir"
+  REUSE_SSL_SOURCE="$source"
+  REUSE_SSL_EXPIRES=$(cert_not_after "${dir}/fullchain.pem")
+  return 0
+}
+
+discover_reusable_certs() {
+  REUSE_SSL_NAME=""
+  REUSE_SSL_DIR=""
+  REUSE_SSL_EXPIRES=""
+  REUSE_SSL_SOURCE=""
+  local name="" dir="" tmp v live hint min_d
+
+  # 1) Last install / env hints
+  for hint in \
+    "$(grep -E '^SSL_HOST=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2-)" \
+    "$(grep -E '^PANEL_DOMAIN=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2-)" \
+    "$(grep -E '^PANEL_DOMAIN=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2-)" \
+    "$(grep -E '^SSL_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2-)"; do
+    hint="${hint//$'\r'/}"
+    [[ -z "$hint" || "$hint" == "127.0.0.1" || "$hint" == "localhost" ]] && continue
+    if is_ipv4 "$hint"; then
+      min_d="$CERT_REUSE_MIN_DAYS_IP"
+    else
+      min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
+    fi
+    for dir in \
+      "${CERT_HOST_DIR}/${hint}" \
+      "/root/cert/${hint}"; do
+      remember_reuse_candidate "$hint" "$dir" "host:${dir}" "$min_d" && return 0
+    done
+    if is_ipv4 "$hint"; then
+      remember_reuse_candidate "$hint" "${CERT_HOST_DIR}/ip" "host:${CERT_HOST_DIR}/ip" "$min_d" && return 0
+    fi
+    tmp=$(mktemp -d)
+    if export_certs_from_volume "$hint" "$tmp" && cert_pair_usable "$tmp" "$min_d"; then
+      mkdir -p "${CERT_HOST_DIR}/${hint}"
+      cp "${tmp}/fullchain.pem" "${CERT_HOST_DIR}/${hint}/fullchain.pem"
+      cp "${tmp}/privkey.pem" "${CERT_HOST_DIR}/${hint}/privkey.pem"
+      rm -rf "$tmp"
+      remember_reuse_candidate "$hint" "${CERT_HOST_DIR}/${hint}" "volume" "$min_d" && return 0
+    fi
+    rm -rf "$tmp"
+  done
+
+  # 2) Host directories under /root/cert (incl. amnezia-wg-easy/<name>)
+  local pem
+  while IFS= read -r pem; do
+    [[ -f "$pem" ]] || continue
+    dir=$(dirname "$pem")
+    name=$(basename "$dir")
+    [[ "$name" == "custom" || "$name" == "ip" || "$name" == "live" ]] && continue
+    if [[ -f "${dir}/fullchain.pem" ]]; then
+      name=$(cert_cn_or_name "${dir}/fullchain.pem" "$name")
+    fi
+    if is_ipv4 "$name"; then
+      min_d="$CERT_REUSE_MIN_DAYS_IP"
+    else
+      min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
+    fi
+    [[ -f "${dir}/privkey.pem" ]] || continue
+    remember_reuse_candidate "$name" "$dir" "host:${dir}" "$min_d" && return 0
+  done < <(find /root/cert -type f -name fullchain.pem 2>/dev/null | head -50)
+
+  # 3) Any docker certbot_conf volumes → live/*
+  while IFS= read -r v; do
+    [[ -z "$v" ]] && continue
+    live=$(docker run --rm -v "${v}:/etc/letsencrypt:ro" alpine:3.20 \
+      sh -c 'ls -1 /etc/letsencrypt/live 2>/dev/null' 2>/dev/null || true)
+    for name in $live; do
+      [[ "$name" == "README" ]] && continue
+      if is_ipv4 "$name"; then
+        min_d="$CERT_REUSE_MIN_DAYS_IP"
+      else
+        min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
+      fi
+      tmp=$(mktemp -d)
+      if export_certs_from_volume "$name" "$tmp" "$v" && cert_pair_usable "$tmp" "$min_d"; then
+        mkdir -p "${CERT_HOST_DIR}/${name}"
+        cp "${tmp}/fullchain.pem" "${CERT_HOST_DIR}/${name}/fullchain.pem"
+        cp "${tmp}/privkey.pem" "${CERT_HOST_DIR}/${name}/privkey.pem"
+        rm -rf "$tmp"
+        remember_reuse_candidate "$name" "${CERT_HOST_DIR}/${name}" "volume:${v}" "$min_d" && return 0
+      fi
+      rm -rf "$tmp"
+    done
+  done < <(list_certbot_volumes)
+
+  # 4) acme.sh issued domains
+  if [[ -d "${ACME_HOME}" ]]; then
+    for dir in "${ACME_HOME}"/*_ecc "${ACME_HOME}"/*_rsa; do
+      [[ -d "$dir" ]] || continue
+      name=$(basename "$dir")
+      name="${name%_ecc}"
+      name="${name%_rsa}"
+      [[ -z "$name" || "$name" == "ca" ]] && continue
+      if is_ipv4 "$name"; then
+        min_d="$CERT_REUSE_MIN_DAYS_IP"
+      else
+        min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
+      fi
+      tmp=$(mktemp -d)
+      install_acme || true
+      if installcert_from_acme "$name" "$tmp" && cert_pair_usable "$tmp" "$min_d"; then
+        mkdir -p "${CERT_HOST_DIR}/${name}"
+        cp "${tmp}/fullchain.pem" "${CERT_HOST_DIR}/${name}/fullchain.pem"
+        cp "${tmp}/privkey.pem" "${CERT_HOST_DIR}/${name}/privkey.pem"
+        rm -rf "$tmp"
+        remember_reuse_candidate "$name" "${CERT_HOST_DIR}/${name}" "acme.sh" "$min_d" && return 0
+      fi
+      rm -rf "$tmp"
+    done
+  fi
+
+  return 1
+}
+
 try_reuse_certificate() {
   # try_reuse_certificate NAME HOST_DIR MIN_DAYS
-  # Looks in: HOST_DIR → docker volume → acme.sh home. On success injects volume.
+  # Looks in: HOST_DIR → /root/cert/NAME → all certbot volumes → acme.sh. On success injects volume.
   local name="$1" host_dir="$2" min_days="${3:-14}"
-  local tmp
+  local tmp v
 
   if [[ "${AWG_SSL_FORCE_RENEW:-0}" == "1" ]]; then
     logw "AWG_SSL_FORCE_RENEW=1 — пропуск переиспользования сертификата"
     return 1
   fi
 
-  if cert_pair_usable "$host_dir" "$min_days"; then
-    logi "Переиспользую действующий сертификат: ${host_dir}"
-    inject_certs_to_volume "$name" "$host_dir" || return 1
+  # Prefer previously discovered candidate for this name
+  if [[ -n "$REUSE_SSL_NAME" && "$REUSE_SSL_NAME" == "$name" && -n "$REUSE_SSL_DIR" ]] \
+    && cert_pair_usable "$REUSE_SSL_DIR" "$min_days"; then
+    apply_reuse_from_dir "$name" "$REUSE_SSL_DIR" || return 1
     return 0
   fi
 
-  # Domain/IP name under CERT_HOST_DIR may already exist with correct files
-  if [[ "$host_dir" != "${CERT_HOST_DIR}/${name}" ]] \
-    && cert_pair_usable "${CERT_HOST_DIR}/${name}" "$min_days"; then
-    logi "Переиспользую сертификат: ${CERT_HOST_DIR}/${name}"
-    mkdir -p "$host_dir"
-    cp "${CERT_HOST_DIR}/${name}/fullchain.pem" "${host_dir}/fullchain.pem"
-    cp "${CERT_HOST_DIR}/${name}/privkey.pem" "${host_dir}/privkey.pem"
-    inject_certs_to_volume "$name" "$host_dir" || return 1
-    return 0
-  fi
+  local cand
+  for cand in \
+    "$host_dir" \
+    "${CERT_HOST_DIR}/${name}" \
+    "/root/cert/${name}" \
+    "${CERT_HOST_DIR}/ip"; do
+    if cert_pair_usable "$cand" "$min_days"; then
+      apply_reuse_from_dir "$name" "$cand" || return 1
+      return 0
+    fi
+  done
 
   tmp=$(mktemp -d)
-  if export_certs_from_volume "$name" "$tmp" && cert_pair_usable "$tmp" "$min_days"; then
-    logi "Переиспользую сертификат из Docker volume $(volume_name_certbot)/live/${name}"
-    mkdir -p "$host_dir"
-    cp "${tmp}/fullchain.pem" "${host_dir}/fullchain.pem"
-    cp "${tmp}/privkey.pem" "${host_dir}/privkey.pem"
-    rm -rf "$tmp"
-    inject_certs_to_volume "$name" "$host_dir" || return 1
-    return 0
-  fi
+  while IFS= read -r v; do
+    [[ -z "$v" ]] && continue
+    if export_certs_from_volume "$name" "$tmp" "$v" && cert_pair_usable "$tmp" "$min_days"; then
+      logi "Переиспользую сертификат из Docker volume ${v}/live/${name}"
+      apply_reuse_from_dir "$name" "$tmp" || { rm -rf "$tmp"; return 1; }
+      rm -rf "$tmp"
+      return 0
+    fi
+  done < <(list_certbot_volumes)
   rm -rf "$tmp"
 
   if [[ -x "$(acme_bin)" ]] || [[ -x "${ACME_HOME}/acme.sh" ]]; then
@@ -391,12 +582,23 @@ try_reuse_certificate() {
       logi "Найден сертификат acme.sh для ${name} — устанавливаю без повторного выпуска"
       if installcert_from_acme "$name" "$host_dir" && cert_pair_usable "$host_dir" "$min_days"; then
         inject_certs_to_volume "$name" "$host_dir" || return 1
+        SSL_MODE="acme"
+        SSL_HOST="$name"
+        PANEL_DOMAIN_VAL="$name"
         return 0
       fi
     fi
   fi
 
   return 1
+}
+
+setup_reuse_detected_certificate() {
+  if [[ -z "$REUSE_SSL_NAME" || -z "$REUSE_SSL_DIR" ]]; then
+    discover_reusable_certs || return 1
+  fi
+  [[ -n "$REUSE_SSL_NAME" && -n "$REUSE_SSL_DIR" ]] || return 1
+  apply_reuse_from_dir "$REUSE_SSL_NAME" "$REUSE_SSL_DIR"
 }
 
 inject_certs_to_volume() {
@@ -563,36 +765,89 @@ setup_custom_certificate() {
 }
 
 prompt_and_setup_ssl() {
-  local ssl_choice=""
+  local ssl_choice="" have_reuse=0 default_choice="2" prompt_hint="1-4, Enter=2"
   SSL_SCHEME="https"
+
+  # Scan disk/volumes/acme BEFORE the menu so Enter can mean "reuse".
+  if [[ "${AWG_SSL_FORCE_RENEW:-0}" != "1" ]] && discover_reusable_certs; then
+    have_reuse=1
+    default_choice="0"
+    prompt_hint="0-4, Enter=0 reuse"
+    logi "Найден действующий сертификат: ${REUSE_SSL_NAME} (до ${REUSE_SSL_EXPIRES:-?}, источник ${REUSE_SSL_SOURCE})"
+  fi
+
   echo ""
   echo -e "${green}════════ SSL (рекомендуется) ════════${plain}"
+  if [[ "$have_reuse" -eq 1 ]]; then
+    echo -e "${green}0.${plain} Переиспользовать ${REUSE_SSL_NAME} (до ${REUSE_SSL_EXPIRES:-?}) — по умолчанию, без LE"
+  fi
   echo -e "${green}1.${plain} Let's Encrypt для домена (90 дней)"
-  echo -e "${green}2.${plain} Let's Encrypt для IP (shortlived ~6 дней) — по умолчанию"
+  echo -e "${green}2.${plain} Let's Encrypt для IP (shortlived ~6 дней)"
   echo -e "${green}3.${plain} Свой сертификат (пути к файлам)"
   echo -e "${green}4.${plain} Пропустить (self-signed)"
-  echo -e "${blue}Для 1 и 2 нужен открытый TCP/80.${plain}"
+  echo -e "${blue}Для 1 и 2 нужен открытый TCP/80 (не требуется при пункте 0).${plain}"
 
   if [[ "$NONINTERACTIVE" == "1" ]]; then
-    case "${AWG_SSL_MODE:-ip}" in
+    case "${AWG_SSL_MODE:-}" in
+      reuse|existing)
+        ssl_choice="0"
+        ;;
       domain) ssl_choice="1" ;;
       ip) ssl_choice="2" ;;
       custom) ssl_choice="3" ;;
-      none|selfsigned|"") ssl_choice="4" ;;
-      *) ssl_choice="2" ;;
+      none|selfsigned) ssl_choice="4" ;;
+      "")
+        if [[ "$have_reuse" -eq 1 ]]; then
+          ssl_choice="0"
+        else
+          ssl_choice="2"
+        fi
+        ;;
+      *)
+        if [[ "$have_reuse" -eq 1 ]]; then
+          ssl_choice="0"
+        else
+          ssl_choice="2"
+        fi
+        ;;
     esac
   else
-    read -rp "Выбор [1-4, Enter=2]: " ssl_choice || true
+    read -rp "Выбор [${prompt_hint}]: " ssl_choice || true
     ssl_choice="${ssl_choice// /}"
-    if [[ "$ssl_choice" != "1" && "$ssl_choice" != "3" && "$ssl_choice" != "4" ]]; then
-      ssl_choice="2"
+    if [[ -z "$ssl_choice" ]]; then
+      ssl_choice="$default_choice"
     fi
   fi
 
   case "$ssl_choice" in
+    0)
+      if [[ "$have_reuse" -ne 1 ]]; then
+        loge "Нет найденного сертификата для переиспользования"
+        SSL_MODE="selfsigned"
+        SSL_HOST="${SERVER_IP:-127.0.0.1}"
+        PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
+        return 0
+      fi
+      if setup_reuse_detected_certificate; then
+        logi "SSL: переиспользован ${SSL_HOST} (без обращения к Let's Encrypt)"
+      else
+        logw "Не удалось переиспользовать — выберите 1/2 или повторите"
+        SSL_MODE="selfsigned"
+        SSL_HOST="${REUSE_SSL_NAME:-$SERVER_IP}"
+        PANEL_DOMAIN_VAL="${SSL_HOST}"
+      fi
+      ;;
     1)
       local domain="" email=""
-      prompt_or_default domain "Домен (A-запись на этот сервер): " "" AWG_DOMAIN
+      # Prefill with discovered / previous domain
+      local domain_default="${REUSE_SSL_NAME:-}"
+      if [[ -z "$domain_default" ]] || is_ipv4 "$domain_default"; then
+        domain_default=$(grep -E '^PANEL_DOMAIN=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2- || true)
+      fi
+      if [[ -z "$domain_default" ]] || is_ipv4 "$domain_default"; then
+        domain_default=""
+      fi
+      prompt_or_default domain "Домен (A-запись на этот сервер): " "$domain_default" AWG_DOMAIN
       prompt_or_default email "Email для Let's Encrypt: " "" AWG_EMAIL
       if [[ -z "$domain" ]] || ! is_domain "$domain"; then
         loge "Некорректный домен — self-signed"
