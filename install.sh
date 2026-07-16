@@ -416,36 +416,106 @@ read_existing_env_port() {
   grep -E "^${key}=" "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true
 }
 
+read_install_conf_val() {
+  local key="$1"
+  grep -E "^${key}=" "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true
+}
+
+# True when .env already has a real previous install (redeploy), not a fresh clone of .env.example.
+is_redeploy() {
+  [[ -f "${INSTALL_DIR}/.env" ]] || return 1
+  local u p
+  u=$(read_existing_env_port ADMIN_USERNAME)
+  p=$(read_existing_env_port WG_PORT)
+  [[ -n "$u" && -n "$p" ]]
+}
+
+assign_port_or_keep() {
+  # assign_port_or_keep OUTVAR PROTO CUR FIRST_DEFAULT LABEL keep_busy_ok [exclude...]
+  # Empty interactive answer / missing env override:
+  #   redeploy + CUR → keep CUR (even if "busy" by our stack)
+  #   first install → FIRST_DEFAULT (empty FIRST_DEFAULT = random)
+  local outvar="$1" proto="$2" cur="$3" first_def="$4" label="$5" keep_busy="${6:-1}"
+  shift 6 || true
+  local chosen="$cur" from_keep=0
+
+  if [[ -n "$chosen" ]]; then
+    from_keep=1
+  elif [[ -n "$first_def" ]]; then
+    chosen="$first_def"
+  else
+    chosen=$(random_free_port "$proto" "$@") || return 1
+  fi
+
+  if [[ "$from_keep" -eq 1 && "$keep_busy" -eq 1 ]]; then
+    # Redeploy keep: trust previous assignment (our containers may hold the port).
+    printf -v "$outvar" '%s' "$chosen"
+    return 0
+  fi
+
+  if port_excluded "$chosen" "$@" || is_port_in_use "$chosen" "$proto"; then
+    logw "${label}: порт ${chosen} занят — случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
+    chosen=$(random_free_port "$proto" "$@") || return 1
+  fi
+  printf -v "$outvar" '%s' "$chosen"
+  return 0
+}
+
 prompt_ports() {
-  local cur_wg cur_https cur_xray ans=""
+  local cur_wg cur_https cur_xray ans="" redeploy=0
   cur_wg=$(read_existing_env_port WG_PORT)
   cur_https=$(read_existing_env_port PANEL_HTTPS_PORT)
   cur_xray=$(read_existing_env_port XRAY_PORT)
+  is_redeploy && redeploy=1
 
   echo ""
   echo -e "${green}════════ Порты ════════${plain}"
+  if [[ "$redeploy" -eq 1 ]]; then
+    echo -e "${blue}Редеплой: Enter = оставить текущие порты.${plain}"
+  else
+    echo -e "${blue}Первая установка: Enter = значения по умолчанию.${plain}"
+  fi
 
   # --- Panel HTTPS ---
   if [[ "$NONINTERACTIVE" == "1" ]]; then
-    PANEL_HTTPS_PORT_VAL="${AWG_PANEL_HTTPS_PORT:-$DEFAULT_PANEL_HTTPS_PORT}"
+    if [[ -n "${AWG_PANEL_HTTPS_PORT:-}" ]]; then
+      PANEL_HTTPS_PORT_VAL="$AWG_PANEL_HTTPS_PORT"
+      if is_port_in_use "$PANEL_HTTPS_PORT_VAL" tcp; then
+        logw "HTTPS панели: ${PANEL_HTTPS_PORT_VAL} занят — случайный"
+        PANEL_HTTPS_PORT_VAL=$(random_free_port tcp) \
+          || { loge "Нет свободного TCP для панели"; exit 1; }
+      fi
+    else
+      assign_port_or_keep PANEL_HTTPS_PORT_VAL tcp "$cur_https" "$DEFAULT_PANEL_HTTPS_PORT" \
+        "HTTPS панели" 1 \
+        || { loge "Нет свободного TCP для панели"; exit 1; }
+    fi
   else
-    local hint="Enter=${DEFAULT_PANEL_HTTPS_PORT}"
-    [[ -n "$cur_https" ]] && hint="${hint}, сейчас ${cur_https}"
+    local hint
+    if [[ -n "$cur_https" ]]; then
+      hint="Enter=оставить ${cur_https}"
+    else
+      hint="Enter=${DEFAULT_PANEL_HTTPS_PORT}"
+    fi
     read -rp "HTTPS порт панели [${hint}]: " ans || true
     ans="${ans// /}"
     if [[ -z "$ans" ]]; then
-      PANEL_HTTPS_PORT_VAL="$DEFAULT_PANEL_HTTPS_PORT"
+      assign_port_or_keep PANEL_HTTPS_PORT_VAL tcp "$cur_https" "$DEFAULT_PANEL_HTTPS_PORT" \
+        "HTTPS панели" 1 \
+        || { loge "Нет свободного TCP для панели"; exit 1; }
     elif [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 && "$ans" -le 65535 ]]; then
       PANEL_HTTPS_PORT_VAL="$ans"
+      if is_port_in_use "$PANEL_HTTPS_PORT_VAL" tcp; then
+        logw "HTTPS панели: ${PANEL_HTTPS_PORT_VAL} занят — случайный"
+        PANEL_HTTPS_PORT_VAL=$(random_free_port tcp) \
+          || { loge "Нет свободного TCP для панели"; exit 1; }
+      fi
     else
-      logw "Некорректный порт — ${DEFAULT_PANEL_HTTPS_PORT}"
-      PANEL_HTTPS_PORT_VAL="$DEFAULT_PANEL_HTTPS_PORT"
+      logw "Некорректный порт"
+      assign_port_or_keep PANEL_HTTPS_PORT_VAL tcp "$cur_https" "$DEFAULT_PANEL_HTTPS_PORT" \
+        "HTTPS панели" 1 \
+        || { loge "Нет свободного TCP для панели"; exit 1; }
     fi
-  fi
-  if is_port_in_use "$PANEL_HTTPS_PORT_VAL" tcp; then
-    logw "HTTPS панели: ${PANEL_HTTPS_PORT_VAL} занят — случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
-    PANEL_HTTPS_PORT_VAL=$(random_free_port tcp) \
-      || { loge "Нет свободного TCP для панели"; exit 1; }
   fi
   logi "HTTPS панели: ${PANEL_HTTPS_PORT_VAL}/tcp"
 
@@ -453,33 +523,52 @@ prompt_ports() {
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     if [[ -n "${AWG_XRAY_PORT:-}" ]]; then
       XRAY_PORT_VAL="$AWG_XRAY_PORT"
+      if [[ "$XRAY_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]] || is_port_in_use "$XRAY_PORT_VAL" tcp; then
+        logw "Xray: ${XRAY_PORT_VAL} недоступен — случайный"
+        XRAY_PORT_VAL=$(random_free_port tcp "$PANEL_HTTPS_PORT_VAL") \
+          || { loge "Нет свободного TCP для Xray"; exit 1; }
+      fi
     else
-      XRAY_PORT_VAL="$DEFAULT_XRAY_PORT"
+      assign_port_or_keep XRAY_PORT_VAL tcp "$cur_xray" "$DEFAULT_XRAY_PORT" \
+        "Xray" 1 "$PANEL_HTTPS_PORT_VAL" \
+        || { loge "Нет свободного TCP для Xray"; exit 1; }
+      if [[ "$XRAY_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]]; then
+        XRAY_PORT_VAL=$(random_free_port tcp "$PANEL_HTTPS_PORT_VAL") \
+          || { loge "Нет свободного TCP для Xray"; exit 1; }
+      fi
     fi
   else
     ans=""
-    local xhint="Enter=${DEFAULT_XRAY_PORT} если свободен"
-    [[ -n "$cur_xray" ]] && xhint="${xhint}, сейчас ${cur_xray}"
+    local xhint
+    if [[ -n "$cur_xray" ]]; then
+      xhint="Enter=оставить ${cur_xray}"
+    else
+      xhint="Enter=${DEFAULT_XRAY_PORT} если свободен"
+    fi
     read -rp "Xray TCP порт [${xhint}]: " ans || true
     ans="${ans// /}"
     if [[ -z "$ans" ]]; then
-      XRAY_PORT_VAL="$DEFAULT_XRAY_PORT"
+      assign_port_or_keep XRAY_PORT_VAL tcp "$cur_xray" "$DEFAULT_XRAY_PORT" \
+        "Xray" 1 "$PANEL_HTTPS_PORT_VAL" \
+        || { loge "Нет свободного TCP для Xray"; exit 1; }
+      if [[ -z "$cur_xray" && "$XRAY_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]]; then
+        logw "Xray: совпадает с HTTPS панели — случайный"
+        XRAY_PORT_VAL=$(random_free_port tcp "$PANEL_HTTPS_PORT_VAL") \
+          || { loge "Нет свободного TCP для Xray"; exit 1; }
+      fi
     elif [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 && "$ans" -le 65535 ]]; then
       XRAY_PORT_VAL="$ans"
+      if [[ "$XRAY_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]] || is_port_in_use "$XRAY_PORT_VAL" tcp; then
+        logw "Xray: ${XRAY_PORT_VAL} недоступен — случайный"
+        XRAY_PORT_VAL=$(random_free_port tcp "$PANEL_HTTPS_PORT_VAL") \
+          || { loge "Нет свободного TCP для Xray"; exit 1; }
+      fi
     else
-      logw "Некорректный порт — пробую ${DEFAULT_XRAY_PORT}"
-      XRAY_PORT_VAL="$DEFAULT_XRAY_PORT"
+      logw "Некорректный порт"
+      assign_port_or_keep XRAY_PORT_VAL tcp "$cur_xray" "$DEFAULT_XRAY_PORT" \
+        "Xray" 1 "$PANEL_HTTPS_PORT_VAL" \
+        || { loge "Нет свободного TCP для Xray"; exit 1; }
     fi
-  fi
-  if [[ "$XRAY_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]] \
-    || is_port_in_use "$XRAY_PORT_VAL" tcp; then
-    if [[ "$XRAY_PORT_VAL" == "$DEFAULT_XRAY_PORT" ]] || [[ -z "${AWG_XRAY_PORT:-}" ]]; then
-      logw "Xray: ${XRAY_PORT_VAL} недоступен — случайный порт"
-    else
-      logw "Xray: ${XRAY_PORT_VAL} занят — случайный порт"
-    fi
-    XRAY_PORT_VAL=$(random_free_port tcp "$PANEL_HTTPS_PORT_VAL") \
-      || { loge "Нет свободного TCP для Xray"; exit 1; }
   fi
   logi "Xray: ${XRAY_PORT_VAL}/tcp"
 
@@ -495,34 +584,73 @@ prompt_ports() {
           || { loge "Нет свободного UDP для AWG"; exit 1; }
       fi
     else
-      WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+      # first_def empty → random when no cur
+      assign_port_or_keep WG_PORT_VAL udp "$cur_wg" "" \
+        "AWG UDP" 1 "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL" \
         || { loge "Нет свободного UDP для AWG"; exit 1; }
     fi
   else
     ans=""
-    local whint="Enter=случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
-    [[ -n "$cur_wg" ]] && whint="${whint}, сейчас ${cur_wg}"
+    local whint
+    if [[ -n "$cur_wg" ]]; then
+      whint="Enter=оставить ${cur_wg}"
+    else
+      whint="Enter=случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
+    fi
     read -rp "AWG UDP порт [${whint}]: " ans || true
     ans="${ans// /}"
     if [[ -z "$ans" ]]; then
-      WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+      assign_port_or_keep WG_PORT_VAL udp "$cur_wg" "" \
+        "AWG UDP" 1 "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL" \
         || { loge "Нет свободного UDP для AWG"; exit 1; }
     elif [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 && "$ans" -le 65535 ]]; then
       WG_PORT_VAL="$ans"
       if is_port_in_use "$WG_PORT_VAL" udp \
         || [[ "$WG_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]] \
         || [[ "$WG_PORT_VAL" == "$XRAY_PORT_VAL" ]]; then
-        logw "AWG UDP ${WG_PORT_VAL} занят/занят другим сервисом — случайный"
+        logw "AWG UDP ${WG_PORT_VAL} занят — случайный"
         WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
           || { loge "Нет свободного UDP для AWG"; exit 1; }
       fi
     else
-      logw "Некорректный порт — случайный"
-      WG_PORT_VAL=$(random_free_port udp "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL") \
+      logw "Некорректный порт"
+      assign_port_or_keep WG_PORT_VAL udp "$cur_wg" "" \
+        "AWG UDP" 1 "$PANEL_HTTPS_PORT_VAL" "$XRAY_PORT_VAL" \
         || { loge "Нет свободного UDP для AWG"; exit 1; }
     fi
   fi
   logi "AWG: ${WG_PORT_VAL}/udp"
+}
+
+detect_service_enabled_default() {
+  # detect_service_enabled_default dns|xray → prints y or n for confirm_yn default
+  local kind="$1" conf_key container def="y"
+  case "$kind" in
+    dns)
+      conf_key=ENABLE_DNS
+      container=amnezia-dns
+      ;;
+    xray)
+      conf_key=ENABLE_XRAY
+      container=amnezia-xray
+      ;;
+    *) echo y; return 0 ;;
+  esac
+  local prev
+  prev=$(read_install_conf_val "$conf_key")
+  if [[ "$prev" == "0" || "$prev" == "1" ]]; then
+    [[ "$prev" == "1" ]] && echo y || echo n
+    return 0
+  fi
+  if is_redeploy; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container"; then
+      echo y
+    else
+      echo n
+    fi
+    return 0
+  fi
+  echo y
 }
 
 free_port_80() {
@@ -1191,6 +1319,8 @@ WG_HOST=${SERVER_IP:-$PANEL_DOMAIN_VAL}
 WG_PORT=${WG_PORT_VAL}
 PANEL_HTTPS_PORT=${PANEL_HTTPS_PORT_VAL}
 XRAY_PORT=${XRAY_PORT_VAL}
+ENABLE_DNS=${ENABLE_DNS}
+ENABLE_XRAY=${ENABLE_XRAY}
 ADMIN_USERNAME=${ADMIN_USER}
 INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
@@ -1414,11 +1544,14 @@ main() {
   prompt_admin
   prompt_ports
   prompt_and_setup_ssl
-  write_env
-  confirm_yn "Включить Amnezia DNS после установки?" y AWG_ENABLE_DNS
+  local dns_def xray_def
+  dns_def=$(detect_service_enabled_default dns)
+  xray_def=$(detect_service_enabled_default xray)
+  confirm_yn "Включить Amnezia DNS после установки?" "$dns_def" AWG_ENABLE_DNS
   ENABLE_DNS=$CONFIRM_RESULT
-  confirm_yn "Включить Xray (VLESS Reality + SNI Finder) после установки?" y AWG_ENABLE_XRAY
+  confirm_yn "Включить Xray (VLESS Reality + SNI Finder) после установки?" "$xray_def" AWG_ENABLE_XRAY
   ENABLE_XRAY=$CONFIRM_RESULT
+  write_env
   run_deploy
   install_cli
   post_configure
