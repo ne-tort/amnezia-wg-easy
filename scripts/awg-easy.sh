@@ -128,7 +128,7 @@ cmd_ssl() {
   echo -e "${yellow}Повторный SSL: перезапустите установщик${plain}"
   echo "  bash ${INSTALL_DIR}/install.sh"
   echo "или:"
-  echo "  bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)"
+  echo "  bash <(curl -4fsSL --connect-timeout 10 --retry 3 https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)"
 }
 
 cmd_dns_on() {

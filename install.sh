@@ -1,7 +1,7 @@
 #!/bin/bash
 # Amnezia WG-Easy — one-liner installer (3x-ui style).
-# Usage:
-#   bash <(curl -Ls https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
+# Usage (IPv4 forced: broken IPv6 makes raw.githubusercontent.com hang on many VPS):
+#   bash <(curl -4fsSL --connect-timeout 10 --retry 3 https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
 #
 # Env overrides (non-interactive / CI):
 #   AWG_NONINTERACTIVE=1
@@ -53,16 +53,30 @@ DEFAULT_XRAY_PORT=443
 
 [[ "${EUID:-$(id -u)}" -ne 0 ]] && echo -e "${red}Запустите скрипт от root.${plain}" && exit 1
 
-if [[ "${AWG_NONINTERACTIVE:-0}" == "1" ]] || [[ ! -t 0 ]]; then
+# Interactive if we can talk to the controlling TTY (not merely if fd0 is a tty).
+# curl|bash leaves fd0 as a pipe; bash <(curl) keeps a tty — handle both.
+if [[ "${AWG_NONINTERACTIVE:-0}" == "1" ]]; then
   NONINTERACTIVE=1
-else
+elif [[ -c /dev/tty ]]; then
   NONINTERACTIVE=0
+  if [[ ! -t 0 ]]; then
+    exec </dev/tty
+  fi
+elif [[ -t 0 ]]; then
+  NONINTERACTIVE=0
+else
+  NONINTERACTIVE=1
 fi
 export NONINTERACTIVE
 
 logi() { echo -e "${green}[install]${plain} $*"; }
 logw() { echo -e "${yellow}[install]${plain} $*"; }
 loge() { echo -e "${red}[install]${plain} $*" >&2; }
+
+# Prefer IPv4: many VPS resolve AAAA first but have broken IPv6 → curl SSL hangs.
+curl4() {
+  curl -4 "$@"
+}
 
 is_ipv4() {
   [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
@@ -150,11 +164,24 @@ detect_os() {
 }
 
 install_packages() {
+  local need=0
+  local bin
+  for bin in curl wget tar openssl git socat; do
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      need=1
+      break
+    fi
+  done
+  if [[ "$need" -eq 0 ]]; then
+    logi "Зависимости уже установлены — пропускаю apt/yum"
+    return 0
+  fi
   logi "Установка зависимостей..."
+  export DEBIAN_FRONTEND=noninteractive
   case "$OS_ID" in
     ubuntu|debian)
       apt-get update -y
-      DEBIAN_FRONTEND=noninteractive apt-get install -y -q curl wget tar ca-certificates openssl cron git socat
+      apt-get install -y -q curl wget tar ca-certificates openssl cron git socat
       ;;
     centos|rhel|rocky|almalinux|fedora)
       if command -v dnf >/dev/null 2>&1; then
@@ -170,7 +197,7 @@ install_packages() {
       logw "Неизвестный дистрибутив — установлю пакеты через apt (если есть)"
       if command -v apt-get >/dev/null 2>&1; then
         apt-get update -y
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -q curl wget tar ca-certificates openssl cron git socat
+        apt-get install -y -q curl wget tar ca-certificates openssl cron git socat
       fi
       ;;
   esac
@@ -182,7 +209,7 @@ install_docker() {
     return 0
   fi
   logi "Установка Docker..."
-  curl -fsSL https://get.docker.com | sh
+  curl4 -fsSL --connect-timeout 15 --retry 3 https://get.docker.com | sh
   systemctl enable docker 2>/dev/null || true
   systemctl start docker 2>/dev/null || true
   if ! command -v docker >/dev/null 2>&1; then
@@ -202,9 +229,9 @@ detect_public_ip() {
     logi "Публичный IP: ${SERVER_IP}"
     return 0
   fi
-  SERVER_IP=$(curl -4 -fsS --max-time 8 https://ifconfig.me 2>/dev/null \
-    || curl -4 -fsS --max-time 8 https://api.ipify.org 2>/dev/null \
-    || curl -4 -fsS --max-time 8 https://icanhazip.com 2>/dev/null \
+  SERVER_IP=$(curl4 -fsS --connect-timeout 5 --max-time 8 https://ifconfig.me 2>/dev/null \
+    || curl4 -fsS --connect-timeout 5 --max-time 8 https://api.ipify.org 2>/dev/null \
+    || curl4 -fsS --connect-timeout 5 --max-time 8 https://icanhazip.com 2>/dev/null \
     || true)
   SERVER_IP=$(echo "$SERVER_IP" | tr -d '[:space:]')
   if [[ -z "$SERVER_IP" ]] || ! is_ipv4 "$SERVER_IP"; then
@@ -261,8 +288,9 @@ clone_or_update_repo() {
       exit 1
     fi
     logi "Клонирование ${REPO_URL} → ${INSTALL_DIR}"
-    git clone --depth 1 --branch "$GIT_REF" "$REPO_URL" "$INSTALL_DIR" \
-      || git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch "$GIT_REF" --progress \
+      "$REPO_URL" "$INSTALL_DIR" \
+      || GIT_TERMINAL_PROMPT=0 git clone --depth 1 --progress "$REPO_URL" "$INSTALL_DIR"
     logi "Ревизия: $(git -C "$INSTALL_DIR" rev-parse --short HEAD)"
   fi
 }
@@ -344,7 +372,7 @@ install_acme() {
     return 0
   fi
   logi "Установка acme.sh..."
-  curl -fsSL https://get.acme.sh | sh -s email="${CERTBOT_EMAIL_VAL:-admin@localhost}"
+  curl4 -fsSL --connect-timeout 15 --retry 3 https://get.acme.sh | sh -s email="${CERTBOT_EMAIL_VAL:-admin@localhost}"
   # shellcheck source=/dev/null
   [[ -f "${ACME_HOME}/acme.sh.env" ]] && source "${ACME_HOME}/acme.sh.env" || true
   if [[ ! -x "${ACME_HOME}/acme.sh" ]]; then
@@ -1580,11 +1608,17 @@ print_summary() {
 main() {
   echo -e "${green}Amnezia WG-Easy — установщик${plain}"
   detect_os
-  install_packages
-  install_docker
-  detect_public_ip
-  clone_or_update_repo
-  reexec_from_repo_if_needed "$@"
+  if [[ "${AWG_REEXECED:-0}" == "1" ]]; then
+    # Already ran packages/docker/clone in the curl-bootstrap process; skip the slow redo.
+    logi "Продолжаю после reexec (зависимости/репозиторий уже готовы)"
+    detect_public_ip
+  else
+    install_packages
+    install_docker
+    detect_public_ip
+    clone_or_update_repo
+    reexec_from_repo_if_needed "$@"
+  fi
   prompt_admin
   prompt_ports
   prompt_and_setup_ssl
