@@ -96,7 +96,10 @@ const {
   WG_PERSISTENT_KEEPALIVE,
   WG_HOST,
   WG_PORT,
+  PANEL_HTTPS_PORT,
+  PANEL_DOMAIN,
 } = require('../config');
+const { buildPanelPublicBaseUrl } = require('./panelPublicUrl');
 
 const APP_SETTINGS_DEFAULTS = {
   check_update: 'false',
@@ -1143,13 +1146,18 @@ module.exports = class Server {
         if (!client) throw httpError(404, 'Client Not Found');
         amneziaXray.ensureClientUuids();
         const refreshed = db.clients.getById(clientId);
-        let baseUrl = '';
+        let requestUrl = null;
         try {
-          const url = getRequestURL(event);
-          baseUrl = `${url.protocol}//${url.host}`;
+          requestUrl = getRequestURL(event);
         } catch {
-          baseUrl = '';
+          requestUrl = null;
         }
+        const baseUrl = buildPanelPublicBaseUrl({
+          requestUrl,
+          panelDomain: PANEL_DOMAIN,
+          panelHttpsPort: PANEL_HTTPS_PORT,
+          wgHost: WG_HOST,
+        });
         const payload = amneziaXray.getClientXrayPayload(refreshed, { baseUrl });
         if (!payload) throw httpError(503, 'Xray keys not ready');
         let subQrSvg = null;

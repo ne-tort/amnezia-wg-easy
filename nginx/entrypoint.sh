@@ -7,6 +7,13 @@ OUTPUT="${CONF_DIR}/panel.conf"
 
 export PANEL_DOMAIN="${PANEL_DOMAIN:-${WG_HOST:-localhost}}"
 export PANEL_PORT="${PANEL_PORT:-51821}"
+export PANEL_HTTPS_PORT="${PANEL_HTTPS_PORT:-10123}"
+# Host-facing HTTPS port in redirects (container listens on 443; publish may be 10123).
+if [ "$PANEL_HTTPS_PORT" = "443" ]; then
+  export PANEL_HTTPS_REDIRECT_HOST='$host'
+else
+  export PANEL_HTTPS_REDIRECT_HOST="\$host:${PANEL_HTTPS_PORT}"
+fi
 export WEBUI_PUBLIC_PREFIX="${WEBUI_PUBLIC_PREFIX:-}"
 export NGINX_ROOT_BEHAVIOR="${NGINX_ROOT_BEHAVIOR:-redirect}"
 export NGINX_MIRROR_HOST="${NGINX_MIRROR_HOST:-}"
@@ -63,7 +70,7 @@ root_block_entry_redirect() {
   pf="${WEBUI_PUBLIC_PREFIX}"
   cat <<EOF
     location = / {
-        return 302 https://\$host${pf}/;
+        return 302 https://${PANEL_HTTPS_REDIRECT_HOST}${pf}/;
     }
 EOF
 }
@@ -113,7 +120,7 @@ rm -f "${CONF_DIR}/default.conf"
 inject_root() {
   _template="$1"
   _rootfile="$2"
-  envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${WEBUI_PUBLIC_PREFIX}' < "$_template" | awk -v rf="$_rootfile" '
+  envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${WEBUI_PUBLIC_PREFIX} ${PANEL_HTTPS_PORT} ${PANEL_HTTPS_REDIRECT_HOST}' < "$_template" | awk -v rf="$_rootfile" '
     /^[[:space:]]*__ROOT_BLOCK__[[:space:]]*$/ { while ((getline line < rf) > 0) print line; next }
     { print }
   '
@@ -133,7 +140,7 @@ server {
         root /var/www/certbot;
     }
     location / {
-        return 301 https://\$host\$request_uri;
+        return 301 https://${PANEL_HTTPS_REDIRECT_HOST}\$request_uri;
     }
 }
 server {
@@ -148,7 +155,7 @@ EOF
   printf '%s\n' "}" >>"$OUTPUT"
 elif [ -z "$WEBUI_PUBLIC_PREFIX" ]; then
   TEMPLATE="/etc/nginx/conf.d/panel-legacy.conf.template"
-  envsubst '${PANEL_DOMAIN} ${PANEL_PORT}' < "$TEMPLATE" >"$OUTPUT"
+  envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${PANEL_HTTPS_PORT} ${PANEL_HTTPS_REDIRECT_HOST}' < "$TEMPLATE" >"$OUTPUT"
 else
   TEMPLATE="/etc/nginx/conf.d/panel-subpath.conf.template"
   case "$NGINX_ROOT_BEHAVIOR" in

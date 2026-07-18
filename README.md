@@ -15,13 +15,10 @@ Self-hosted панель AmneziaWG для **Linux VPS** (Docker Engine + Compose
 На чистом VPS от root:
 
 ```bash
-bash <(curl -4fsSL --connect-timeout 8 --max-time 40 --retry 2 \
-  https://github.com/ne-tort/amnezia-wg-easy/raw/master/install.sh \
-  || curl -4fsSL --connect-timeout 8 --max-time 40 \
-  https://cdn.jsdelivr.net/gh/ne-tort/amnezia-wg-easy@master/install.sh)
+bash <(curl -4fsSL --connect-timeout 3 --retry 3 https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
 ```
 
-> Обязательно `-4`: на многих VPS сломан IPv6, и `curl` без `-4` минутами висит на `raw.githubusercontent.com` без единого сообщения. Fallback — jsDelivr.
+> `-4` — на многих VPS сломан IPv6, без него `curl` может долго висеть на `raw.githubusercontent.com`.
 
 Мастер спросит (Enter = default / skip):
 
@@ -36,10 +33,7 @@ bash <(curl -4fsSL --connect-timeout 8 --max-time 40 --retry 2 \
 
 ```bash
 AWG_NONINTERACTIVE=1 AWG_SSL_MODE=ip AWG_ENABLE_DNS=1 AWG_ENABLE_XRAY=1 \
-  bash <(curl -4fsSL --connect-timeout 8 --max-time 40 --retry 2 \
-    https://github.com/ne-tort/amnezia-wg-easy/raw/master/install.sh \
-    || curl -4fsSL --connect-timeout 8 --max-time 40 \
-    https://cdn.jsdelivr.net/gh/ne-tort/amnezia-wg-easy@master/install.sh)
+  bash <(curl -4fsSL --connect-timeout 3 --retry 3 https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
 ```
 
 ## Ручной старт (`deploy.sh`)
