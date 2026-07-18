@@ -1,7 +1,10 @@
 #!/bin/bash
 # Amnezia WG-Easy — one-liner installer (3x-ui style).
-# Usage (IPv4 forced: broken IPv6 makes raw.githubusercontent.com hang on many VPS):
-#   bash <(curl -4fsSL --connect-timeout 10 --retry 3 https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
+# Usage (IPv4 + GitHub/jsDelivr — broken IPv6 makes raw.githubusercontent.com hang):
+#   bash <(curl -4fsSL --connect-timeout 8 --max-time 40 --retry 2 \
+#     https://github.com/ne-tort/amnezia-wg-easy/raw/master/install.sh \
+#     || curl -4fsSL --connect-timeout 8 --max-time 40 \
+#     https://cdn.jsdelivr.net/gh/ne-tort/amnezia-wg-easy@master/install.sh)
 #
 # Env overrides (non-interactive / CI):
 #   AWG_NONINTERACTIVE=1
