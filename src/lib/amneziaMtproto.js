@@ -231,6 +231,7 @@ function buildConfigToml({
     'mask = true',
     'tls_emulation = true',
     'tls_front_dir = "tlsfront"',
+    'tls_new_session_tickets = 0',
     '',
     '[access]',
     'ignore_time_skew = true',
