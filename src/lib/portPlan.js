@@ -475,9 +475,39 @@ async function reloadNginx() {
 }
 
 /**
- * Recreate nginx with updated -p list while preserving image/network/env/mounts.
+ * Recreate nginx with updated publish ports.
+ * Prefer `docker compose … --force-recreate nginx` so the container keeps compose labels
+ * (raw `docker run --name nginx` orphans break the next deploy.sh).
  */
 async function recreateNginxForPlan(plan) {
+  writeComposePortsFile(plan);
+
+  const installDir = process.env.AWG_INSTALL_DIR || '/opt/amnezia-wg-easy';
+  const composeYml = path.join(installDir, 'docker-compose.yml');
+  const portsYml = path.join(installDir, COMPOSE_PORTS_NAME);
+  const envFile = path.join(installDir, '.env');
+
+  if (fs.existsSync(composeYml) && fs.existsSync(portsYml)) {
+    const composeArgs = ['compose'];
+    if (fs.existsSync(envFile)) {
+      composeArgs.push('--env-file', envFile);
+    }
+    composeArgs.push(
+      '-f', composeYml,
+      '-f', portsYml,
+      'up', '-d', '--no-deps', '--force-recreate', '--remove-orphans',
+      'nginx',
+    );
+    let viaCompose = await runCmd('docker', composeArgs, { timeout: 180_000 });
+    if (!viaCompose.ok) {
+      await runCmd('docker', ['rm', '-f', NGINX_CONTAINER], { timeout: 30_000 });
+      viaCompose = await runCmd('docker', composeArgs, { timeout: 180_000 });
+    }
+    if (viaCompose.ok) {
+      return { ok: true, recreated: true, via: 'compose' };
+    }
+  }
+
   const inspect = await runCmd('docker', ['inspect', NGINX_CONTAINER], { timeout: 15_000 });
   if (!inspect.ok) {
     return { ok: false, skipped: true, reason: 'nginx not found' };
@@ -516,13 +546,14 @@ async function recreateNginxForPlan(plan) {
     portArgs.push('-p', `${d.port}:${d.port}`);
   }
 
-  await runCmd('docker', ['stop', NGINX_CONTAINER], { timeout: 60_000 });
   await runCmd('docker', ['rm', '-f', NGINX_CONTAINER], { timeout: 30_000 });
 
   const args = [
     'run', '-d',
     '--name', NGINX_CONTAINER,
     '--restart', restart,
+    '--label', 'com.docker.compose.project=amnezia-wg-easy',
+    '--label', 'com.docker.compose.service=nginx',
   ];
   if (primaryNet) args.push('--network', primaryNet);
   for (const e of env) {
@@ -537,7 +568,7 @@ async function recreateNginxForPlan(plan) {
   if (!run.ok) {
     throw new Error(run.stderr.trim() || 'failed to recreate nginx');
   }
-  return { ok: true, recreated: true };
+  return { ok: true, recreated: true, via: 'docker-run' };
 }
 
 function portsNeedRecreate(plan) {

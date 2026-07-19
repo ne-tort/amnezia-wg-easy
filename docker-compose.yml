@@ -104,5 +104,8 @@ networks:
 
 volumes:
   amnezia-wg-data:
+    name: amnezia-wg-easy_amnezia-wg-data
   certbot_conf:
+    name: amnezia-wg-easy_certbot_conf
   certbot_www:
+    name: amnezia-wg-easy_certbot_www

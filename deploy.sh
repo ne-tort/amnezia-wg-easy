@@ -262,14 +262,29 @@ EOF
 fi
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.ports.yml)
 
+# portPlan may recreate nginx via `docker run --name nginx` (no compose labels).
+# That orphan blocks `compose up` with "name already in use".
+clear_nginx_name_conflict() {
+  if docker inspect nginx >/dev/null 2>&1; then
+    local labels
+    labels=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' nginx 2>/dev/null || true)
+    if [[ -z "$labels" || "$labels" != "$COMPOSE_PROJECT_NAME" ]]; then
+      echo "[deploy] Removing orphan nginx container (not owned by compose project ${COMPOSE_PROJECT_NAME})"
+      docker rm -f nginx >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
 compose_ok=0
 for i in 1 2 3; do
+  clear_nginx_name_conflict
   if docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_TLS_ARGS[@]}" up -d --build --remove-orphans; then
     compose_ok=1
     break
   fi
   if [ "$i" -lt 3 ]; then
-    echo "[deploy] compose up --build failed (attempt $i/3); pruning builder cache and retrying in 5s..." >&2
+    echo "[deploy] compose up --build failed (attempt $i/3); clearing nginx name + prune, retry in 5s..." >&2
+    docker rm -f nginx >/dev/null 2>&1 || true
     docker builder prune -f 2>/dev/null || true
     sleep 5
   fi

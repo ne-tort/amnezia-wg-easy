@@ -743,8 +743,8 @@ detect_service_enabled_default() {
 
 free_port_80() {
   logi "Освобождаю порт 80 для ACME..."
-  docker stop nginx certbot 2>/dev/null || true
-  # Best-effort: stop anything on 80 if still busy (don't kill docker daemon)
+  # rm (not only stop): a stopped orphan named nginx still blocks compose up
+  docker rm -f nginx certbot 2>/dev/null || true
   if is_port_in_use 80; then
     logw "Порт 80 всё ещё занят — ACME standalone может не сработать"
   fi
