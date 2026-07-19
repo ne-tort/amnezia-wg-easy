@@ -27,9 +27,6 @@ const {
   syncClientsFromDb: syncAmneziaXrayClients,
   ensureClientUuids: ensureAmneziaXrayClientUuids,
 } = require('./amneziaXray');
-const {
-  getStatus: getAmneziaMtprotoStatus,
-} = require('./amneziaMtproto');
 const { computeClientPresence } = require('./clientPresence');
 const { CLIENT_ONLINE_WINDOW_MS } = require('../config');
 
@@ -717,8 +714,6 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     const amneziaDnsAvailable = amneziaDnsStatus.available === true;
     const amneziaXrayStatus = getAmneziaXrayStatus();
     const amneziaXrayAvailable = amneziaXrayStatus.available === true;
-    const amneziaMtprotoStatus = getAmneziaMtprotoStatus();
-    const amneziaMtprotoAvailable = amneziaMtprotoStatus.available === true;
     const poolCidrs = db.vpnPools.list().map((p) => p.cidr);
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
@@ -841,26 +836,6 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
           demuxPeers: amneziaXrayStatus.demuxPeers,
           healthy: amneziaXrayStatus.healthy === true,
           smoke: amneziaXrayStatus.smoke || null,
-        },
-        mtprotoAvailable: amneziaMtprotoAvailable,
-        mtproto: {
-          phase: amneziaMtprotoStatus.phase,
-          desired: amneziaMtprotoStatus.desired,
-          lastError: amneziaMtprotoStatus.lastError,
-          busy: amneziaMtprotoStatus.busy,
-          updatedAt: amneziaMtprotoStatus.updatedAt,
-          address: amneziaMtprotoStatus.address,
-          addressStored: amneziaMtprotoStatus.addressStored,
-          sni: amneziaMtprotoStatus.sni,
-          sniStored: amneziaMtprotoStatus.sniStored,
-          port: amneziaMtprotoStatus.port,
-          publicPort: amneziaMtprotoStatus.publicPort,
-          mode: amneziaMtprotoStatus.mode,
-          demuxPeers: amneziaMtprotoStatus.demuxPeers,
-          link: amneziaMtprotoStatus.link,
-          linkTme: amneziaMtprotoStatus.linkTme,
-          healthy: amneziaMtprotoStatus.healthy === true,
-          smoke: amneziaMtprotoStatus.smoke || null,
         },
       },
       serverJunk,

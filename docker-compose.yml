@@ -1,5 +1,5 @@
 # Amnezia WG-Easy — ./deploy.sh or: docker compose up -d --build
-# Amnezia DNS / Xray / MTProto: optional containers via docker run (not compose services).
+# Amnezia DNS / Xray: optional containers via docker run (not compose services).
 # Network amnezia-dns-net is created by deploy.sh; panel attaches as external.
 # Extra nginx ports (panel HTTPS + SNI demux) come from docker-compose.ports.yml (portPlan).
 

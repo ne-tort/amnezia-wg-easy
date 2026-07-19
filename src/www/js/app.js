@@ -221,23 +221,7 @@ new Vue({
       { value: 'xtls-rprx-vision-udp443', label: 'xtls-rprx-vision-udp443' },
       { value: '', label: '(none)' },
     ],
-    amneziaMtprotoAvailable: false,
-    amneziaMtprotoHealthy: false,
-    amneziaMtprotoSmokeOk: false,
-    amneziaMtprotoPhase: 'off',
-    amneziaMtprotoBusy: false,
-    amneziaMtprotoError: null,
-    amneziaMtprotoPollTimer: null,
-    amneziaMtprotoSni: '',
-    amneziaMtprotoAddress: '',
-    amneziaMtprotoPort: '',
-    amneziaMtprotoPublicPort: 443,
-    amneziaMtprotoMode: null,
-    amneziaMtprotoDemuxPeers: [],
-    amneziaMtprotoLink: '',
-    amneziaMtprotoInstallOpen: false,
     sniFinderDefaultSni: null,
-    sniFinderTarget: 'xray', // 'xray' | 'mtproto' — which install modal opened the finder
     sniFinderOpen: false,
     sniFinderPublicIp: null,
     sniFinderDefaultCidr: '',
@@ -257,9 +241,6 @@ new Vue({
     qrcodeXrayVlessUrl: '',
     qrcodeXrayJson: '',
     qrcodeXrayClientId: null,
-    qrcodeMtprotoSvg: null,
-    qrcodeMtprotoTgUrl: '',
-    qrcodeMtprotoTmeUrl: '',
     ruleProfiles: [],
     globalFirewallRules: [],
     globalRuleEdit: null,
@@ -902,33 +883,6 @@ new Vue({
       if (this.amneziaXrayBusy) this.ensureAmneziaXrayPoll();
       else this.stopAmneziaXrayPoll();
     },
-    applyAmneziaMtprotoCapability(caps) {
-      const c = caps || {};
-      const st = c.mtproto || {};
-      const smokeOk = !!(st.smoke && st.smoke.ok === true);
-      const healthy = st.healthy === true
-        || (st.phase === 'running' && smokeOk)
-        || (c.mtprotoAvailable === true && smokeOk);
-      this.amneziaMtprotoSmokeOk = smokeOk;
-      this.amneziaMtprotoHealthy = healthy;
-      this.amneziaMtprotoAvailable = healthy;
-      if (st.phase) this.amneziaMtprotoPhase = st.phase;
-      this.amneziaMtprotoBusy = st.busy === true
-        || st.phase === 'installing'
-        || st.phase === 'removing';
-      this.amneziaMtprotoError = st.lastError || null;
-      if (st.sniStored) this.amneziaMtprotoSni = st.sniStored;
-      else if (st.sni && !this.amneziaMtprotoSni) this.amneziaMtprotoSni = st.sni;
-      if (st.addressStored) this.amneziaMtprotoAddress = st.addressStored;
-      else if (st.address && !this.amneziaMtprotoAddress) this.amneziaMtprotoAddress = st.address;
-      if (st.port) this.amneziaMtprotoPort = st.port;
-      if (st.publicPort) this.amneziaMtprotoPublicPort = st.publicPort;
-      this.amneziaMtprotoMode = st.mode || null;
-      this.amneziaMtprotoDemuxPeers = Array.isArray(st.demuxPeers) ? st.demuxPeers : [];
-      if (st.link) this.amneziaMtprotoLink = st.link;
-      if (this.amneziaMtprotoBusy) this.ensureAmneziaMtprotoPoll();
-      else this.stopAmneziaMtprotoPoll();
-    },
     async refreshAmneziaXrayStatus() {
       if (!this.canManageXray) return null;
       try {
@@ -1002,15 +956,11 @@ new Vue({
         || !this.isValidAmneziaXrayPort
         || !this.isValidAmneziaXrayPublicPort
       ) return;
-      if (this.xraySniConflictsMtproto) {
-        alert(this.$t('xraySniConflict'));
-        return;
-      }
       this.closeAmneziaXrayInstall();
       this.amneziaXrayBusy = true;
       this.ensureAmneziaXrayPoll();
       try {
-        await this.preflightSniForInstall(this.amneziaXraySni, { forService: 'xray' });
+        await this.preflightSniForInstall(this.amneziaXraySni);
         const body = {
           address: String(this.amneziaXrayAddress).trim(),
           sni: String(this.amneziaXraySni).trim(),
@@ -1135,10 +1085,7 @@ new Vue({
         return null;
       }
     },
-    async openSniFinder(target) {
-      this.sniFinderTarget = (target === 'mtproto' || this.amneziaMtprotoInstallOpen)
-        ? 'mtproto'
-        : 'xray';
+    async openSniFinder() {
       this.sniFinderOpen = true;
       this.sniFinderError = null;
       this.sniFinderEmptyMsg = null;
@@ -1150,44 +1097,24 @@ new Vue({
     },
     sniRowBlockedForTarget(row) {
       if (!row || row.alive === false) return true;
-      const domain = String(row.domain || '').trim().toLowerCase();
-      if (!domain) return true;
-      const samePublic = (Number(this.amneziaMtprotoPublicPort) || 443)
-        === (Number(this.amneziaXrayPublicPort) || 443);
-      if (!samePublic) return false;
-      if (this.sniFinderTarget === 'mtproto') {
-        const xray = String(this.amneziaXraySni || '').trim().toLowerCase();
-        return !!xray && domain === xray;
-      }
-      const mt = String(this.amneziaMtprotoSni || '').trim().toLowerCase();
-      return !!mt && domain === mt;
+      return !String(row.domain || '').trim();
     },
     pickSniDomain(row) {
       if (!row || row.alive === false) return;
-      if (this.sniRowBlockedForTarget(row)) {
-        alert(this.$t(this.sniFinderTarget === 'mtproto' ? 'mtprotoSniConflict' : 'xraySniConflict'));
-        return;
-      }
+      if (this.sniRowBlockedForTarget(row)) return;
       const domain = typeof row === 'string' ? row : row.domain;
       if (!domain) return;
       const value = String(domain).trim();
-      if (this.sniFinderTarget === 'mtproto' || this.amneziaMtprotoInstallOpen) {
-        this.amneziaMtprotoSni = '';
-        this.$nextTick(() => {
-          this.amneziaMtprotoSni = value;
-        });
-      } else {
-        this.amneziaXraySni = '';
-        this.$nextTick(() => {
-          this.amneziaXraySni = value;
-        });
-      }
+      this.amneziaXraySni = '';
+      this.$nextTick(() => {
+        this.amneziaXraySni = value;
+      });
       this.closeSniFinder();
     },
     /**
-     * Recheck SNI (public DNS + TLS/h2) before enable. Reality and Telemt both need a real hostname.
+     * Recheck SNI (public DNS + TLS/h2) before enable. Reality needs a real hostname.
      */
-    async preflightSniForInstall(sni, { forService } = {}) {
+    async preflightSniForInstall(sni) {
       const domain = String(sni || '').trim();
       if (!domain) {
         throw new Error(this.$t('sniPreflightEmpty') || 'SNI is required');
@@ -1198,12 +1125,6 @@ new Vue({
           this.$t('sniPreflightDead', { domain })
           || `SNI «${domain}» failed DNS/TLS check (need a real public hostname)`,
         );
-      }
-      if (forService === 'mtproto' && this.mtprotoSniConflictsXray) {
-        throw new Error(this.$t('mtprotoSniConflict'));
-      }
-      if (forService === 'xray' && this.xraySniConflictsMtproto) {
-        throw new Error(this.$t('xraySniConflict'));
       }
       return updated;
     },
@@ -1291,193 +1212,6 @@ new Vue({
       }
       this.openAmneziaXrayInstall();
     },
-    async refreshAmneziaMtprotoStatus() {
-      if (!this.canManageMtproto) return null;
-      try {
-        const st = await this.api.getAmneziaMtprotoStatus();
-        this.applyAmneziaMtprotoCapability({
-          mtprotoAvailable: st.available === true,
-          mtproto: st,
-        });
-        return st;
-      } catch (err) {
-        this.amneziaMtprotoError = (err && err.message) || String(err);
-        return null;
-      }
-    },
-    ensureAmneziaMtprotoPoll() {
-      if (this.amneziaMtprotoPollTimer) return;
-      this.amneziaMtprotoPollTimer = setInterval(() => {
-        this.refreshAmneziaMtprotoStatus().then((st) => {
-          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
-            this.refresh().catch(() => {});
-          }
-        });
-      }, 1000);
-    },
-    stopAmneziaMtprotoPoll() {
-      if (this.amneziaMtprotoPollTimer) {
-        clearInterval(this.amneziaMtprotoPollTimer);
-        this.amneziaMtprotoPollTimer = null;
-      }
-    },
-    amneziaMtprotoHeaderTitle() {
-      const phase = this.amneziaMtprotoPhase;
-      if (phase === 'installing' || phase === 'removing' || this.amneziaMtprotoBusy) {
-        return this.$t('mtprotoHeaderBusy');
-      }
-      if (phase === 'error') {
-        return (this.amneziaMtprotoError && `${this.$t('mtprotoHeaderError')}: ${this.amneziaMtprotoError}`)
-          || this.$t('mtprotoHeaderError');
-      }
-      if (phase === 'degraded' || (phase === 'running' && !this.amneziaMtprotoHealthy)) {
-        return this.$t('mtprotoHeaderDegraded');
-      }
-      if (phase === 'running' && this.amneziaMtprotoHealthy) return this.$t('mtprotoHeaderDisable');
-      return this.$t('mtprotoHeaderEnable');
-    },
-    closeAmneziaMtprotoInstall() {
-      this.amneziaMtprotoInstallOpen = false;
-    },
-    openAmneziaMtprotoInstall() {
-      Promise.all([
-        this.refreshAmneziaMtprotoStatus(),
-        this.refreshAmneziaXrayStatus(),
-        this.refreshSniCache({ ensureBg: true }),
-      ]).finally(() => {
-        if (!String(this.amneziaMtprotoAddress || '').trim()) {
-          this.amneziaMtprotoAddress = (typeof window !== 'undefined' && window.location && window.location.hostname)
-            ? window.location.hostname
-            : '';
-        }
-        if (!String(this.amneziaMtprotoSni || '').trim()) {
-          const xraySni = String(this.amneziaXraySni || '').trim().toLowerCase();
-          const samePublic = (Number(this.amneziaMtprotoPublicPort) || 443)
-            === (Number(this.amneziaXrayPublicPort) || 443);
-          const candidates = (this.sniFinderEntries || [])
-            .filter((e) => e && e.alive !== false && e.domain)
-            .map((e) => String(e.domain).trim());
-          const alt = samePublic
-            ? candidates.find((d) => d.toLowerCase() !== xraySni)
-            : (candidates[0] || null);
-          this.amneziaMtprotoSni = alt || this.sniFinderDefaultSni || '';
-          if (samePublic && this.amneziaMtprotoSni && xraySni
-            && this.amneziaMtprotoSni.toLowerCase() === xraySni) {
-            this.amneziaMtprotoSni = '';
-          }
-        }
-        this.amneziaMtprotoInstallOpen = true;
-      });
-    },
-    async confirmAmneziaMtprotoInstall() {
-      if (
-        this.amneziaMtprotoBusy
-        || !String(this.amneziaMtprotoSni || '').trim()
-        || !String(this.amneziaMtprotoAddress || '').trim()
-        || !this.isValidAmneziaMtprotoPort
-        || !this.isValidAmneziaMtprotoPublicPort
-      ) return;
-      if (this.mtprotoSniConflictsXray) {
-        alert(this.$t('mtprotoSniConflict'));
-        return;
-      }
-      this.closeAmneziaMtprotoInstall();
-      this.amneziaMtprotoBusy = true;
-      this.ensureAmneziaMtprotoPoll();
-      try {
-        await this.preflightSniForInstall(this.amneziaMtprotoSni, { forService: 'mtproto' });
-        const body = {
-          address: String(this.amneziaMtprotoAddress).trim(),
-          sni: String(this.amneziaMtprotoSni).trim(),
-          publicPort: Number(this.amneziaMtprotoPublicPort) || 443,
-        };
-        const portRaw = String(this.amneziaMtprotoPort == null ? '' : this.amneziaMtprotoPort).trim();
-        if (portRaw !== '') body.port = Number(portRaw);
-        await this.withAmneziaDnsTimeout(this.api.enableAmneziaMtproto(body), 180000);
-        await this.refreshAmneziaMtprotoStatus();
-        await this.refresh();
-      } catch (err) {
-        this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
-        alert(this.amneziaMtprotoError);
-        await this.refreshAmneziaMtprotoStatus();
-      } finally {
-        this.amneziaMtprotoBusy = false;
-        if (!['installing', 'removing'].includes(this.amneziaMtprotoPhase)) {
-          this.stopAmneziaMtprotoPoll();
-        }
-      }
-    },
-    async confirmAmneziaMtprotoReset() {
-      if (this.amneziaMtprotoBusy) return;
-      if (!window.confirm(this.$t('mtprotoResetConfirm'))) return;
-      this.amneziaMtprotoBusy = true;
-      this.ensureAmneziaMtprotoPoll();
-      try {
-        await this.withAmneziaDnsTimeout(this.api.resetAmneziaMtproto(), 120000);
-        await this.refreshAmneziaMtprotoStatus();
-        await this.refresh();
-        alert(this.$t('mtprotoResetDone'));
-      } catch (err) {
-        this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
-        alert(this.amneziaMtprotoError);
-        await this.refreshAmneziaMtprotoStatus();
-      } finally {
-        this.amneziaMtprotoBusy = false;
-        if (!['installing', 'removing'].includes(this.amneziaMtprotoPhase)) {
-          this.stopAmneziaMtprotoPoll();
-        }
-      }
-    },
-    async copyMtprotoLink() {
-      const link = String(this.amneziaMtprotoLink || '').trim();
-      if (!link) return;
-      try {
-        await navigator.clipboard.writeText(link);
-      } catch {
-        /* ignore */
-      }
-    },
-    async toggleAmneziaMtproto() {
-      if (!this.canManageMtproto || this.amneziaMtprotoBusy) return;
-      const phase = this.amneziaMtprotoPhase;
-      if (phase === 'running' || phase === 'degraded') {
-        this.amneziaMtprotoBusy = true;
-        this.ensureAmneziaMtprotoPoll();
-        try {
-          await this.withAmneziaDnsTimeout(this.api.disableAmneziaMtproto(), 60000);
-          await this.refreshAmneziaMtprotoStatus();
-          await this.refresh();
-        } catch (err) {
-          this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
-          alert(this.amneziaMtprotoError);
-          await this.refreshAmneziaMtprotoStatus();
-        } finally {
-          this.amneziaMtprotoBusy = false;
-          if (!['installing', 'removing'].includes(this.amneziaMtprotoPhase)) {
-            this.stopAmneziaMtprotoPoll();
-          }
-        }
-        return;
-      }
-      if (phase === 'error') {
-        this.amneziaMtprotoBusy = true;
-        this.ensureAmneziaMtprotoPoll();
-        try {
-          await this.withAmneziaDnsTimeout(this.api.forceCleanupAmneziaMtproto(), 60000);
-          await this.refreshAmneziaMtprotoStatus();
-          await this.refresh();
-        } catch (err) {
-          this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
-          alert(this.amneziaMtprotoError);
-          await this.refreshAmneziaMtprotoStatus();
-        } finally {
-          this.amneziaMtprotoBusy = false;
-          this.stopAmneziaMtprotoPoll();
-        }
-        return;
-      }
-      this.openAmneziaMtprotoInstall();
-    },
     getClientUseServerDns(client) {
       return this.clientUseServerDns[client.id] !== false;
     },
@@ -1538,15 +1272,11 @@ new Vue({
         const xrayPromise = this.amneziaXrayAvailable
           ? this.api.getClientXray(client.id)
           : Promise.reject(new Error('xray off'));
-        const mtprotoPromise = this.amneziaMtprotoAvailable
-          ? this.api.getClientMtproto(client.id)
-          : Promise.reject(new Error('mtproto off'));
-        const [textRes, amneziaRes, previewRes, xrayRes, mtprotoRes] = await Promise.allSettled([
+        const [textRes, amneziaRes, previewRes, xrayRes] = await Promise.allSettled([
           this.api.getClientQRCodeSVG(client.id, level, profile, 'text'),
           this.api.getClientQRCodeSVG(client.id, level, profile, 'amnezia'),
           this.api.getConfiguration(client.id, level, profile),
           xrayPromise,
-          mtprotoPromise,
         ]);
 
         this.qrcodeText = null;
@@ -1561,9 +1291,6 @@ new Vue({
         this.qrcodeXrayVlessUrl = '';
         this.qrcodeXrayJson = '';
         this.qrcodeXrayClientId = client.id;
-        this.qrcodeMtprotoSvg = null;
-        this.qrcodeMtprotoTgUrl = '';
-        this.qrcodeMtprotoTmeUrl = '';
 
         if (textRes.status === 'fulfilled' && textRes.value && textRes.value.svg) {
           this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(textRes.value.svg);
@@ -1591,22 +1318,12 @@ new Vue({
             this.qrcodeXraySvg = 'data:image/svg+xml,' + encodeURIComponent(x.subQrSvg);
           }
         }
-        if (mtprotoRes.status === 'fulfilled' && mtprotoRes.value) {
-          const m = mtprotoRes.value;
-          this.qrcodeMtprotoTgUrl = m.link || '';
-          this.qrcodeMtprotoTmeUrl = m.linkTme || '';
-          if (m.linkQrSvg) {
-            this.qrcodeMtprotoSvg = 'data:image/svg+xml,' + encodeURIComponent(m.linkQrSvg);
-          }
-        }
 
         const hasAny = this.qrcodeText
           || (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length)
           || this.qrcodePreviewText
           || this.qrcodeXraySvg
-          || this.qrcodeXraySubUrl
-          || this.qrcodeMtprotoSvg
-          || this.qrcodeMtprotoTgUrl;
+          || this.qrcodeXraySubUrl;
         if (!hasAny) {
           const err = (textRes.status === 'rejected' && textRes.reason)
             || (amneziaRes.status === 'rejected' && amneziaRes.reason)
@@ -1617,7 +1334,6 @@ new Vue({
         if (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length) this.qrcodeTab = 'amnezia';
         else if (this.qrcodeText) this.qrcodeTab = 'text';
         else if (this.qrcodeXraySvg || this.qrcodeXraySubUrl) this.qrcodeTab = 'xray';
-        else if (this.qrcodeMtprotoSvg || this.qrcodeMtprotoTgUrl) this.qrcodeTab = 'mtproto';
         else this.qrcodeTab = 'preview';
 
         if (!this.qrcodeText && textRes.status === 'rejected') {
@@ -1640,9 +1356,6 @@ new Vue({
       this.qrcodeXrayVlessUrl = '';
       this.qrcodeXrayJson = '';
       this.qrcodeXrayClientId = null;
-      this.qrcodeMtprotoSvg = null;
-      this.qrcodeMtprotoTgUrl = '';
-      this.qrcodeMtprotoTmeUrl = '';
       this.qrcodeTab = 'amnezia';
     },
     async copyQrXraySub() {
@@ -1662,20 +1375,6 @@ new Vue({
     async copyQrXrayJson() {
       try {
         await this.copyTextToClipboard(this.qrcodeXrayJson || '');
-      } catch (err) {
-        alert(err.message || 'Copy failed');
-      }
-    },
-    async copyQrMtprotoTg() {
-      try {
-        await this.copyTextToClipboard(this.qrcodeMtprotoTgUrl || '');
-      } catch (err) {
-        alert(err.message || 'Copy failed');
-      }
-    },
-    async copyQrMtprotoTme() {
-      try {
-        await this.copyTextToClipboard(this.qrcodeMtprotoTmeUrl || '');
       } catch (err) {
         alert(err.message || 'Copy failed');
       }
@@ -1747,7 +1446,6 @@ new Vue({
         this.refreshError = null;
         this.applyAmneziaDnsCapability(res.serverCapabilities);
         this.applyAmneziaXrayCapability(res.serverCapabilities);
-        this.applyAmneziaMtprotoCapability(res.serverCapabilities);
         if (res.serverJunk) this.serverJunk = res.serverJunk;
         const list = Array.isArray(res.clients) ? res.clients : [];
         this.clients = list.map((client) => {
@@ -2798,38 +2496,15 @@ new Vue({
     canManageXray() {
       return this.hasCapability('system.xray');
     },
-    canManageMtproto() {
-      return this.hasCapability('system.mtproto');
-    },
     isValidAmneziaXrayPort() {
       const raw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
       if (raw === '') return true;
       const n = Number(raw);
       return Number.isInteger(n) && n >= 1 && n <= 65535;
     },
-    isValidAmneziaMtprotoPort() {
-      const raw = String(this.amneziaMtprotoPort == null ? '' : this.amneziaMtprotoPort).trim();
-      if (raw === '') return true;
-      const n = Number(raw);
-      return Number.isInteger(n) && n >= 1 && n <= 65535;
-    },
-    xraySniConflictsMtproto() {
-      const a = String(this.amneziaXraySni || '').trim().toLowerCase();
-      const b = String(this.amneziaMtprotoSni || '').trim().toLowerCase();
-      const pa = Number(this.amneziaXrayPublicPort) || 443;
-      const pb = Number(this.amneziaMtprotoPublicPort) || 443;
-      return Boolean(a && b && a === b && pa === pb);
-    },
     isValidAmneziaXrayPublicPort() {
       const n = Number(this.amneziaXrayPublicPort);
       return Number.isInteger(n) && n >= 1 && n <= 65535;
-    },
-    isValidAmneziaMtprotoPublicPort() {
-      const n = Number(this.amneziaMtprotoPublicPort);
-      return Number.isInteger(n) && n >= 1 && n <= 65535;
-    },
-    mtprotoSniConflictsXray() {
-      return this.xraySniConflictsMtproto;
     },
     sniFinderProgressPct() {
       const t = Number(this.sniFinderProgress && this.sniFinderProgress.total) || 0;
@@ -2898,9 +2573,7 @@ new Vue({
         || (Array.isArray(this.qrcodeAmneziaSvgs) && this.qrcodeAmneziaSvgs.length > 0)
         || !!this.qrcodePreviewText
         || !!this.qrcodeXraySvg
-        || !!this.qrcodeXraySubUrl
-        || !!this.qrcodeMtprotoSvg
-        || !!this.qrcodeMtprotoTgUrl;
+        || !!this.qrcodeXraySubUrl;
     },
     /** Safe for Vue 2 template (avoids ReferenceError if stale cached app.js lacks data key). */
     amneziaQrImages() {

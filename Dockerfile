@@ -77,8 +77,6 @@ RUN chmod +x /app/scripts/cascade-in-container-postup.sh /app/scripts/cascade-in
 COPY amnezia-dns/Dockerfile /opt/amnezia/amnezia-dns/Dockerfile
 # Xray VLESS Reality image sources (stdin docker build from panel; deploy.sh also pre-builds).
 COPY amnezia-xray/Dockerfile amnezia-xray/start.sh /opt/amnezia/xray/
-# MTProto Telemt image sources.
-COPY amnezia-mtproto/Dockerfile amnezia-mtproto/start.sh /opt/amnezia/mtproto/
 
 WORKDIR /app
 CMD ["/entrypoint.sh"]

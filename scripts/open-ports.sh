@@ -1,6 +1,6 @@
 #!/bin/bash
 # Open firewall ports for Amnezia WG-Easy (run on host, with sudo if needed).
-# Reads .env: WG_PORT, PANEL_HTTP/HTTPS, XRAY_PUBLIC_PORT, MTPROTO_PUBLIC_PORT.
+# Reads .env: WG_PORT, PANEL_HTTP/HTTPS, XRAY_PUBLIC_PORT.
 # DNS (53/853) is VPN-internal only — not opened on the host.
 
 set -e
@@ -10,7 +10,6 @@ WG_PORT=51820
 PANEL_HTTP_PORT=80
 PANEL_HTTPS_PORT=10123
 XRAY_PUBLIC_PORT=443
-MTPROTO_PUBLIC_PORT=443
 
 if [ -f "$ENV_FILE" ]; then
   . "$ENV_FILE" 2>/dev/null || true
@@ -19,9 +18,8 @@ WG_PORT="${WG_PORT:-51820}"
 PANEL_HTTP_PORT="${PANEL_HTTP_PORT:-80}"
 PANEL_HTTPS_PORT="${PANEL_HTTPS_PORT:-10123}"
 XRAY_PUBLIC_PORT="${XRAY_PUBLIC_PORT:-443}"
-MTPROTO_PUBLIC_PORT="${MTPROTO_PUBLIC_PORT:-$XRAY_PUBLIC_PORT}"
 
-PORTS_TCP=("${PANEL_HTTP_PORT}" "${PANEL_HTTPS_PORT}" "${XRAY_PUBLIC_PORT}" "${MTPROTO_PUBLIC_PORT}")
+PORTS_TCP=("${PANEL_HTTP_PORT}" "${PANEL_HTTPS_PORT}" "${XRAY_PUBLIC_PORT}")
 # unique
 uniq_tcp=()
 for p in "${PORTS_TCP[@]}"; do
@@ -32,7 +30,7 @@ for p in "${PORTS_TCP[@]}"; do
   [[ "$skip" -eq 0 && -n "$p" ]] && uniq_tcp+=("$p")
 done
 
-echo "Opening UDP ${WG_PORT} (VPN) and TCP: ${uniq_tcp[*]} (panel/HTTP + Xray/MT public)..."
+echo "Opening UDP ${WG_PORT} (VPN) and TCP: ${uniq_tcp[*]} (panel/HTTP + Xray public)..."
 echo "Note: Amnezia DNS stays on VPN only (no host :53/:853)."
 
 open_tcp() {

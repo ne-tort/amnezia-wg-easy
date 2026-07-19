@@ -192,7 +192,7 @@ function isDomain(d) {
 }
 
 /**
- * True if domain has a public A (or any AAAA) — required for Reality dest / Telemt Fake-TLS.
+ * True if domain has a public A (or any AAAA) — required for Reality dest.
  * Scan IPs often present CN/SAN that do not resolve on the public Internet.
  */
 async function domainHasPublicDns(domain) {

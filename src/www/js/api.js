@@ -473,30 +473,6 @@ class API {
     return this.call({ method: 'get', path: `/wireguard/client/${clientId}/xray` });
   }
 
-  async getClientMtproto(clientId) {
-    return this.call({ method: 'get', path: `/wireguard/client/${clientId}/mtproto` });
-  }
-
-  async getAmneziaMtprotoStatus() {
-    return this.call({ method: 'get', path: '/amnezia-mtproto' });
-  }
-
-  async enableAmneziaMtproto(body = {}) {
-    return this.call({ method: 'post', path: '/amnezia-mtproto/enable', body });
-  }
-
-  async disableAmneziaMtproto() {
-    return this.call({ method: 'post', path: '/amnezia-mtproto/disable' });
-  }
-
-  async forceCleanupAmneziaMtproto() {
-    return this.call({ method: 'post', path: '/amnezia-mtproto/force-cleanup' });
-  }
-
-  async resetAmneziaMtproto() {
-    return this.call({ method: 'post', path: '/amnezia-mtproto/reset' });
-  }
-
   async getRuleProfiles() {
     return this.call({ method: 'get', path: '/rule-profiles' });
   }

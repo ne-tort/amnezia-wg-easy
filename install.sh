@@ -9,7 +9,7 @@
 #   AWG_ADMIN_USER AWG_ADMIN_PASSWORD
 #   AWG_WG_PORT AWG_PANEL_HTTPS_PORT AWG_XRAY_PORT
 #   AWG_DOMAIN AWG_EMAIL AWG_SSL_IPV6
-#   AWG_ENABLE_DNS=1|0  AWG_ENABLE_XRAY=1|0  AWG_ENABLE_MTPROTO=1|0
+#   AWG_ENABLE_DNS=1|0  AWG_ENABLE_XRAY=1|0
 #   AWG_INSTALL_DIR=/opt/amnezia-wg-easy  AWG_GIT_REF=master
 #   AWG_REPO_URL=https://github.com/ne-tort/amnezia-wg-easy.git
 #   AWG_SSL_FORCE_RENEW=1  — принудительный повторный выпуск LE (по умолчанию reuse)
@@ -41,22 +41,20 @@ PANEL_DOMAIN_VAL=""
 CERTBOT_EMAIL_VAL=""
 ENABLE_DNS=1
 ENABLE_XRAY=1
-ENABLE_MTPROTO=1
 WG_PORT_VAL=""
 PANEL_HTTPS_PORT_VAL=""
 XRAY_PORT_VAL=""
 XRAY_PUBLIC_PORT_VAL=""
-MTPROTO_PUBLIC_PORT_VAL=""
 WEBUI_PUBLIC_PREFIX_VAL="/panel"
 SUB_PUBLIC_PREFIX_VAL="/sub"
 NGINX_ROOT_BEHAVIOR_VAL="mirror"
 NGINX_MIRROR_HOST_VAL=""
 MIRROR_USE_SNI_VAL=0
 
-# Random free ports (user/dynamic range) for AWG UDP / Xray+MTProto internal TCP.
+# Random free ports (user/dynamic range) for AWG UDP / Xray internal TCP.
 PORT_RAND_MIN=20000
 PORT_RAND_MAX=50000
-# Default panel HTTPS = 443 (SNI demux with Xray/MT). Bare IP stays on shared port via catch-all.
+# Default panel HTTPS = 443 (SNI demux with Xray). Bare IP stays on shared port via catch-all.
 DEFAULT_PANEL_HTTPS_PORT=443
 # Preferred internal Xray listen; empty = auto. Clients use public ports / demux.
 DEFAULT_XRAY_PORT=""
@@ -710,15 +708,13 @@ prompt_ports() {
   fi
   logi "HTTPS панели: ${PANEL_HTTPS_PORT_VAL}/tcp"
 
-  # --- Xray / MTProto public TCP (same port → SNI demux; different → direct publish) ---
-  local cur_xray_pub cur_mt_pub
+  # --- Xray public TCP (same as panel → SNI demux; different → direct publish) ---
+  local cur_xray_pub
   cur_xray_pub=$(read_existing_env_port XRAY_PUBLIC_PORT)
-  cur_mt_pub=$(read_existing_env_port MTPROTO_PUBLIC_PORT)
   [[ -z "$cur_xray_pub" ]] && cur_xray_pub=$(read_existing_env_port XRAY_PORT)
 
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     XRAY_PUBLIC_PORT_VAL="${AWG_XRAY_PUBLIC_PORT:-${AWG_XRAY_PORT:-${cur_xray_pub:-443}}}"
-    MTPROTO_PUBLIC_PORT_VAL="${AWG_MTPROTO_PUBLIC_PORT:-${cur_mt_pub:-$XRAY_PUBLIC_PORT_VAL}}"
   else
     while true; do
       ans=""
@@ -740,35 +736,12 @@ prompt_ports() {
         loge "Некорректный порт. Повторите ввод."
       fi
     done
-    while true; do
-      ans=""
-      local mhint
-      if [[ -n "$cur_mt_pub" ]]; then mhint="редеплой: ${cur_mt_pub}"; else mhint="по умолчанию: ${XRAY_PUBLIC_PORT_VAL}"; fi
-      read -rp "MTProto public TCP [${mhint}]: " ans || true
-      ans="${ans// /}"
-      if [[ -z "$ans" ]]; then
-        MTPROTO_PUBLIC_PORT_VAL="${cur_mt_pub:-$XRAY_PUBLIC_PORT_VAL}"
-        break
-      elif [[ "$ans" =~ ^[0-9]+$ ]] && [[ "$ans" -ge 1 && "$ans" -le 65535 ]]; then
-        if [[ "$ans" == "80" ]]; then
-          loge "Порт 80 занят ACME/HTTP. Выберите другой."
-          continue
-        fi
-        MTPROTO_PUBLIC_PORT_VAL="$ans"
-        break
-      else
-        loge "Некорректный порт. Повторите ввод."
-      fi
-    done
   fi
 
-  if [[ "$XRAY_PUBLIC_PORT_VAL" == "$MTPROTO_PUBLIC_PORT_VAL" ]]; then
-    logi "Xray+MTProto public ${XRAY_PUBLIC_PORT_VAL}/tcp — SNI demux через nginx"
-    if [[ "$XRAY_PUBLIC_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]]; then
-      logi "Панель тоже на ${PANEL_HTTPS_PORT_VAL} — войдёт в demux по SNI (${PANEL_DOMAIN_VAL:-WG_HOST})"
-    fi
+  if [[ "$XRAY_PUBLIC_PORT_VAL" == "$PANEL_HTTPS_PORT_VAL" ]]; then
+    logi "Xray+панель public ${XRAY_PUBLIC_PORT_VAL}/tcp — SNI demux через nginx (${PANEL_DOMAIN_VAL:-WG_HOST})"
   else
-    logi "Xray public ${XRAY_PUBLIC_PORT_VAL}/tcp (direct), MTProto public ${MTPROTO_PUBLIC_PORT_VAL}/tcp (direct)"
+    logi "Xray public ${XRAY_PUBLIC_PORT_VAL}/tcp (direct)"
   fi
   # Internal listen ports allocated by panel; keep XRAY_PORT empty/auto in .env
   XRAY_PORT_VAL=""
@@ -824,7 +797,7 @@ prompt_ports() {
 }
 
 detect_service_enabled_default() {
-  # detect_service_enabled_default dns|xray|mtproto → prints y or n for confirm_yn default
+  # detect_service_enabled_default dns|xray → prints y or n for confirm_yn default
   local kind="$1" conf_key container def="y"
   case "$kind" in
     dns)
@@ -834,10 +807,6 @@ detect_service_enabled_default() {
     xray)
       conf_key=ENABLE_XRAY
       container=amnezia-xray
-      ;;
-    mtproto)
-      conf_key=ENABLE_MTPROTO
-      container=amnezia-mtproto
       ;;
     *) echo y; return 0 ;;
   esac
@@ -1514,18 +1483,13 @@ prompt_and_setup_ssl() {
 
 # After SSL we know PANEL_DOMAIN: explain demux model (no soft-force off 443 for bare IP).
 reconcile_panel_port_for_domain() {
-  local shared=0
-  if [[ "$PANEL_HTTPS_PORT_VAL" == "$XRAY_PUBLIC_PORT_VAL" ]] \
-    || [[ "$PANEL_HTTPS_PORT_VAL" == "$MTPROTO_PUBLIC_PORT_VAL" ]]; then
-    shared=1
-  fi
-  if [[ "$shared" -ne 1 ]]; then
+  if [[ "$PANEL_HTTPS_PORT_VAL" != "$XRAY_PUBLIC_PORT_VAL" ]]; then
     return 0
   fi
   if is_ip_literal "${PANEL_DOMAIN_VAL}"; then
-    logi "Панель IP + общий порт ${PANEL_HTTPS_PORT_VAL}: Xray/MT по SNI; без SNI/чужой SNI → заглушка+/panel"
+    logi "Панель IP + общий порт ${PANEL_HTTPS_PORT_VAL}: Xray по SNI; без SNI/чужой SNI → заглушка+/panel"
   else
-    logi "Панель FQDN + общий порт ${PANEL_HTTPS_PORT_VAL}: Xray/MT/панель по своим SNI; заглушка+/panel только на SNI панели"
+    logi "Панель FQDN + общий порт ${PANEL_HTTPS_PORT_VAL}: Xray/панель по своим SNI; заглушка+/panel только на SNI панели"
   fi
 }
 
@@ -1819,10 +1783,6 @@ apply_mirror_from_sni_if_requested() {
     | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
   [[ -z "$sni" ]] && sni=$(api_curl GET /api/amnezia-xray 2>/dev/null \
     | sed -n 's/.*"sni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  if [[ -z "$sni" ]]; then
-    sni=$(api_curl GET /api/amnezia-mtproto 2>/dev/null \
-      | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  fi
   sni=$(normalize_sni_host "$sni")
   [[ -z "$sni" ]] && return 0
   if sni_is_blocked_tld "$sni"; then
@@ -1873,7 +1833,6 @@ write_env() {
   env_set "$envf" WG_PORT "${WG_PORT_VAL}"
   env_set "$envf" PANEL_HTTPS_PORT "${PANEL_HTTPS_PORT_VAL}"
   env_set "$envf" XRAY_PUBLIC_PORT "${XRAY_PUBLIC_PORT_VAL}"
-  env_set "$envf" MTPROTO_PUBLIC_PORT "${MTPROTO_PUBLIC_PORT_VAL}"
   env_set "$envf" WEBUI_PUBLIC_PREFIX "${WEBUI_PUBLIC_PREFIX_VAL}"
   env_set "$envf" SUB_PUBLIC_PREFIX "${SUB_PUBLIC_PREFIX_VAL}"
   env_set "$envf" NGINX_ROOT_BEHAVIOR "${NGINX_ROOT_BEHAVIOR_VAL:-mirror}"
@@ -1899,13 +1858,11 @@ WG_HOST=${SERVER_IP:-$PANEL_DOMAIN_VAL}
 WG_PORT=${WG_PORT_VAL}
 PANEL_HTTPS_PORT=${PANEL_HTTPS_PORT_VAL}
 XRAY_PUBLIC_PORT=${XRAY_PUBLIC_PORT_VAL}
-MTPROTO_PUBLIC_PORT=${MTPROTO_PUBLIC_PORT_VAL}
 WEBUI_PUBLIC_PREFIX=${WEBUI_PUBLIC_PREFIX_VAL}
 SUB_PUBLIC_PREFIX=${SUB_PUBLIC_PREFIX_VAL}
 NGINX_MIRROR_HOST=${NGINX_MIRROR_HOST_VAL}
 ENABLE_DNS=${ENABLE_DNS}
 ENABLE_XRAY=${ENABLE_XRAY}
-ENABLE_MTPROTO=${ENABLE_MTPROTO}
 ADMIN_USERNAME=${ADMIN_USER}
 INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
@@ -1917,7 +1874,7 @@ ADMIN_USERNAME=${ADMIN_USER}
 ADMIN_PASSWORD=${ADMIN_PASS}
 EOF
   chmod 600 "${CONF_DIR}/admin.cred"
-  logi "Записан ${envf} (HTTPS=${PANEL_HTTPS_PORT_VAL}, Xray pub=${XRAY_PUBLIC_PORT_VAL}, MT pub=${MTPROTO_PUBLIC_PORT_VAL}, WG=${WG_PORT_VAL}/udp, UI=${WEBUI_PUBLIC_PREFIX_VAL})"
+  logi "Записан ${envf} (HTTPS=${PANEL_HTTPS_PORT_VAL}, Xray pub=${XRAY_PUBLIC_PORT_VAL}, WG=${WG_PORT_VAL}/udp, UI=${WEBUI_PUBLIC_PREFIX_VAL})"
 }
 
 run_deploy() {
@@ -2019,11 +1976,11 @@ api_curl() {
     path="${apiprefix}${path#/api}"
   fi
   cookie="${CONF_DIR}/session.cj"
-  # DNS/Xray/MTProto enable can exceed 2–3 minutes (image build, nginx demux, smoke).
+  # DNS/Xray enable can exceed 2–3 minutes (image build, nginx demux, smoke).
   local maxtime=120
   case "$path" in
     */amnezia-dns/enable*) maxtime=300 ;;
-    */amnezia-xray/enable*|*/amnezia-mtproto/enable*) maxtime=360 ;;
+    */amnezia-xray/enable*) maxtime=360 ;;
     */amnezia-xray/sni-scan*) maxtime=360 ;;
   esac
   if [[ -n "$body" ]]; then
@@ -2212,145 +2169,10 @@ PY
   fi
 }
 
-enable_mtproto() {
-  logi "Подготовка MTProto..."
-  local sni="" address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
-  local xray_sni status sni_stored body resp pub
-  pub=$(grep -E '^MTPROTO_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  pub="${pub:-443}"
-
-  # Xray enable may still hold the job / demux — wait so MTProto does not get 409 Conflict.
-  wait_api_service_idle /api/amnezia-xray 180 || true
-
-  status=$(api_curl GET /api/amnezia-mtproto || true)
-  sni_stored=$(printf '%s' "$status" | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  sni_stored=$(normalize_sni_host "$sni_stored")
-  if [[ -n "$sni_stored" ]]; then
-    if sni_is_blocked_tld "$sni_stored"; then
-      logw "MTProto: SNI ${sni_stored} пропущен (.ru/.su/.рф) — новый выбор"
-    elif sni_reality_ok "$sni_stored"; then
-      logi "MTProto: оставляю SNI ${sni_stored}"
-      body=$(printf '{"address":"%s","publicPort":%s}' "$address" "$pub")
-      wait_api_service_idle /api/amnezia-mtproto 60 || true
-      resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
-      logi "MTProto enable: ${resp:0:300}"
-      if api_enable_ok "$resp"; then
-        return 0
-      fi
-      logw "MTProto enable со старым SNI не подтверждён — новый выбор"
-    else
-      logw "MTProto: SNI ${sni_stored} не Reality-ok — новый выбор"
-    fi
-  fi
-
-  xray_sni=$(api_curl GET /api/amnezia-xray 2>/dev/null \
-    | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  if [[ -z "$xray_sni" ]]; then
-    xray_sni=$(api_curl GET /api/amnezia-xray 2>/dev/null \
-      | sed -n 's/.*"sni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
-  fi
-  xray_sni=$(normalize_sni_host "$xray_sni")
-
-  api_curl GET /api/amnezia-xray/sni-cache >/tmp/awg-sni-cache.json || true
-  sni=$(python3 - <<PY 2>/dev/null || true
-import json, re
-exclude = "${xray_sni}".strip().lower()
-blocked = re.compile(r'\.(ru|su|xn--p1ai)$', re.I)
-def ok(d):
-  d = (d or '').strip().lower().rstrip('.')
-  if not d or d == exclude:
-    return False
-  if blocked.search(d) or d.endswith('.рф'):
-    return False
-  try:
-    import socket
-    socket.getaddrinfo(d, 443, type=socket.SOCK_STREAM)
-  except Exception:
-    return False
-  return True
-try:
-  d = json.load(open("/tmp/awg-sni-cache.json"))
-  for e in (d.get("entries") or []):
-    if e.get("alive") is False:
-      continue
-    if ok(e.get("domain") or ""):
-      print((e.get("domain") or "").strip())
-      raise SystemExit
-  if ok(d.get("defaultSni") or ""):
-    print((d.get("defaultSni") or "").strip())
-    raise SystemExit
-except SystemExit:
-  raise
-except Exception:
-  pass
-for path in (
-  "${INSTALL_DIR}/config/sni-bank.seed.json",
-  "/app/config/sni-bank.seed.json",
-):
-  try:
-    raw = json.load(open(path))
-    domains = raw if isinstance(raw, list) else list((raw or {}).get("domains") or [])
-    for dom in domains:
-      if ok(dom):
-        print(str(dom).strip())
-        raise SystemExit
-  except SystemExit:
-    raise
-  except Exception:
-    continue
-PY
-)
-  sni=$(normalize_sni_host "$sni")
-  if [[ -n "$sni" ]] && ( sni_is_blocked_tld "$sni" || ! sni_reality_ok "$sni" || [[ "$sni" == "$xray_sni" ]] ); then
-    sni=""
-  fi
-  if [[ -z "$sni" ]]; then
-    sni=$(pick_checked_bank_host sni)
-    local sni_l xray_l
-    sni_l=$(printf '%s' "$sni" | tr '[:upper:]' '[:lower:]')
-    xray_l=$(printf '%s' "$xray_sni" | tr '[:upper:]' '[:lower:]')
-    if [[ -n "$xray_l" && "$sni_l" == "$xray_l" ]]; then
-      # try another bank pick by excluding via second call — soft fallback
-      sni="www.ns.nl"
-      if [[ "$(printf '%s' "$sni" | tr '[:upper:]' '[:lower:]')" == "$xray_l" ]]; then
-        sni="www.czc.cz"
-      fi
-      if ! sni_reality_ok "$sni"; then
-        sni=$(pick_checked_bank_host sni)
-      fi
-    fi
-    logw "MTProto SNI fallback (bank): ${sni}"
-  else
-    logi "MTProto SNI: ${sni} (≠ Xray ${xray_sni:-none})"
-  fi
-
-  body=$(printf '{"sni":"%s","address":"%s","publicPort":%s}' "$sni" "$address" "$pub")
-  wait_api_service_idle /api/amnezia-mtproto 60 || true
-  resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
-  logi "MTProto enable: ${resp:0:300}"
-  if ! api_enable_ok "$resp"; then
-    logw "MTProto enable не подтверждён — жду idle и повторяю..."
-    wait_api_service_idle /api/amnezia-mtproto 180 || true
-    sleep 2
-    resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
-    logi "MTProto enable retry: ${resp:0:300}"
-  fi
-  wait_api_service_idle /api/amnezia-mtproto 180 || true
-  if ! api_enable_ok "$resp"; then
-    status=$(api_curl GET /api/amnezia-mtproto || true)
-    if echo "$status" | grep -Eq '"phase"[[:space:]]*:[[:space:]]*"(running|degraded)"'; then
-      logi "MTProto в итоге running/degraded"
-      return 0
-    fi
-    loge "MTProto enable не удался"
-    return 1
-  fi
-}
-
 post_configure() {
   wait_panel || true
   if ! api_login; then
-    logw "Не удалось войти в API — DNS/Xray/MTProto включите в UI или: awg-easy"
+    logw "Не удалось войти в API — DNS/Xray включите в UI или: awg-easy"
     return 0
   fi
   if [[ "$ENABLE_DNS" -eq 1 ]]; then
@@ -2358,9 +2180,6 @@ post_configure() {
   fi
   if [[ "$ENABLE_XRAY" -eq 1 ]]; then
     enable_xray || logw "Xray enable не удался"
-  fi
-  if [[ "$ENABLE_MTPROTO" -eq 1 ]]; then
-    enable_mtproto || logw "MTProto enable не удался"
   fi
   apply_mirror_from_sni_if_requested || true
 }
@@ -2420,22 +2239,18 @@ main() {
   reconcile_panel_port_for_domain
   prompt_webui_paths_and_mirror
   if is_redeploy; then
-    # Skip DNS/Xray/MTProto prompts on redeploy — keep first-install choices from install.conf / containers.
-    local dns_def xray_def mt_def
+    # Skip DNS/Xray prompts on redeploy — keep first-install choices from install.conf / containers.
+    local dns_def xray_def
     dns_def=$(detect_service_enabled_default dns)
     xray_def=$(detect_service_enabled_default xray)
-    mt_def=$(detect_service_enabled_default mtproto)
     [[ "$dns_def" == "y" || "$dns_def" == "Y" ]] && ENABLE_DNS=1 || ENABLE_DNS=0
     [[ "$xray_def" == "y" || "$xray_def" == "Y" ]] && ENABLE_XRAY=1 || ENABLE_XRAY=0
-    [[ "$mt_def" == "y" || "$mt_def" == "Y" ]] && ENABLE_MTPROTO=1 || ENABLE_MTPROTO=0
-    logi "Редеплой: DNS=${ENABLE_DNS} Xray=${ENABLE_XRAY} MTProto=${ENABLE_MTPROTO} (из install.conf / контейнеров)"
+    logi "Редеплой: DNS=${ENABLE_DNS} Xray=${ENABLE_XRAY} (из install.conf / контейнеров)"
   else
     confirm_yn "Amnezia DNS?" y AWG_ENABLE_DNS
     ENABLE_DNS=$CONFIRM_RESULT
     confirm_yn "Xray (VLESS Reality)?" y AWG_ENABLE_XRAY
     ENABLE_XRAY=$CONFIRM_RESULT
-    confirm_yn "MTProto (Telemt)?" y AWG_ENABLE_MTPROTO
-    ENABLE_MTPROTO=$CONFIRM_RESULT
   fi
   write_env
   run_deploy

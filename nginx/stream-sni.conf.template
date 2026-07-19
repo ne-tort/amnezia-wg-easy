@@ -1,4 +1,4 @@
-# SNI demux: ClientHello → Xray / MTProto (Fake-TLS). Reality/TLS not terminated here.
+# SNI demux: ClientHello → Xray (and other shared-port sidecars). Reality/TLS not terminated here.
 map $ssl_preread_server_name $demux_backend {
     include /opt/amnezia/awg/nginx/stream-sni.map;
     default 127.0.0.1:9;

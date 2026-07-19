@@ -37,7 +37,6 @@ const {
 const { BankError } = require('./signaturesBank');
 const amneziaDns = require('./amneziaDns');
 const amneziaXray = require('./amneziaXray');
-const amneziaMtproto = require('./amneziaMtproto');
 const sniFinder = require('./sniFinder');
 const mtuProfiles = require('./mtuProfiles');
 const { applyFirewall } = require('./firewall');
@@ -1138,19 +1137,6 @@ module.exports = class Server {
           throw sniHttpError(err);
         }
       }))
-      .get('/api/amnezia-mtproto', defineEventHandler((event) => {
-        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
-        return amneziaMtproto.getStatus();
-      }))
-      .post('/api/amnezia-mtproto/smoke', defineEventHandler(async (event) => {
-        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
-        try {
-          const smoke = await amneziaMtproto.runSmoke();
-          return { success: true, smoke, status: amneziaMtproto.getStatus() };
-        } catch (err) {
-          throw httpError(500, err.message || 'Amnezia MTProto smoke failed');
-        }
-      }))
       .get('/api/port-plan', defineEventHandler((event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
         return require('./portPlan').getStatusSummary();
@@ -1162,56 +1148,6 @@ module.exports = class Server {
         } catch (err) {
           if (err && err.status === 409) throw httpError(409, err.message);
           throw httpError(500, err.message || 'port plan apply failed');
-        }
-      }))
-      .post('/api/amnezia-mtproto/enable', defineEventHandler(async (event) => {
-        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
-        try {
-          const body = await readBody(event).catch(() => ({}));
-          const status = await amneziaMtproto.enable({
-            sni: body && body.sni,
-            port: body && body.port,
-            publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
-            address: body && body.address,
-          });
-          return { success: true, ...status };
-        } catch (err) {
-          if (err && err.statusCode) throw err;
-          if (err && err.status === 409) throw httpError(409, err.message);
-          if (err && err.status === 400) throw httpError(400, err.message);
-          if (err && err.status === 504) throw httpError(504, err.message);
-          if (err && err.status === 503) throw httpError(503, err.message);
-          throw httpError(500, err.message || 'Amnezia MTProto enable failed');
-        }
-      }))
-      .post('/api/amnezia-mtproto/disable', defineEventHandler(async (event) => {
-        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
-        try {
-          const status = await amneziaMtproto.disable();
-          return { success: true, ...status };
-        } catch (err) {
-          if (err && err.status === 409) throw httpError(409, err.message);
-          throw httpError(500, err.message || 'Amnezia MTProto disable failed');
-        }
-      }))
-      .post('/api/amnezia-mtproto/force-cleanup', defineEventHandler(async (event) => {
-        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
-        try {
-          const status = await amneziaMtproto.forceCleanup();
-          return { success: true, ...status };
-        } catch (err) {
-          if (err && err.status === 409) throw httpError(409, err.message);
-          throw httpError(500, err.message || 'Amnezia MTProto cleanup failed');
-        }
-      }))
-      .post('/api/amnezia-mtproto/reset', defineEventHandler(async (event) => {
-        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
-        try {
-          const status = await amneziaMtproto.resetSecret();
-          return { success: true, ...status };
-        } catch (err) {
-          if (err && err.status === 409) throw httpError(409, err.message);
-          throw httpError(500, err.message || 'Amnezia MTProto reset failed');
         }
       }))
       .get('/api/wireguard/client/:clientId/xray', defineEventHandler(async (event) => {
@@ -1255,36 +1191,6 @@ module.exports = class Server {
           subUrl: payload.subUrl,
           clientJson: payload.clientJson,
           subQrSvg,
-        };
-      }))
-      .get('/api/wireguard/client/:clientId/mtproto', defineEventHandler(async (event) => {
-        const clientId = getRouterParam(event, 'clientId');
-        acl.assertClientAccess(event, clientId);
-        if (!amneziaMtproto.isAmneziaMtprotoAvailable()) {
-          throw httpError(503, 'Amnezia MTProto is not running');
-        }
-        const client = db.clients.getById(clientId);
-        if (!client) throw httpError(404, 'Client Not Found');
-        const links = amneziaMtproto.getProxyLinks();
-        if (!links || !links.tg) throw httpError(503, 'MTProto links not ready');
-        let linkQrSvg = null;
-        try {
-          const QRCode = require('qrcode');
-          linkQrSvg = await QRCode.toString(links.tg, {
-            type: 'svg',
-            width: 512,
-            errorCorrectionLevel: 'M',
-          });
-        } catch {
-          linkQrSvg = null;
-        }
-        return {
-          link: links.tg,
-          linkTme: links.tme,
-          linkQrSvg,
-          host: links.host,
-          port: links.port,
-          sni: links.sni,
         };
       }))
       .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
@@ -1856,3 +1762,4 @@ module.exports = class Server {
   }
 
 };
+

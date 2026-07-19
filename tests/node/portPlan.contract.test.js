@@ -63,30 +63,31 @@ const xray = (publicPort, listenPort = 24443, sni = 'www.gov.uk') => ({
   alwaysOn: false,
 });
 
-const mtproto = (publicPort, listenPort = 25001, sni = 'cdn.cloudflare.com') => ({
-  id: 'mtproto',
+/** Generic future sidecar — keeps multi-peer demux architecture covered. */
+const sidecar = (id, publicPort, listenPort = 25001, sni = 'cdn.cloudflare.com') => ({
+  id,
   publicPort,
   listenPort,
   sni,
-  upstream: `amnezia-mtproto:${listenPort}`,
+  upstream: `amnezia-${id}:${listenPort}`,
   alwaysOn: false,
 });
 
-test('computePlan: shared public port → demux', () => {
+test('computePlan: two sidecars on shared public port → demux', () => {
   const { portPlan } = loadPortPlan();
   const plan = portPlan.computePlan([
     panel(10123),
     xray(443),
-    mtproto(443),
+    sidecar('future', 443),
   ]);
   assert.equal(plan.demuxPorts.length, 1);
   assert.equal(plan.demuxPorts[0].port, 443);
   assert.equal(plan.demuxPorts[0].routes.length, 2);
   assert.equal(plan.direct.length, 0);
   assert.equal(plan.modes.xray, 'demux');
-  assert.equal(plan.modes.mtproto, 'demux');
-  assert.deepEqual(plan.demuxPeers.xray.sort(), ['mtproto']);
-  assert.deepEqual(plan.demuxPeers.mtproto.sort(), ['xray']);
+  assert.equal(plan.modes.future, 'demux');
+  assert.deepEqual(plan.demuxPeers.xray.sort(), ['future']);
+  assert.deepEqual(plan.demuxPeers.future.sort(), ['xray']);
   assert.equal(plan.modes.panel, 'panel');
   assert.deepEqual(plan.panelExclusive, { hostPort: 10123, containerPort: 8443 });
   assert.equal(plan.conflicts.length, 0);
@@ -97,11 +98,11 @@ test('computePlan: distinct public ports → direct; no demux 443', () => {
   const plan = portPlan.computePlan([
     panel(10123),
     xray(443),
-    mtproto(8443, 25001, 'www.gov.uk'),
+    sidecar('future', 8443, 25001, 'www.gov.uk'),
   ]);
   assert.equal(plan.demuxPorts.length, 0);
   assert.equal(plan.modes.xray, 'direct');
-  assert.equal(plan.modes.mtproto, 'direct');
+  assert.equal(plan.modes.future, 'direct');
   assert.deepEqual(plan.direct.map((d) => d.publicPort).sort(), [443, 8443]);
   assert.equal(plan.conflicts.length, 0);
 });
@@ -120,14 +121,14 @@ test('computePlan: panel joins demux when PANEL_HTTPS equals shared port', () =>
   const plan = portPlan.computePlan([
     panel(443, 'panel.example.com'),
     xray(443),
-    mtproto(443),
+    sidecar('future', 443),
   ]);
   assert.equal(plan.demuxPorts.length, 1);
   assert.equal(plan.demuxPorts[0].port, 443);
   // FQDN panel: unknown SNI discarded; stub/UI only via panel SNI
   assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:9');
   const services = plan.demuxPorts[0].routes.map((r) => r.service).sort();
-  assert.deepEqual(services, ['mtproto', 'panel', 'xray']);
+  assert.deepEqual(services, ['future', 'panel', 'xray']);
   assert.equal(plan.modes.panel, 'demux');
   assert.equal(plan.panelExclusive, null);
   assert.ok(plan.demuxPeers.panel.includes('xray'));
@@ -138,7 +139,7 @@ test('computePlan: bare-IP panel shares demux via catch-all (no named SNI)', () 
   const plan = portPlan.computePlan([
     panel(443, '1.2.3.4'),
     xray(443),
-    mtproto(443),
+    sidecar('future', 443),
   ]);
   assert.equal(plan.demuxPorts.length, 1);
   assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:8443');
@@ -148,12 +149,24 @@ test('computePlan: bare-IP panel shares demux via catch-all (no named SNI)', () 
   assert.equal(plan.panelExclusive, null);
 });
 
+test('computePlan: panel+xray demux (single sidecar on panel port)', () => {
+  const { portPlan } = loadPortPlan({ PANEL_HTTPS_PORT: '443' });
+  const plan = portPlan.computePlan([
+    panel(443, 'panel.example.com'),
+    xray(443),
+  ]);
+  assert.equal(plan.demuxPorts.length, 1);
+  assert.equal(plan.modes.xray, 'demux');
+  assert.equal(plan.modes.panel, 'demux');
+  assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:9');
+});
+
 test('computePlan: sidecar-only demux default is :9', () => {
   const { portPlan } = loadPortPlan();
   const plan = portPlan.computePlan([
     panel(10123),
     xray(443),
-    mtproto(443),
+    sidecar('future', 443),
   ]);
   assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:9');
 });
@@ -171,27 +184,27 @@ test('computePlan: same SNI on shared port → SNI_CONFLICT', () => {
   const plan = portPlan.computePlan([
     panel(10123),
     xray(443, 24443, 'same.example'),
-    mtproto(443, 25001, 'same.example'),
+    sidecar('future', 443, 25001, 'same.example'),
   ]);
   assert.ok(plan.conflicts.some((c) => c.code === 'SNI_CONFLICT'));
 });
 
 test('assertSniConflict only when public ports match', () => {
-  const { portPlan, settings } = loadPortPlan();
+  const { portPlan, settings } = loadPortPlan({
+    PANEL_HTTPS_PORT: '443',
+    PANEL_DOMAIN: 'panel.example.com',
+  });
   settings.amnezia_xray_desired = '1';
-  settings.amnezia_xray_sni = 'www.gov.uk';
+  settings.amnezia_xray_sni = 'other.example';
   settings.amnezia_xray_public_port = '443';
-  settings.amnezia_mtproto_desired = '1';
-  settings.amnezia_mtproto_sni = 'www.gov.uk';
-  settings.amnezia_mtproto_public_port = '443';
 
   assert.throws(
-    () => portPlan.assertSniConflict('mtproto', 'www.gov.uk', 443),
-    (err) => err && err.code === 'MTPROTO_SNI_CONFLICT',
+    () => portPlan.assertSniConflict('xray', 'panel.example.com', 443),
+    (err) => err && err.code === 'SNI_CONFLICT',
   );
 
-  // Different public ports → same SNI allowed
-  assert.doesNotThrow(() => portPlan.assertSniConflict('mtproto', 'www.gov.uk', 8443));
+  // Different public ports → same SNI as panel allowed
+  assert.doesNotThrow(() => portPlan.assertSniConflict('xray', 'panel.example.com', 8443));
 });
 
 test('writeStreamConfigs: demux server includes Docker DNS resolver', () => {
@@ -205,7 +218,7 @@ test('writeStreamConfigs: demux server includes Docker DNS resolver', () => {
     const plan = portPlan.computePlan([
       panel(10123),
       xray(443),
-      mtproto(443),
+      sidecar('future', 443),
     ]);
     portPlan.writeStreamConfigs(plan);
     const conf = fs.readFileSync(path.join(tmp, 'nginx', 'stream', 'demux-443.conf'), 'utf8');
@@ -214,7 +227,7 @@ test('writeStreamConfigs: demux server includes Docker DNS resolver', () => {
     assert.match(conf, /ssl_preread on;/);
     assert.doesNotMatch(conf, /proxy_protocol on;/);
     const map = fs.readFileSync(path.join(tmp, 'nginx', 'stream-sni-443.map'), 'utf8');
-    assert.match(map, /amnezia-mtproto:/);
+    assert.match(map, /amnezia-future:/);
     assert.match(map, /amnezia-xray:/);
   } finally {
     if (prev == null) delete process.env.WG_PATH;

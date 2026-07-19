@@ -105,8 +105,6 @@ function excludedPortsForAlloc() {
   const list = [
     config.PANEL_HTTPS_PORT,
     getPublicPort(),
-    getSetting('amnezia_mtproto_public_port', '') || 443,
-    getSetting('amnezia_mtproto_port', ''),
     80,
     8443,
   ];
@@ -132,12 +130,7 @@ function resolveListenPort(preferred, { mode } = {}) {
   const { allocateInternalPort, needsInternalRealloc } = require('./internalPort');
   const raw = preferred != null ? preferred : getPort();
   if (!needsInternalRealloc(raw) && parseInt(String(raw), 10) !== publicPort) {
-    const n = parseInt(String(raw), 10);
-    const mt = parseInt(getSetting('amnezia_mtproto_port', ''), 10);
-    if (Number.isFinite(mt) && mt === n) {
-      return allocateInternalPort(excludedPortsForAlloc().concat([n, publicPort]), null);
-    }
-    return n;
+    return parseInt(String(raw), 10);
   }
   return allocateInternalPort(excludedPortsForAlloc().concat([publicPort]), null);
 }
@@ -146,7 +139,7 @@ function resolveInternalListenPort(preferred) {
   return resolveListenPort(preferred);
 }
 
-function assertSniNotMtproto(sni, publicPort) {
+function assertSniDemux(sni, publicPort) {
   require('./portPlan').assertSniConflict('xray', sni, publicPort != null ? publicPort : getPublicPort());
 }
 
@@ -1026,7 +1019,7 @@ async function enableInternal(opts = {}) {
       });
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
-    assertSniNotMtproto(sni, publicPort);
+    assertSniDemux(sni, publicPort);
     {
       const { domainHasPublicDns } = require('./sniFinder');
       // eslint-disable-next-line no-await-in-loop
@@ -1051,12 +1044,8 @@ async function enableInternal(opts = {}) {
     }
 
     const portPlan = require('./portPlan');
-    // Tentative listen for plan computation
+    // Tentative listen for plan computation: demux when panel shares this public port.
     const tentativeMode = (() => {
-      const mtDesired = getSetting('amnezia_mtproto_desired', '');
-      const mtOn = mtDesired === '1' || mtDesired === 'true';
-      const mtPub = parseInt(getSetting('amnezia_mtproto_public_port', '') || '443', 10);
-      if (mtOn && mtPub === publicPort) return 'demux';
       const panelPub = parseInt(String(config.PANEL_HTTPS_PORT || '10123'), 10);
       if (panelPub === publicPort) return 'demux';
       return 'direct';
@@ -1102,12 +1091,6 @@ async function enableInternal(opts = {}) {
       console.error('Xray enable: portPlan.applyPlan failed:', planErr && planErr.message);
       setPhase('degraded', planErr);
     }
-    try {
-      const mt = require('./amneziaMtproto');
-      if (mt.getStatus && mt.getStatus().desired && typeof mt.ensureMtprotoContainer === 'function') {
-        await mt.ensureMtprotoContainer();
-      }
-    } catch { /* ignore */ }
     await ensureXrayContainer();
     try {
       await portPlan.applyPlan();

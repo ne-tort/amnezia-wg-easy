@@ -24,10 +24,10 @@ bash <(curl -4fsSL --connect-timeout 3 --retry 3 https://raw.githubusercontent.c
 
 1. Docker (поставит при необходимости)
 2. Логин/пароль admin (случайные или свои)
-3. Порты: Panel/Xray/MT public TCP (default **все 443** → SNI demux; голый IP панели тоже может остаться на 443 через catch-all)
+3. Порты: Panel/Xray public TCP (default **оба 443** → SNI demux; голый IP панели тоже может остаться на 443 через catch-all)
 4. SSL: Let's Encrypt для **домена**, для **IP** (shortlived ~6 дней, default), свой cert, или self-signed
 5. Пути: UI `/panel`, подписки `/sub`; зеркало корня `/` (reverse-proxy host из sni-bank)
-6. Включить Amnezia DNS / Xray / MTProto (при demux — разные SNI)
+6. Включить Amnezia DNS / Xray
 
 Каталог: `/opt/amnezia-wg-easy`. Дальше: `awg-easy` (меню управления).
 
@@ -35,7 +35,7 @@ bash <(curl -4fsSL --connect-timeout 3 --retry 3 https://raw.githubusercontent.c
 
 ```bash
 AWG_NONINTERACTIVE=1 AWG_SSL_MODE=domain AWG_DOMAIN=vpn.example.com AWG_EMAIL=you@example.com \
-  AWG_ENABLE_DNS=1 AWG_ENABLE_XRAY=1 AWG_ENABLE_MTPROTO=1 \
+  AWG_ENABLE_DNS=1 AWG_ENABLE_XRAY=1 \
   bash <(curl -4fsSL --connect-timeout 3 --retry 3 https://raw.githubusercontent.com/ne-tort/amnezia-wg-easy/master/install.sh)
 ```
 
@@ -54,7 +54,7 @@ cd amnezia-wg-easy
 - создаёт `.env` из `.env.example`, если его нет
 - генерирует `SESSION_SECRET`, выставляет `admin`/`admin` при плейсхолдерах
 - определяет `WG_HOST` (публичный IP), если в `.env` плейсхолдер
-- создаёт сеть `amnezia-dns-net` и образы `amnezia-dns` / `amnezia-xray` / `amnezia-mtproto`
+- создаёт сеть `amnezia-dns-net` и образы `amnezia-dns` / `amnezia-xray`
 - HTTPS: `SSL_MODE=acme` (cert из install.sh) / `certbot` (FQDN+email) / иначе self-signed для IP/localhost
 - собирает и стартует `docker compose`
 - при первом запуске volume получает банк из `config/signatures.seed.json` → `/opt/amnezia/awg/signatures.json`
@@ -66,7 +66,7 @@ cd amnezia-wg-easy
 | Параметр | Назначение |
 |----------|------------|
 | `WG_PORT`/udp | VPN (случайный 20000–50000, если не задан) |
-| `PANEL_HTTPS_PORT` / `XRAY_PUBLIC_PORT` / `MTPROTO_PUBLIC_PORT` | Default **443** → один SNI demux (панель может делить порт и с голым IP) |
+| `PANEL_HTTPS_PORT` / `XRAY_PUBLIC_PORT` | Default **443** → один SNI demux (панель может делить порт и с голым IP) |
 | `PANEL_HTTP_PORT` (80) | ACME + redirect на HTTPS |
 | `WEBUI_PUBLIC_PREFIX` | UI+API (`/panel` default) |
 | `SUB_PUBLIC_PREFIX` | Подписки (`/sub` default) |
@@ -74,10 +74,10 @@ cd amnezia-wg-easy
 
 | Сценарий | Поведение |
 |----------|-----------|
-| FQDN + все public 443 | Demux: Xray/MT/панель по **известным SNI**; unknown → `:9`; заглушка+`/panel/` только на SNI панели |
-| Голый IP панели + 443 | Xray/MT по SNI; **нет** SNI=IP в map; unknown/без SNI → панель (заглушка+`/panel/`) |
-| Редеплой | `.env` + `/etc/amnezia-wg-easy/` (admin, порты, prefixes, mirror, ENABLE_*); desired DNS/Xray/MT в БД volume |
-| Зеркало `/` | `config/mirror-bank.seed.json` — случайный живой HTTPS; Enter; `sni` = после enable взять SNI Xray/MT |
+| FQDN + все public 443 | Demux: Xray/панель по **известным SNI**; unknown → `:9`; заглушка+`/panel/` только на SNI панели |
+| Голый IP панели + 443 | Xray по SNI; **нет** SNI=IP в map; unknown/без SNI → панель (заглушка+`/panel/`) |
+| Редеплой | `.env` + `/etc/amnezia-wg-easy/` (admin, порты, prefixes, mirror, ENABLE_*); desired DNS/Xray в БД volume |
+| Зеркало `/` | `config/mirror-bank.seed.json` — случайный живой HTTPS; Enter; `sni` = после enable взять SNI Xray |
 | Разные public ports | Direct `-p`; SNI могут совпадать |
 | Internal listen | 20000–50000 (exclude-list), не host-scan |
 
@@ -97,10 +97,6 @@ DNS **не** публикует host-порты 53/853 (VPN-only): клиент 
 
 Образ `amnezia-xray` собирается в `deploy.sh`, контейнер — из шапки панели или `install.sh`/`awg-easy` (admin). **Public port** — в `vless://`; подписка `GET {SUB_PUBLIC_PREFIX}/{name}` (default `/sub/...`).
 
-## Amnezia MTProto (Telemt)
-
-Образ `amnezia-mtproto` (Telemt Fake-TLS). При общем public port с Xray — demux и **другой** SNI; при разных портах — direct. Одна общая `tg://proxy` (port = public). Включение — шапка панели / `install.sh`.
-
 ## Настройка
 
 Ключевые переменные в `.env`:
@@ -110,7 +106,7 @@ DNS **не** публикует host-порты 53/853 (VPN-only): клиент 
 | `WG_HOST` | Публичный IP/hostname для `Endpoint` клиентов |
 | `WG_PORT` | UDP-порт VPN |
 | `PANEL_HTTPS_PORT` | HTTPS панели (443 → demux с сайдкарами при FQDN) |
-| `XRAY_PUBLIC_PORT` / `MTPROTO_PUBLIC_PORT` | Клиентский TCP |
+| `XRAY_PUBLIC_PORT` | Клиентский TCP Xray |
 | `XRAY_PORT` | Предпочтительный **внутренний** listen Xray |
 | `WEBUI_PUBLIC_PREFIX` | Путь UI (`/panel`) |
 | `SUB_PUBLIC_PREFIX` | Путь подписок (`/sub`) |

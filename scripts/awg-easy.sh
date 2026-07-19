@@ -105,11 +105,9 @@ cmd_show() {
   echo -e "${green}User:${plain}   $(admin_user)"
   echo -e "${green}Pass:${plain}   $(admin_pass)"
   echo -e "${green}VPN:${plain}    ${host}:${wg_port:-?}/udp"
-  local xpub mtpub
+  local xpub
   xpub=$(grep -E '^XRAY_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  mtpub=$(grep -E '^MTPROTO_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   echo -e "${green}Xray:${plain}   public ${xpub:-443}/tcp"
-  echo -e "${green}MTProto:${plain} public ${mtpub:-${xpub:-443}}/tcp"
   echo -e "${green}Dir:${plain}    ${INSTALL_DIR}"
   if [[ -f "${CONF_DIR}/install.conf" ]]; then
     grep -E '^(SSL_MODE|SSL_HOST)=' "${CONF_DIR}/install.conf" || true

@@ -134,23 +134,6 @@ function collectServices() {
     });
   }
 
-  if (desired('amnezia_mtproto_desired')) {
-    const pub = parsePort(
-      setting('amnezia_mtproto_public_port', '') || process.env.MTPROTO_PUBLIC_PORT || '443',
-      443,
-    );
-    const listen = parsePort(setting('amnezia_mtproto_port', ''), 0);
-    const sni = setting('amnezia_mtproto_sni', '');
-    services.push({
-      id: 'mtproto',
-      publicPort: pub,
-      listenPort: listen,
-      sni: sni.toLowerCase(),
-      upstream: listen ? `amnezia-mtproto:${listen}` : null,
-      alwaysOn: false,
-    });
-  }
-
   return services;
 }
 
@@ -182,7 +165,8 @@ function computePlan(servicesInput) {
   let panelExclusive = null;
 
   for (const [port, group] of byPort.entries()) {
-    const sidecars = group.filter((s) => s.id === 'xray' || s.id === 'mtproto');
+    // Sidecars = anything except panel (xray today; more services can join demux later).
+    const sidecars = group.filter((s) => s.id !== 'panel');
     const panel = group.find((s) => s.id === 'panel');
     const panelSharesPort = !!(panel && panel.publicPort === port);
     const panelNamedSni = !!(
@@ -320,11 +304,11 @@ function writeStreamConfigs(plan) {
 
     const defaultUp = block.defaultUpstream || '127.0.0.1:9';
     // Variable proxy_pass (map → hostname:port) needs a resolver at runtime.
-    // Without it nginx logs "no resolver defined to resolve amnezia-mtproto"
+    // Without it nginx logs "no resolver defined to resolve amnezia-xray"
     // and resets the client TLS. Docker embedded DNS is 127.0.0.11.
     // Stream ssl_preread + proxy_pass is pure TCP passthrough (no TLS terminate,
     // no payload rewrite). Do NOT add proxy_protocol here — that prepends a
-    // header and is only needed for real-IP logging, not for Fake-TLS itself.
+    // header and is only needed for real-IP logging, not for demux itself.
     const conf = [
       `map $ssl_preread_server_name $demux_backend_${block.port} {`,
       `    include /opt/amnezia/awg/nginx/${mapName};`,
@@ -479,12 +463,6 @@ async function assertHostPortsAvailable(ports, opts = {}) {
         'amnezia-xray',
       ]);
       if (xray.ok && new RegExp(`${port}/tcp`).test(xray.stdout)) continue;
-      const mt = await runCmd('docker', [
-        'inspect', '-f',
-        '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
-        'amnezia-mtproto',
-      ]);
-      if (mt.ok && new RegExp(`${port}/tcp`).test(mt.stdout)) continue;
     }
 
     if (await isHostTcpPortInUse(port)) {
@@ -749,13 +727,13 @@ function applyPlan() {
 }
 
 /**
- * Recreate Xray/MTProto containers without host publish when they join a demux group.
+ * Recreate sidecar containers without host publish when they join a demux group.
  */
 async function releaseSidecarsForDemux(plan) {
   const demuxServices = new Set();
   for (const d of plan.demuxPorts || []) {
     for (const r of d.routes || []) {
-      if (r.service === 'xray' || r.service === 'mtproto') demuxServices.add(r.service);
+      if (r.service && r.service !== 'panel') demuxServices.add(r.service);
     }
   }
   if (!demuxServices.size) return;
@@ -769,17 +747,6 @@ async function releaseSidecarsForDemux(plan) {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('portPlan: ensure xray for demux failed:', err && err.message);
-    }
-  }
-  if (demuxServices.has('mtproto')) {
-    try {
-      const mt = require('./amneziaMtproto');
-      if (typeof mt.ensureMtprotoContainer === 'function') {
-        await mt.ensureMtprotoContainer();
-      }
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error('portPlan: ensure mtproto for demux failed:', err && err.message);
     }
   }
 }
@@ -807,7 +774,7 @@ async function resolveNginxNetwork() {
 }
 
 /**
- * SNI conflict only when both services share the same public port (demux).
+ * SNI conflict when another demux peer already uses the same SNI on the same public port.
  */
 function assertSniConflict(serviceId, sni, publicPort) {
   const s = String(sni || '').trim().toLowerCase();
@@ -815,33 +782,15 @@ function assertSniConflict(serviceId, sni, publicPort) {
   const pub = parsePort(publicPort, 0);
   if (!pub) return;
 
-  if (serviceId === 'xray') {
-    if (!desired('amnezia_mtproto_desired')) return;
-    const mtPub = parsePort(
-      setting('amnezia_mtproto_public_port', '') || process.env.MTPROTO_PUBLIC_PORT || '443',
-      443,
-    );
-    if (mtPub !== pub) return;
-    const mtSni = setting('amnezia_mtproto_sni', '').toLowerCase();
-    if (mtSni && mtSni === s) {
-      const err = new Error('Xray SNI must differ from MTProto SNI when sharing a public port (demux)');
+  for (const other of collectServices()) {
+    if (other.id === serviceId) continue;
+    if (other.publicPort !== pub) continue;
+    if (other.sni && other.sni === s) {
+      const err = new Error(
+        `${serviceId} SNI must differ from ${other.id} SNI when sharing public port ${pub} (demux)`,
+      );
       err.status = 400;
-      err.code = 'XRAY_SNI_CONFLICT';
-      throw err;
-    }
-  }
-  if (serviceId === 'mtproto') {
-    if (!desired('amnezia_xray_desired')) return;
-    const xPub = parsePort(
-      setting('amnezia_xray_public_port', '') || process.env.XRAY_PUBLIC_PORT || '443',
-      443,
-    );
-    if (xPub !== pub) return;
-    const xSni = setting('amnezia_xray_sni', '').toLowerCase();
-    if (xSni && xSni === s) {
-      const err = new Error('MTProto SNI must differ from Xray SNI when sharing a public port (demux)');
-      err.status = 400;
-      err.code = 'MTPROTO_SNI_CONFLICT';
+      err.code = 'SNI_CONFLICT';
       throw err;
     }
   }

@@ -176,12 +176,6 @@ if ! docker build -t amnezia-xray ./amnezia-xray; then
   exit 1
 fi
 
-echo "[deploy] Building amnezia-mtproto image (Telemt Fake-TLS; container not started)..."
-if ! docker build -t amnezia-mtproto ./amnezia-mtproto; then
-  echo "[deploy] ERROR: amnezia-mtproto image build failed (required for MTProto toggle from the panel)" >&2
-  exit 1
-fi
-
 if ! docker network inspect amnezia-dns-net >/dev/null 2>&1; then
   echo "[deploy] ERROR: amnezia-dns-net missing after create" >&2
   exit 1
@@ -380,4 +374,4 @@ if [ "$PANEL_HTTP_PORT" != "80" ]; then
 fi
 echo "[deploy] Admin login: ${ADMIN_USER}"
 echo "[deploy] Admin password: ${ADMIN_PWD}"
-echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). DNS / Xray / MTProto: panel header. Host :443 = SNI demux."
+echo "[deploy] VPN: ${WG_HOST}:${WG_PORT} (UDP). DNS / Xray: panel header. Host :443 = SNI demux."

@@ -1,6 +1,6 @@
 #!/bin/sh
 # SSL + nginx: profile entry (panel / panel+subpath) or exit (HTTPS reverse proxy only).
-# Host :443 = stream ssl_preread demux (Xray/MTProto); panel TLS listens on :8443.
+# Host :443 = stream ssl_preread demux (Xray + shared-port sidecars); panel TLS listens on :8443.
 set -e
 CONF_DIR="${CONF_DIR:-/etc/nginx/conf.d}"
 STREAM_DIR="${STREAM_DIR:-/etc/nginx/stream.d}"
