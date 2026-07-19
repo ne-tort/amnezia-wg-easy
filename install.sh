@@ -55,9 +55,8 @@ NGINX_MIRROR_HOST_VAL=""
 # Random free ports (user/dynamic range) for AWG UDP / Xray+MTProto internal TCP.
 PORT_RAND_MIN=20000
 PORT_RAND_MAX=50000
-# Default panel HTTPS = 443 (SNI demux with Xray/MT when FQDN). Soft-forced to 10123 for bare IP after SSL.
+# Default panel HTTPS = 443 (SNI demux with Xray/MT). Bare IP stays on shared port via catch-all.
 DEFAULT_PANEL_HTTPS_PORT=443
-DEFAULT_PANEL_HTTPS_PORT_IP=10123
 # Preferred internal Xray listen; empty = auto. Clients use public ports / demux.
 DEFAULT_XRAY_PORT=""
 
@@ -547,7 +546,7 @@ prompt_ports() {
   if [[ "$redeploy" -eq 1 ]]; then
     echo -e "${blue}Редеплой: Enter = оставить текущие порты.${plain}"
   else
-    echo -e "${blue}Первая установка: Enter = 443 для панели/Xray/MT (SNI demux). Для голого IP панель потом уйдёт на ${DEFAULT_PANEL_HTTPS_PORT_IP}.${plain}"
+    echo -e "${blue}Первая установка: Enter = 443 для панели/Xray/MT (SNI demux). Известный SNI → Xray/MT; панель по FQDN-SNI или (голый IP) catch-all → заглушка+/panel.${plain}"
   fi
 
   # --- Panel HTTPS ---
@@ -1374,28 +1373,20 @@ prompt_and_setup_ssl() {
   esac
 }
 
-# After SSL we know PANEL_DOMAIN: bare IP cannot join SNI demux on a shared port.
+# After SSL we know PANEL_DOMAIN: explain demux model (no soft-force off 443 for bare IP).
 reconcile_panel_port_for_domain() {
-  if ! is_ip_literal "${PANEL_DOMAIN_VAL}"; then
-    if [[ "$PANEL_HTTPS_PORT_VAL" == "$XRAY_PUBLIC_PORT_VAL" ]] \
-      || [[ "$PANEL_HTTPS_PORT_VAL" == "$MTPROTO_PUBLIC_PORT_VAL" ]]; then
-      logi "Панель FQDN + общий порт ${PANEL_HTTPS_PORT_VAL} — SNI demux (default → панель; Xray/MT по своим SNI)"
-    fi
-    return 0
-  fi
+  local shared=0
   if [[ "$PANEL_HTTPS_PORT_VAL" == "$XRAY_PUBLIC_PORT_VAL" ]] \
     || [[ "$PANEL_HTTPS_PORT_VAL" == "$MTPROTO_PUBLIC_PORT_VAL" ]]; then
-    logw "PANEL_DOMAIN=${PANEL_DOMAIN_VAL} — IP; панель не может в SNI demux на ${PANEL_HTTPS_PORT_VAL}"
-    if [[ -n "${AWG_PANEL_HTTPS_PORT:-}" ]] && [[ "$AWG_PANEL_HTTPS_PORT" != "$XRAY_PUBLIC_PORT_VAL" ]]; then
-      PANEL_HTTPS_PORT_VAL="$AWG_PANEL_HTTPS_PORT"
-    else
-      PANEL_HTTPS_PORT_VAL="$DEFAULT_PANEL_HTTPS_PORT_IP"
-    fi
-    if is_port_in_use "$PANEL_HTTPS_PORT_VAL" tcp; then
-      PANEL_HTTPS_PORT_VAL=$(random_free_port tcp "$XRAY_PUBLIC_PORT_VAL" "$MTPROTO_PUBLIC_PORT_VAL") \
-        || PANEL_HTTPS_PORT_VAL="$DEFAULT_PANEL_HTTPS_PORT_IP"
-    fi
-    logi "HTTPS панели переназначен на ${PANEL_HTTPS_PORT_VAL}/tcp (exclusive)"
+    shared=1
+  fi
+  if [[ "$shared" -ne 1 ]]; then
+    return 0
+  fi
+  if is_ip_literal "${PANEL_DOMAIN_VAL}"; then
+    logi "Панель IP + общий порт ${PANEL_HTTPS_PORT_VAL}: Xray/MT по SNI; без SNI/чужой SNI → заглушка+/panel"
+  else
+    logi "Панель FQDN + общий порт ${PANEL_HTTPS_PORT_VAL}: Xray/MT/панель по своим SNI; заглушка+/panel только на SNI панели"
   fi
 }
 

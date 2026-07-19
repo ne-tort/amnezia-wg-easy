@@ -24,7 +24,7 @@ bash <(curl -4fsSL --connect-timeout 3 --retry 3 https://raw.githubusercontent.c
 
 1. Docker (поставит при необходимости)
 2. Логин/пароль admin (случайные или свои)
-3. Порты: Panel/Xray/MT public TCP (default **все 443** → SNI demux; для голого IP панель уйдёт на 10123)
+3. Порты: Panel/Xray/MT public TCP (default **все 443** → SNI demux; голый IP панели тоже может остаться на 443 через catch-all)
 4. SSL: Let's Encrypt для **домена**, для **IP** (shortlived ~6 дней, default), свой cert, или self-signed
 5. Пути: UI `/panel`, подписки `/sub`; зеркало корня `/` (reverse-proxy host из sni-bank)
 6. Включить Amnezia DNS / Xray / MTProto (при demux — разные SNI)
@@ -66,7 +66,7 @@ cd amnezia-wg-easy
 | Параметр | Назначение |
 |----------|------------|
 | `WG_PORT`/udp | VPN (случайный 20000–50000, если не задан) |
-| `PANEL_HTTPS_PORT` / `XRAY_PUBLIC_PORT` / `MTPROTO_PUBLIC_PORT` | Default **443** при FQDN → один SNI demux; при голом IP панель → **10123** |
+| `PANEL_HTTPS_PORT` / `XRAY_PUBLIC_PORT` / `MTPROTO_PUBLIC_PORT` | Default **443** → один SNI demux (панель может делить порт и с голым IP) |
 | `PANEL_HTTP_PORT` (80) | ACME + redirect на HTTPS |
 | `WEBUI_PUBLIC_PREFIX` | UI+API (`/panel` default) |
 | `SUB_PUBLIC_PREFIX` | Подписки (`/sub` default) |
@@ -74,8 +74,8 @@ cd amnezia-wg-easy
 
 | Сценарий | Поведение |
 |----------|-----------|
-| FQDN + все public 443 | Demux: Xray/MT по SNI; panel FQDN + **default → панель**; UI только `/panel/` |
-| Голый IP панели | Panel не в SNI-map; soft-force `PANEL_HTTPS≠443`; Xray+MT могут demux на 443; default stream → `:9` |
+| FQDN + все public 443 | Demux: Xray/MT/панель по **известным SNI**; unknown → `:9`; заглушка+`/panel/` только на SNI панели |
+| Голый IP панели + 443 | Xray/MT по SNI; **нет** SNI=IP в map; unknown/без SNI → панель (заглушка+`/panel/`) |
 | Разные public ports | Direct `-p`; SNI могут совпадать |
 | Internal listen | 20000–50000 (exclude-list), не host-scan |
 

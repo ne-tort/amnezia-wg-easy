@@ -82,7 +82,7 @@ function panelSni() {
   return 'localhost';
 }
 
-/** True for IPv4 / IPv6 literals (panel must not join SNI demux). */
+/** True for IPv4 / IPv6 literals. */
 function isIpLiteral(host) {
   const h = String(host || '').trim().toLowerCase().replace(/^\[|\]$/g, '');
   if (!h) return false;
@@ -91,6 +91,10 @@ function isIpLiteral(host) {
   return false;
 }
 
+/**
+ * Panel gets a *named* SNI route only for an FQDN (not IP / localhost).
+ * Bare-IP panel still shares demux via default (unknown/missing SNI → panel TLS).
+ */
 function panelCanJoinDemuxBySni(sni) {
   const s = String(sni || '').trim().toLowerCase();
   if (!s || s === 'localhost') return false;
@@ -180,26 +184,27 @@ function computePlan(servicesInput) {
   for (const [port, group] of byPort.entries()) {
     const sidecars = group.filter((s) => s.id === 'xray' || s.id === 'mtproto');
     const panel = group.find((s) => s.id === 'panel');
-    const panelOk = panel && panel.canJoinDemux !== false && panelCanJoinDemuxBySni(panel.sni);
-    const demuxMembers = [...sidecars];
-    if (panelOk && sidecars.length >= 1 && panel.publicPort === port) {
-      demuxMembers.push(panel);
-    } else if (panel && !panelOk && sidecars.length >= 1 && panel.publicPort === port) {
-      conflicts.push({
-        code: 'PANEL_IP_ON_SHARED_PORT',
-        message: `Panel host is an IP — cannot join SNI demux on ${port}; use a distinct PANEL_HTTPS_PORT`,
-      });
-    }
-
+    const panelSharesPort = !!(panel && panel.publicPort === port);
+    const panelNamedSni = !!(
+      panelSharesPort
+      && panel.canJoinDemux !== false
+      && panelCanJoinDemuxBySni(panel.sni)
+    );
+    // Demux when 2+ sidecars share a port, or any sidecar shares with the panel.
     const needDemux = sidecars.length >= 2
-      || (sidecars.length === 1 && panelOk && panel.publicPort === port);
+      || (sidecars.length >= 1 && panelSharesPort);
 
-    if (needDemux && demuxMembers.length >= 2) {
-      const members = demuxMembers;
+    if (needDemux) {
+      const members = [...sidecars];
+      if (panelSharesPort) members.push(panel);
+
       const routes = [];
       const snis = new Map();
-      let panelInDemux = false;
       for (const m of members) {
+        if (m.id === 'panel' && !panelNamedSni) {
+          // Bare IP / no FQDN: no named SNI route — catch-all default handles panel TLS.
+          continue;
+        }
         if (!m.sni) {
           if (m.id !== 'panel') {
             conflicts.push({
@@ -219,16 +224,18 @@ function computePlan(servicesInput) {
         snis.set(m.sni, m.id);
         if (m.id === 'panel') {
           routes.push({ sni: m.sni, upstream: m.upstream, service: 'panel' });
-          panelInDemux = true;
         } else if (m.upstream) {
           routes.push({ sni: m.sni, upstream: m.upstream, service: m.id });
         }
       }
-      // FQDN panel in demux → unknown SNI falls through to panel TLS; else discard
-      const defaultUpstream = panelInDemux
+      // Known SNI → xray/mt/(panel FQDN). Unknown/missing:
+      //   bare-IP panel on this port → panel TLS (mirror + /panel);
+      //   FQDN panel → :9 (stub/UI only via panel's known SNI).
+      const defaultUpstream = (panelSharesPort && !panelNamedSni)
         ? `127.0.0.1:${PANEL_TLS_INTERNAL}`
         : '127.0.0.1:9';
       demuxPorts.push({ port, routes, defaultUpstream });
+
       const peerIds = members.map((m) => m.id);
       for (const m of members) {
         modes[m.id] = 'demux';

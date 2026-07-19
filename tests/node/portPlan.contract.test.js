@@ -124,7 +124,8 @@ test('computePlan: panel joins demux when PANEL_HTTPS equals shared port', () =>
   ]);
   assert.equal(plan.demuxPorts.length, 1);
   assert.equal(plan.demuxPorts[0].port, 443);
-  assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:8443');
+  // FQDN panel: unknown SNI discarded; stub/UI only via panel SNI
+  assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:9');
   const services = plan.demuxPorts[0].routes.map((r) => r.service).sort();
   assert.deepEqual(services, ['mtproto', 'panel', 'xray']);
   assert.equal(plan.modes.panel, 'demux');
@@ -132,7 +133,7 @@ test('computePlan: panel joins demux when PANEL_HTTPS equals shared port', () =>
   assert.ok(plan.demuxPeers.panel.includes('xray'));
 });
 
-test('computePlan: bare-IP panel excluded from demux; default stays :9', () => {
+test('computePlan: bare-IP panel shares demux via catch-all (no named SNI)', () => {
   const { portPlan } = loadPortPlan({ PANEL_HTTPS_PORT: '443', PANEL_DOMAIN: '1.2.3.4' });
   const plan = portPlan.computePlan([
     panel(443, '1.2.3.4'),
@@ -140,10 +141,11 @@ test('computePlan: bare-IP panel excluded from demux; default stays :9', () => {
     mtproto(443),
   ]);
   assert.equal(plan.demuxPorts.length, 1);
-  assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:9');
+  assert.equal(plan.demuxPorts[0].defaultUpstream, '127.0.0.1:8443');
   assert.ok(!plan.demuxPorts[0].routes.some((r) => r.service === 'panel'));
-  assert.ok(plan.conflicts.some((c) => c.code === 'PANEL_IP_ON_SHARED_PORT'));
-  assert.notEqual(plan.modes.panel, 'demux');
+  assert.equal(plan.conflicts.length, 0);
+  assert.equal(plan.modes.panel, 'demux');
+  assert.equal(plan.panelExclusive, null);
 });
 
 test('computePlan: sidecar-only demux default is :9', () => {
