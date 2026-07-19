@@ -402,55 +402,116 @@ install_acme() {
   fi
 }
 
-# Let's Encrypt contact: local@domain.tld (domain must contain a dot). Empty = omit contact.
+# --- le-contact helpers ---
+# CRITICAL: acme.sh _initpath sources account.conf + ca.conf and OVERWRITES env/-m.
+# Empty ACCOUNT_EMAIL falls through to CA_EMAIL (often admin@localhost → LE invalidContact).
+# LE forbids contacts @example.com / localhost; if user gave no email — register WITHOUT contact.
+
 is_valid_le_email() {
-  local e="${1:-}"
+  local e="${1:-}" domain
   [[ -z "$e" ]] && return 1
-  [[ "$e" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
+  [[ "$e" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || return 1
+  domain="${e##*@}"
+  domain="${domain,,}"
+  case "$domain" in
+    localhost|localhost.*|*.localhost) return 1 ;;
+    example.com|example.net|example.org|example.edu) return 1 ;;
+    *.example.com|*.example.net|*.example.org) return 1 ;;
+    *.invalid|*.test|*.local|*.lan) return 1 ;;
+  esac
+  return 0
 }
 
-# Drop ACCOUNT_EMAIL=admin@localhost (and similar) left by older installers — LE rejects them.
-clear_invalid_acme_account_emails() {
-  local f cur
+# User email if LE-acceptable; otherwise empty (no fake @example.com — LE rejects it).
+resolve_le_contact_email() {
+  local e="${1:-}"
+  if is_valid_le_email "$e"; then
+    printf '%s' "$e"
+  else
+    printf '%s' ""
+  fi
+}
+
+# Set or clear ACCOUNT_EMAIL + CA_EMAIL in every acme conf (never leave admin@localhost).
+set_acme_contact_email_everywhere() {
+  local email="${1-}" f val
+  mkdir -p "${ACME_HOME}"
+  val="$email"
   shopt -s nullglob
+  if [[ ! -f "${ACME_HOME}/account.conf" ]]; then
+    printf "ACCOUNT_EMAIL='%s'\n" "$val" >"${ACME_HOME}/account.conf"
+    chmod 600 "${ACME_HOME}/account.conf" 2>/dev/null || true
+  fi
   for f in \
     "${ACME_HOME}/account.conf" \
     "${ACME_HOME}/ca/"*/account.conf \
-    "${ACME_HOME}/ca/"*/*/account.conf
+    "${ACME_HOME}/ca/"*/*/account.conf \
+    "${ACME_HOME}/ca/"*/ca.conf \
+    "${ACME_HOME}/ca/"*/*/ca.conf
   do
     [[ -f "$f" ]] || continue
-    cur=$(grep -E '^ACCOUNT_EMAIL=' "$f" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'" || true)
-    cur="${cur#"${cur%%[![:space:]]*}"}"
-    cur="${cur%"${cur##*[![:space:]]}"}"
-    [[ -z "$cur" ]] && continue
-    if ! is_valid_le_email "$cur"; then
-      logw "Сбрасываю невалидный ACCOUNT_EMAIL (${cur}) в ${f##*/}"
-      # shellcheck disable=SC2016
-      if grep -qE '^ACCOUNT_EMAIL=' "$f"; then
-        sed -i -E "s|^ACCOUNT_EMAIL=.*|ACCOUNT_EMAIL=''|" "$f" 2>/dev/null \
-          || sed -i '' -E "s|^ACCOUNT_EMAIL=.*|ACCOUNT_EMAIL=''|" "$f" 2>/dev/null \
-          || true
-      fi
+    if grep -qE '^ACCOUNT_EMAIL=' "$f" 2>/dev/null; then
+      sed -i -E "s|^ACCOUNT_EMAIL=.*|ACCOUNT_EMAIL='${val}'|" "$f" 2>/dev/null \
+        || sed -i '' -E "s|^ACCOUNT_EMAIL=.*|ACCOUNT_EMAIL='${val}'|" "$f" 2>/dev/null || true
+    else
+      case "$f" in
+        */account.conf) printf "\nACCOUNT_EMAIL='%s'\n" "$val" >>"$f" ;;
+      esac
+    fi
+    if grep -qE '^CA_EMAIL=' "$f" 2>/dev/null; then
+      sed -i -E "s|^CA_EMAIL=.*|CA_EMAIL='${val}'|" "$f" 2>/dev/null \
+        || sed -i '' -E "s|^CA_EMAIL=.*|CA_EMAIL='${val}'|" "$f" 2>/dev/null || true
+    else
+      case "$f" in
+        */ca.conf) printf "\nCA_EMAIL='%s'\n" "$val" >>"$f" ;;
+      esac
     fi
   done
   shopt -u nullglob
+  export ACCOUNT_EMAIL="$val"
+  export CA_EMAIL="$val"
 }
 
-# Register/refresh LE account. Never send admin@localhost from stale acme.conf.
+# Register LE account; with contact only if user provided a valid email.
 ensure_acme_le_account() {
-  local email="${1:-}" out=""
-  clear_invalid_acme_account_emails
+  local email out rc=0
+  email=$(resolve_le_contact_email "${1:-}")
+  set_acme_contact_email_everywhere "$email"
   "$(acme_bin)" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-  if is_valid_le_email "$email"; then
-    out=$("$(acme_bin)" --register-account -m "$email" --server letsencrypt 2>&1) && return 0
-    logw "Регистрация LE с email не удалась — пробую без контакта / fallback"
-  elif [[ -n "$email" ]]; then
-    logw "Email «${email}» не подходит для LE (нужен вид user@domain.tld) — без контакта"
+  if [[ -n "$email" ]]; then
+    logi "Регистрация LE-аккаунта (contact=${email})..."
+  else
+    logi "Регистрация LE-аккаунта без контакта..."
   fi
-  out=$("$(acme_bin)" --register-account --server letsencrypt 2>&1) && return 0
-  # Stale conf may still inject bad contact: force a format-valid disposable address.
-  logw "LE без контакта не принял — регистрирую с noreply@example.com"
-  "$(acme_bin)" --register-account -m "noreply@example.com" --server letsencrypt 2>&1 || true
+  if [[ -n "$email" ]]; then
+    out=$("$(acme_bin)" --register-account -m "$email" --server letsencrypt 2>&1) || rc=$?
+  else
+    out=$("$(acme_bin)" --register-account --server letsencrypt 2>&1) || rc=$?
+  fi
+  if [[ "$rc" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\n' "$out" | tail -n 20 >&2 || true
+  logw "Повторная регистрация LE после очистки ca.conf/account.json..."
+  shopt -s nullglob
+  rm -f \
+    "${ACME_HOME}/ca/"*/account.json \
+    "${ACME_HOME}/ca/"*/*/account.json \
+    "${ACME_HOME}/ca/"*/ca.conf \
+    "${ACME_HOME}/ca/"*/*/ca.conf 2>/dev/null || true
+  shopt -u nullglob
+  set_acme_contact_email_everywhere "$email"
+  rc=0
+  if [[ -n "$email" ]]; then
+    out=$("$(acme_bin)" --register-account -m "$email" --server letsencrypt 2>&1) || rc=$?
+  else
+    out=$("$(acme_bin)" --register-account --server letsencrypt 2>&1) || rc=$?
+  fi
+  if [[ "$rc" -ne 0 ]]; then
+    printf '%s\n' "$out" | tail -n 20 >&2 || true
+    return 1
+  fi
+  return 0
 }
 
 acme_bin() {
@@ -1158,11 +1219,15 @@ setup_domain_certificate() {
   logi "Выпуск LE-сертификата для домена ${domain} (без --force; повторный выпуск только если нет действующего)..."
   # Do NOT pass --force: acme.sh will reuse its own cert when still valid.
   local issue_ok=0
+  local le_mail mail_args=()
+  le_mail=$(resolve_le_contact_email "$email")
+  set_acme_contact_email_everywhere "$le_mail"
+  [[ -n "$le_mail" ]] && mail_args=(-m "$le_mail")
   if [[ "${AWG_SSL_FORCE_RENEW:-0}" == "1" ]]; then
     logw "Принудительный выпуск (AWG_SSL_FORCE_RENEW=1)"
-    "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 --force && issue_ok=1
+    "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 "${mail_args[@]}" --force && issue_ok=1
   else
-    "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 && issue_ok=1
+    "$(acme_bin)" --issue -d "$domain" --standalone --httpport 80 "${mail_args[@]}" && issue_ok=1
   fi
   if [[ "$issue_ok" -ne 1 ]]; then
     # Last chance: maybe issue failed due to rate limit but local cert still usable with shorter TTL
@@ -1211,6 +1276,10 @@ setup_ip_certificate() {
   ensure_acme_le_account "${CERTBOT_EMAIL_VAL:-}"
   logi "Выпуск LE IP-сертификата (shortlived ~6 дней) для ${ipv4}..."
   local issue_ok=0
+  local le_mail mail_args=()
+  le_mail=$(resolve_le_contact_email "${CERTBOT_EMAIL_VAL:-}")
+  set_acme_contact_email_everywhere "$le_mail"
+  [[ -n "$le_mail" ]] && mail_args=(-m "$le_mail")
   if [[ "${AWG_SSL_FORCE_RENEW:-0}" == "1" ]]; then
     "$(acme_bin)" --issue \
       "${domain_args[@]}" \
@@ -1219,6 +1288,7 @@ setup_ip_certificate() {
       --certificate-profile shortlived \
       --days 6 \
       --httpport 80 \
+      "${mail_args[@]}" \
       --force && issue_ok=1
   else
     "$(acme_bin)" --issue \
@@ -1227,7 +1297,8 @@ setup_ip_certificate() {
       --server letsencrypt \
       --certificate-profile shortlived \
       --days 6 \
-      --httpport 80 && issue_ok=1
+      --httpport 80 \
+      "${mail_args[@]}" && issue_ok=1
   fi
   if [[ "$issue_ok" -ne 1 ]]; then
     if try_reuse_certificate "$ipv4" "$host_dir" 0; then
