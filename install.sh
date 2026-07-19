@@ -409,21 +409,48 @@ is_valid_le_email() {
   [[ "$e" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
 }
 
-# Register/refresh LE account. Prefer a valid email; never send admin@localhost.
+# Drop ACCOUNT_EMAIL=admin@localhost (and similar) left by older installers — LE rejects them.
+clear_invalid_acme_account_emails() {
+  local f cur
+  shopt -s nullglob
+  for f in \
+    "${ACME_HOME}/account.conf" \
+    "${ACME_HOME}/ca/"*/account.conf \
+    "${ACME_HOME}/ca/"*/*/account.conf
+  do
+    [[ -f "$f" ]] || continue
+    cur=$(grep -E '^ACCOUNT_EMAIL=' "$f" 2>/dev/null | head -1 | cut -d= -f2- | tr -d "\"'" || true)
+    cur="${cur#"${cur%%[![:space:]]*}"}"
+    cur="${cur%"${cur##*[![:space:]]}"}"
+    [[ -z "$cur" ]] && continue
+    if ! is_valid_le_email "$cur"; then
+      logw "Сбрасываю невалидный ACCOUNT_EMAIL (${cur}) в ${f##*/}"
+      # shellcheck disable=SC2016
+      if grep -qE '^ACCOUNT_EMAIL=' "$f"; then
+        sed -i -E "s|^ACCOUNT_EMAIL=.*|ACCOUNT_EMAIL=''|" "$f" 2>/dev/null \
+          || sed -i '' -E "s|^ACCOUNT_EMAIL=.*|ACCOUNT_EMAIL=''|" "$f" 2>/dev/null \
+          || true
+      fi
+    fi
+  done
+  shopt -u nullglob
+}
+
+# Register/refresh LE account. Never send admin@localhost from stale acme.conf.
 ensure_acme_le_account() {
-  local email="${1:-}"
+  local email="${1:-}" out=""
+  clear_invalid_acme_account_emails
   "$(acme_bin)" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
   if is_valid_le_email "$email"; then
-    if ! "$(acme_bin)" --register-account -m "$email" --server letsencrypt; then
-      logw "Регистрация LE-аккаунта с email не удалась — пробую без контакта"
-      "$(acme_bin)" --register-account --server letsencrypt >/dev/null 2>&1 || true
-    fi
-  else
-    if [[ -n "$email" ]]; then
-      logw "Email «${email}» не подходит для LE (нужен вид user@domain.tld) — регистрирую аккаунт без контакта"
-    fi
-    "$(acme_bin)" --register-account --server letsencrypt >/dev/null 2>&1 || true
+    out=$("$(acme_bin)" --register-account -m "$email" --server letsencrypt 2>&1) && return 0
+    logw "Регистрация LE с email не удалась — пробую без контакта / fallback"
+  elif [[ -n "$email" ]]; then
+    logw "Email «${email}» не подходит для LE (нужен вид user@domain.tld) — без контакта"
   fi
+  out=$("$(acme_bin)" --register-account --server letsencrypt 2>&1) && return 0
+  # Stale conf may still inject bad contact: force a format-valid disposable address.
+  logw "LE без контакта не принял — регистрирую с noreply@example.com"
+  "$(acme_bin)" --register-account -m "noreply@example.com" --server letsencrypt 2>&1 || true
 }
 
 acme_bin() {
@@ -1246,7 +1273,7 @@ setup_custom_certificate() {
 }
 
 prompt_and_setup_ssl() {
-  local ssl_choice="" have_reuse=0 default_choice="2" prompt_hint="1-4, Enter=2"
+  local ssl_choice="" have_reuse=0 default_choice="1" prompt_hint="1-4, Enter=1"
   SSL_SCHEME="https"
 
   # Scan disk/volumes/acme BEFORE the menu so Enter can mean "reuse".
@@ -1262,33 +1289,33 @@ prompt_and_setup_ssl() {
   if [[ "$have_reuse" -eq 1 ]]; then
     echo -e "${green}0.${plain} Переиспользовать ${REUSE_SSL_NAME} (до ${REUSE_SSL_EXPIRES:-?}) — по умолчанию, без LE"
   fi
-  echo -e "${green}1.${plain} Let's Encrypt для домена (90 дней)"
-  echo -e "${green}2.${plain} Let's Encrypt для IP (shortlived ~6 дней)"
-  echo -e "${green}3.${plain} Свой сертификат (пути к файлам)"
-  echo -e "${green}4.${plain} Пропустить (self-signed)"
-  echo -e "${blue}Для 1 и 2 нужен открытый TCP/80 (не требуется при пункте 0).${plain}"
+  echo -e "${green}1.${plain} Self-signed для IP (без Let's Encrypt) — по умолчанию на голом IP"
+  echo -e "${green}2.${plain} Let's Encrypt для IP (shortlived ~6 дней, нужен TCP/80)"
+  echo -e "${green}3.${plain} Let's Encrypt для домена (90 дней, нужен TCP/80)"
+  echo -e "${green}4.${plain} Свой сертификат (пути к файлам)"
+  echo -e "${blue}Пункты 2–3: открытый TCP/80 с интернета. Пункт 0 — без LE.${plain}"
 
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     case "${AWG_SSL_MODE:-}" in
       reuse|existing)
         ssl_choice="0"
         ;;
-      domain) ssl_choice="1" ;;
+      none|selfsigned) ssl_choice="1" ;;
       ip) ssl_choice="2" ;;
-      custom) ssl_choice="3" ;;
-      none|selfsigned) ssl_choice="4" ;;
+      domain) ssl_choice="3" ;;
+      custom) ssl_choice="4" ;;
       "")
         if [[ "$have_reuse" -eq 1 ]]; then
           ssl_choice="0"
         else
-          ssl_choice="2"
+          ssl_choice="1"
         fi
         ;;
       *)
         if [[ "$have_reuse" -eq 1 ]]; then
           ssl_choice="0"
         else
-          ssl_choice="2"
+          ssl_choice="1"
         fi
         ;;
     esac
@@ -1312,44 +1339,18 @@ prompt_and_setup_ssl() {
       if setup_reuse_detected_certificate; then
         logi "SSL: переиспользован ${SSL_HOST} (без обращения к Let's Encrypt)"
       else
-        logw "Не удалось переиспользовать — выберите 1/2 или повторите"
+        logw "Не удалось переиспользовать — self-signed"
         SSL_MODE="selfsigned"
         SSL_HOST="${REUSE_SSL_NAME:-$SERVER_IP}"
         PANEL_DOMAIN_VAL="${SSL_HOST}"
       fi
       ;;
     1)
-      local domain="" email=""
-      # Prefill with discovered / previous domain
-      local domain_default="${REUSE_SSL_NAME:-}"
-      if [[ -z "$domain_default" ]] || is_ipv4 "$domain_default"; then
-        domain_default=$(grep -E '^PANEL_DOMAIN=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2- || true)
-      fi
-      if [[ -z "$domain_default" ]] || is_ipv4 "$domain_default"; then
-        domain_default=""
-      fi
-      prompt_or_default domain "Домен (A-запись на этот сервер): " "$domain_default" AWG_DOMAIN
-      prompt_or_default email "Email для Let's Encrypt (user@domain.tld, Enter = без контакта): " "" AWG_EMAIL
-      if [[ -z "$domain" ]] || ! is_domain "$domain"; then
-        loge "Некорректный домен — self-signed"
-        SSL_MODE="selfsigned"
-        SSL_HOST="${SERVER_IP:-127.0.0.1}"
-        PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
-        return 0
-      fi
-      if [[ -n "$email" ]] && ! is_valid_le_email "$email"; then
-        logw "Email «${email}» отклонён LE (нужен domain с точкой) — выпускаю без контакта"
-        email=""
-      fi
-      CERTBOT_EMAIL_VAL="$email"
-      if setup_domain_certificate "$domain" "$email"; then
-        logi "SSL домена готов"
-      else
-        logw "SSL домена не удался → self-signed"
-        SSL_MODE="selfsigned"
-        SSL_HOST="$domain"
-        PANEL_DOMAIN_VAL="$domain"
-      fi
+      SSL_MODE="selfsigned"
+      SSL_SCHEME="https"
+      SSL_HOST="${SERVER_IP:-127.0.0.1}"
+      PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
+      logi "SSL: self-signed для ${SSL_HOST}"
       ;;
     2)
       local ip="$SERVER_IP"
@@ -1391,21 +1392,54 @@ prompt_and_setup_ssl() {
       fi
       ;;
     3)
+      local domain="" email=""
+      local domain_default="${REUSE_SSL_NAME:-}"
+      if [[ -z "$domain_default" ]] || is_ipv4 "$domain_default"; then
+        domain_default=$(grep -E '^PANEL_DOMAIN=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2- || true)
+      fi
+      if [[ -z "$domain_default" ]] || is_ipv4 "$domain_default"; then
+        domain_default=""
+      fi
+      prompt_or_default domain "Домен (A-запись на этот сервер): " "$domain_default" AWG_DOMAIN
+      prompt_or_default email "Email для Let's Encrypt (user@domain.tld, Enter = без контакта): " "" AWG_EMAIL
+      if [[ -z "$domain" ]] || ! is_domain "$domain"; then
+        loge "Некорректный домен — self-signed"
+        SSL_MODE="selfsigned"
+        SSL_HOST="${SERVER_IP:-127.0.0.1}"
+        PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
+        return 0
+      fi
+      if [[ -n "$email" ]] && ! is_valid_le_email "$email"; then
+        logw "Email «${email}» отклонён LE (нужен domain с точкой) — выпускаю без контакта"
+        email=""
+      fi
+      CERTBOT_EMAIL_VAL="$email"
+      if setup_domain_certificate "$domain" "$email"; then
+        logi "SSL домена готов"
+      else
+        logw "SSL домена не удался → self-signed"
+        SSL_MODE="selfsigned"
+        SSL_HOST="$domain"
+        PANEL_DOMAIN_VAL="$domain"
+      fi
+      ;;
+    4)
       if ! setup_custom_certificate; then
         SSL_MODE="selfsigned"
         SSL_HOST="${SERVER_IP:-127.0.0.1}"
         PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
       fi
       ;;
-    4|*)
+    *)
       SSL_MODE="selfsigned"
       SSL_SCHEME="https"
       SSL_HOST="${SERVER_IP:-127.0.0.1}"
       PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
-      logi "SSL пропущен — nginx сделает self-signed"
+      logi "SSL: self-signed для ${SSL_HOST}"
       ;;
   esac
 }
+
 
 # After SSL we know PANEL_DOMAIN: explain demux model (no soft-force off 443 for bare IP).
 reconcile_panel_port_for_domain() {
