@@ -1248,6 +1248,36 @@ module.exports = class Server {
           subQrSvg,
         };
       }))
+      .get('/api/wireguard/client/:clientId/mtproto', defineEventHandler(async (event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        if (!amneziaMtproto.isAmneziaMtprotoAvailable()) {
+          throw httpError(503, 'Amnezia MTProto is not running');
+        }
+        const client = db.clients.getById(clientId);
+        if (!client) throw httpError(404, 'Client Not Found');
+        const links = amneziaMtproto.getProxyLinks();
+        if (!links || !links.tg) throw httpError(503, 'MTProto links not ready');
+        let linkQrSvg = null;
+        try {
+          const QRCode = require('qrcode');
+          linkQrSvg = await QRCode.toString(links.tg, {
+            type: 'svg',
+            width: 512,
+            errorCorrectionLevel: 'M',
+          });
+        } catch {
+          linkQrSvg = null;
+        }
+        return {
+          link: links.tg,
+          linkTme: links.tme,
+          linkQrSvg,
+          host: links.host,
+          port: links.port,
+          sni: links.sni,
+        };
+      }))
       .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
         const clientId = getRouterParam(event, 'clientId');

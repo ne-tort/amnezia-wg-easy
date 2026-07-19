@@ -252,6 +252,9 @@ new Vue({
     qrcodeXrayVlessUrl: '',
     qrcodeXrayJson: '',
     qrcodeXrayClientId: null,
+    qrcodeMtprotoSvg: null,
+    qrcodeMtprotoTgUrl: '',
+    qrcodeMtprotoTmeUrl: '',
     ruleProfiles: [],
     globalFirewallRules: [],
     globalRuleEdit: null,
@@ -1468,11 +1471,15 @@ new Vue({
         const xrayPromise = this.amneziaXrayAvailable
           ? this.api.getClientXray(client.id)
           : Promise.reject(new Error('xray off'));
-        const [textRes, amneziaRes, previewRes, xrayRes] = await Promise.allSettled([
+        const mtprotoPromise = this.amneziaMtprotoAvailable
+          ? this.api.getClientMtproto(client.id)
+          : Promise.reject(new Error('mtproto off'));
+        const [textRes, amneziaRes, previewRes, xrayRes, mtprotoRes] = await Promise.allSettled([
           this.api.getClientQRCodeSVG(client.id, level, profile, 'text'),
           this.api.getClientQRCodeSVG(client.id, level, profile, 'amnezia'),
           this.api.getConfiguration(client.id, level, profile),
           xrayPromise,
+          mtprotoPromise,
         ]);
 
         this.qrcodeText = null;
@@ -1487,6 +1494,9 @@ new Vue({
         this.qrcodeXrayVlessUrl = '';
         this.qrcodeXrayJson = '';
         this.qrcodeXrayClientId = client.id;
+        this.qrcodeMtprotoSvg = null;
+        this.qrcodeMtprotoTgUrl = '';
+        this.qrcodeMtprotoTmeUrl = '';
 
         if (textRes.status === 'fulfilled' && textRes.value && textRes.value.svg) {
           this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(textRes.value.svg);
@@ -1514,12 +1524,22 @@ new Vue({
             this.qrcodeXraySvg = 'data:image/svg+xml,' + encodeURIComponent(x.subQrSvg);
           }
         }
+        if (mtprotoRes.status === 'fulfilled' && mtprotoRes.value) {
+          const m = mtprotoRes.value;
+          this.qrcodeMtprotoTgUrl = m.link || '';
+          this.qrcodeMtprotoTmeUrl = m.linkTme || '';
+          if (m.linkQrSvg) {
+            this.qrcodeMtprotoSvg = 'data:image/svg+xml,' + encodeURIComponent(m.linkQrSvg);
+          }
+        }
 
         const hasAny = this.qrcodeText
           || (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length)
           || this.qrcodePreviewText
           || this.qrcodeXraySvg
-          || this.qrcodeXraySubUrl;
+          || this.qrcodeXraySubUrl
+          || this.qrcodeMtprotoSvg
+          || this.qrcodeMtprotoTgUrl;
         if (!hasAny) {
           const err = (textRes.status === 'rejected' && textRes.reason)
             || (amneziaRes.status === 'rejected' && amneziaRes.reason)
@@ -1530,6 +1550,7 @@ new Vue({
         if (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length) this.qrcodeTab = 'amnezia';
         else if (this.qrcodeText) this.qrcodeTab = 'text';
         else if (this.qrcodeXraySvg || this.qrcodeXraySubUrl) this.qrcodeTab = 'xray';
+        else if (this.qrcodeMtprotoSvg || this.qrcodeMtprotoTgUrl) this.qrcodeTab = 'mtproto';
         else this.qrcodeTab = 'preview';
 
         if (!this.qrcodeText && textRes.status === 'rejected') {
@@ -1552,6 +1573,9 @@ new Vue({
       this.qrcodeXrayVlessUrl = '';
       this.qrcodeXrayJson = '';
       this.qrcodeXrayClientId = null;
+      this.qrcodeMtprotoSvg = null;
+      this.qrcodeMtprotoTgUrl = '';
+      this.qrcodeMtprotoTmeUrl = '';
       this.qrcodeTab = 'amnezia';
     },
     async copyQrXraySub() {
@@ -1571,6 +1595,20 @@ new Vue({
     async copyQrXrayJson() {
       try {
         await this.copyTextToClipboard(this.qrcodeXrayJson || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async copyQrMtprotoTg() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeMtprotoTgUrl || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async copyQrMtprotoTme() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeMtprotoTmeUrl || '');
       } catch (err) {
         alert(err.message || 'Copy failed');
       }
@@ -2793,7 +2831,9 @@ new Vue({
         || (Array.isArray(this.qrcodeAmneziaSvgs) && this.qrcodeAmneziaSvgs.length > 0)
         || !!this.qrcodePreviewText
         || !!this.qrcodeXraySvg
-        || !!this.qrcodeXraySubUrl;
+        || !!this.qrcodeXraySubUrl
+        || !!this.qrcodeMtprotoSvg
+        || !!this.qrcodeMtprotoTgUrl;
     },
     /** Safe for Vue 2 template (avoids ReferenceError if stale cached app.js lacks data key). */
     amneziaQrImages() {

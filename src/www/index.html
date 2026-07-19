@@ -352,11 +352,13 @@
   .qrcode-modal-panel.qrcode-modal-text {
     max-width: min(100vw - 1rem, 40rem);
   }
-  .qrcode-modal-panel.qrcode-modal-xray {
+  .qrcode-modal-panel.qrcode-modal-xray,
+  .qrcode-modal-panel.qrcode-modal-mtproto {
     width: min(100vw - 1rem, 40rem);
     max-width: min(100vw - 1rem, 40rem);
   }
-  .qrcode-xray-stack {
+  .qrcode-xray-stack,
+  .qrcode-mtproto-stack {
     width: 100%;
     max-width: 560px;
     margin: 0 auto;
@@ -365,7 +367,8 @@
     gap: 0.75rem;
     box-sizing: border-box;
   }
-  .qrcode-xray-stack .qrcode-text-img {
+  .qrcode-xray-stack .qrcode-text-img,
+  .qrcode-mtproto-stack .qrcode-text-img {
     width: 560px;
     max-width: 100%;
     height: auto;
@@ -1872,6 +1875,7 @@
                 'qrcode-modal-amnezia': qrcodeTab === 'amnezia',
                 'qrcode-modal-text': qrcodeTab === 'text',
                 'qrcode-modal-xray': qrcodeTab === 'xray',
+                'qrcode-modal-mtproto': qrcodeTab === 'mtproto',
               }"
               :style="qrcodeTab === 'amnezia' ? amneziaQrModalStyle : null">
               <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-neutral-600 shrink-0">
@@ -1888,6 +1892,9 @@
                   <button v-if="amneziaXrayAvailable" type="button" @click="qrcodeTab = 'xray'"
                     :class="qrcodeTab === 'xray' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
                     class="pb-1 px-2 transition">{{ $t('qrTabXray') }}</button>
+                  <button v-if="amneziaMtprotoAvailable" type="button" @click="qrcodeTab = 'mtproto'"
+                    :class="qrcodeTab === 'mtproto' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabMtproto') }}</button>
                 </div>
                 <button type="button" @click="closeQR()"
                   class="text-gray-600 dark:text-neutral-500 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
@@ -1949,6 +1956,15 @@
                   </button>
                   <button type="button" class="qrcode-copy-field" @click="copyQrXraySub">{{ qrcodeXraySubUrl || '—' }}</button>
                   <button type="button" class="qrcode-copy-field" @click="copyQrXrayVless">{{ qrcodeXrayVlessUrl || '—' }}</button>
+                </div>
+                <div v-else-if="qrcodeTab === 'mtproto'" class="qrcode-mtproto-stack">
+                  <button v-if="qrcodeMtprotoSvg" type="button"
+                    class="block p-0 m-0 border-0 bg-transparent cursor-pointer w-full"
+                    @click="copyQrMtprotoTg">
+                    <img :src="qrcodeMtprotoSvg" alt="Telemt QR" class="qrcode-text-img pointer-events-none" />
+                  </button>
+                  <button type="button" class="qrcode-copy-field" @click="copyQrMtprotoTg">{{ qrcodeMtprotoTgUrl || '—' }}</button>
+                  <button type="button" class="qrcode-copy-field" @click="copyQrMtprotoTme">{{ qrcodeMtprotoTmeUrl || '—' }}</button>
                 </div>
               </div>
             </div>

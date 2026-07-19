@@ -473,6 +473,10 @@ class API {
     return this.call({ method: 'get', path: `/wireguard/client/${clientId}/xray` });
   }
 
+  async getClientMtproto(clientId) {
+    return this.call({ method: 'get', path: `/wireguard/client/${clientId}/mtproto` });
+  }
+
   async getAmneziaMtprotoStatus() {
     return this.call({ method: 'get', path: '/amnezia-mtproto' });
   }
