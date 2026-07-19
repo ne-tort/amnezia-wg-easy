@@ -212,6 +212,33 @@ test('writeStreamConfigs: demux server includes Docker DNS resolver', () => {
     assert.match(conf, /resolver 127\.0\.0\.11 valid=10s ipv6=off;/);
     assert.match(conf, /proxy_pass \$demux_backend_443;/);
     assert.match(conf, /ssl_preread on;/);
+    assert.match(conf, /proxy_protocol on;/);
+    assert.match(conf, /listen 127\.0\.0\.1:\d+ proxy_protocol;/);
+    const map = fs.readFileSync(path.join(tmp, 'nginx', 'stream-sni-443.map'), 'utf8');
+    assert.match(map, /amnezia-mtproto:/);
+    assert.match(map, /127\.0\.0\.1:\d+/); // xray via PP stripper
+  } finally {
+    if (prev == null) delete process.env.WG_PATH;
+    else process.env.WG_PATH = prev;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('writeStreamConfigs: no PROXY protocol when mtproto not in demux', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'portplan-'));
+  const prev = process.env.WG_PATH;
+  process.env.WG_PATH = tmp;
+  try {
+    const { portPlan } = loadPortPlan({ PANEL_HTTPS_PORT: '443', PANEL_DOMAIN: '1.2.3.4' });
+    const plan = portPlan.computePlan([
+      panel(443, '1.2.3.4'),
+      xray(443),
+    ]);
+    portPlan.writeStreamConfigs(plan);
+    const conf = fs.readFileSync(path.join(tmp, 'nginx', 'stream', 'demux-443.conf'), 'utf8');
+    assert.doesNotMatch(conf, /proxy_protocol on;/);
   } finally {
     if (prev == null) delete process.env.WG_PATH;
     else process.env.WG_PATH = prev;

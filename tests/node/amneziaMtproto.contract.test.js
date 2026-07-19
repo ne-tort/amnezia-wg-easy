@@ -102,6 +102,7 @@ test('buildConfigToml sets middle_proxy_nat_ip for IPv4 host', () => {
   });
   assert.match(toml, /middle_proxy_nat_ip = "104\.252\.53\.104"/);
   assert.match(toml, /tls_domain = "www\.sbb\.ch"/);
+  assert.doesNotMatch(toml, /proxy_protocol = true/);
   const tomlDom = amneziaMtproto.buildConfigToml({
     port: 31179,
     sni: 'www.sbb.ch',
@@ -110,6 +111,20 @@ test('buildConfigToml sets middle_proxy_nat_ip for IPv4 host', () => {
     publicPort: 443,
   });
   assert.doesNotMatch(tomlDom, /middle_proxy_nat_ip/);
+});
+
+test('buildConfigToml enables PROXY protocol for demux', () => {
+  const { amneziaMtproto } = loadMtproto();
+  const toml = amneziaMtproto.buildConfigToml({
+    port: 31179,
+    sni: 'www.sbb.ch',
+    secret: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    publicHost: '104.252.53.104',
+    publicPort: 443,
+    proxyProtocol: true,
+  });
+  assert.match(toml, /proxy_protocol = true/);
+  assert.match(toml, /proxy_protocol_trusted_cidrs/);
 });
 
 test('allocateInternalPort avoids demux and panel', () => {
