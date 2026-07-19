@@ -1403,60 +1403,227 @@ normalize_path_prefix() {
   printf '%s' "$raw"
 }
 
-mirror_host_alive() {
-  local host="$1" code
-  [[ -z "$host" ]] && return 1
-  code=$(curl -4 -skI -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 \
-    "https://${host}/" 2>/dev/null || echo 000)
-  case "$code" in
-    2*|3*) return 0 ;;
+# Strip https://, paths, ports, backslashes → bare hostname (lowercase).
+normalize_sni_host() {
+  local raw="${1:-}"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import re, sys
+s = (sys.argv[1] or '').strip().replace(chr(92), '/')
+m = re.match(r'^(https?):/+(.+)$', s, flags=re.I)
+if m:
+  s = m.group(2)
+s = s.split('/')[0].split('?')[0].split('#')[0]
+if '@' in s:
+  s = s.rsplit('@', 1)[-1]
+if s.startswith('[') and ']' in s:
+  s = s[1:s.index(']')]
+elif s.count(':') == 1:
+  host, port = s.rsplit(':', 1)
+  if port.isdigit():
+    s = host
+s = s.strip('.').strip().lower()
+print(s)
+" "$raw" 2>/dev/null || true
+    return 0
+  fi
+  raw="${raw//'\'/}"
+  raw=$(printf '%s' "$raw" | sed -E 's#^[Hh][Tt][Tt][Pp][Ss]?:/+##')
+  raw="${raw%%/*}"; raw="${raw%%\?*}"; raw="${raw%%#*}"
+  raw="${raw##*@}"
+  if [[ "$raw" == *:* && "$raw" != \[* ]]; then
+    local maybe_port="${raw##*:}"
+    if [[ "$maybe_port" =~ ^[0-9]+$ ]]; then
+      raw="${raw%:*}"
+    fi
+  fi
+  raw="${raw%.}"
+  printf '%s' "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+}
+
+# Auto bank/finder must skip .ru / .su / .рф (xn--p1ai). Manual user entry may use them.
+sni_is_blocked_tld() {
+  local h
+  h=$(normalize_sni_host "$1")
+  [[ -z "$h" ]] && return 1
+  if [[ "$h" =~ \.(ru|su|xn--p1ai)$ ]]; then
+    return 0
+  fi
+  case "$h" in
+    *.рф) return 0 ;;
   esac
   return 1
 }
 
-# Random host from mirror-bank; prefer HTTPS that returns HTTP 2xx/3xx.
-pick_default_mirror_host() {
-  local bank="${INSTALL_DIR}/config/mirror-bank.seed.json"
-  [[ -f "$bank" ]] || bank="${INSTALL_DIR}/config/sni-bank.seed.json"
-  local host=""
+# Reality dest: TLS with ALPN h2 (same bar as SNI Finder / bank probe).
+sni_reality_ok() {
+  local host
+  host=$(normalize_sni_host "$1")
+  [[ -z "$host" ]] && return 1
+  if ! command -v python3 >/dev/null 2>&1; then
+    local code
+    code=$(curl -4 -skI -o /dev/null -w '%{http_code}' --http2 --connect-timeout 3 --max-time 8 \
+      "https://${host}/" 2>/dev/null || echo 000)
+    case "$code" in
+      2*|3*) return 0 ;;
+    esac
+    return 1
+  fi
+  python3 -c "
+import socket, ssl, sys
+host = sys.argv[1]
+try:
+  ctx = ssl.create_default_context()
+  ctx.set_alpn_protocols(['h2', 'http/1.1'])
+  ctx.check_hostname = False
+  ctx.verify_mode = ssl.CERT_NONE
+  with socket.create_connection((host, 443), timeout=8) as sock:
+    with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+      alpn = ssock.selected_alpn_protocol()
+      if alpn == 'h2':
+        sys.exit(0)
+except Exception:
+  pass
+sys.exit(1)
+" "$host" 2>/dev/null
+}
+
+# Random checked host from bank (skips blocked TLDs). Prefer mirror-bank, else sni-bank.
+pick_checked_bank_host() {
+  local prefer="${1:-mirror}" bank="" host=""
+  if [[ "$prefer" == "sni" ]]; then
+    bank="${INSTALL_DIR}/config/sni-bank.seed.json"
+    [[ -f "$bank" ]] || bank="${INSTALL_DIR}/config/mirror-bank.seed.json"
+  else
+    bank="${INSTALL_DIR}/config/mirror-bank.seed.json"
+    [[ -f "$bank" ]] || bank="${INSTALL_DIR}/config/sni-bank.seed.json"
+  fi
   if [[ -f "$bank" ]] && command -v python3 >/dev/null 2>&1; then
     host=$(python3 -c "
-import json, random, subprocess, sys
+import json, random, socket, ssl, sys, re
 path = sys.argv[1]
+blocked = re.compile(r'\\.(ru|su|xn--p1ai)$', re.I)
 try:
   raw = json.load(open(path))
   domains = raw if isinstance(raw, list) else list(raw.get('domains') or [])
 except Exception:
   domains = []
-domains = [str(d).strip() for d in domains if str(d).strip()]
+domains = [str(d).strip().lower().rstrip('.') for d in domains if str(d).strip()]
+domains = [d for d in domains if d and not blocked.search(d) and not d.endswith('.рф')]
 random.shuffle(domains)
-for d in domains:
+
+def reality_ok(host):
   try:
-    r = subprocess.run(
-      ['curl','-4','-skI','-o','/dev/null','-w','%{http_code}',
-       '--connect-timeout','3','--max-time','8', f'https://{d}/'],
-      capture_output=True, text=True, timeout=12)
-    code = (r.stdout or '').strip()
-    if code.startswith('2') or code.startswith('3'):
-      print(d)
-      sys.exit(0)
+    ctx = ssl.create_default_context()
+    ctx.set_alpn_protocols(['h2', 'http/1.1'])
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((host, 443), timeout=8) as sock:
+      with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+        return ssock.selected_alpn_protocol() == 'h2'
   except Exception:
-    pass
-if domains:
-  print(domains[0])
+    return False
+
+for d in domains:
+  if reality_ok(d):
+    print(d)
+    sys.exit(0)
 " "$bank" 2>/dev/null || true)
   fi
   if [[ -z "$host" && -f "$bank" ]]; then
-    host=$(grep -oE '"[^"]+\.[^"]+"' "$bank" | head -1 | tr -d '"' || true)
+    while IFS= read -r cand; do
+      cand=$(normalize_sni_host "$cand")
+      [[ -z "$cand" ]] && continue
+      sni_is_blocked_tld "$cand" && continue
+      if sni_reality_ok "$cand"; then
+        host="$cand"
+        break
+      fi
+    done < <(grep -oE '"[^"]+\.[^"]+"' "$bank" | tr -d '"' || true)
   fi
   printf '%s' "${host:-www.sbb.ch}"
 }
 
+pick_default_mirror_host() {
+  pick_checked_bank_host mirror
+}
+
+# Interactive mirror menu (style = SSL): 1=SNI Finder, 2=bank, else hostname.
+prompt_mirror_host() {
+  local choice="" host="" ok=0
+  MIRROR_USE_SNI_VAL=0
+
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    if [[ "${AWG_MIRROR_USE_SNI:-0}" == "1" ]]; then
+      MIRROR_USE_SNI_VAL=1
+      NGINX_MIRROR_HOST_VAL=$(normalize_sni_host "${AWG_NGINX_MIRROR_HOST:-}")
+      [[ -z "$NGINX_MIRROR_HOST_VAL" ]] && NGINX_MIRROR_HOST_VAL=$(pick_checked_bank_host mirror)
+    elif [[ -n "${AWG_NGINX_MIRROR_HOST:-}" ]]; then
+      NGINX_MIRROR_HOST_VAL=$(normalize_sni_host "$AWG_NGINX_MIRROR_HOST")
+    else
+      NGINX_MIRROR_HOST_VAL=$(pick_checked_bank_host mirror)
+    fi
+    return 0
+  fi
+
+  while true; do
+    echo ""
+    echo -e "${green}════════ Зеркало корня / ════════${plain}"
+    echo -e "${green}1.${plain} SNI Finder → зеркало после enable (по умолчанию; fallback банк)"
+    echo -e "${green}2.${plain} Случайный из банка (с проверкой Reality TLS+h2)"
+    echo -e "${blue}Enter=1; любой другой ввод (не цифра меню) = hostname вручную${plain}"
+    read -rp "Выбор [1-2, Enter=1]: " choice || true
+    choice="${choice#"${choice%%[![:space:]]*}"}"
+    choice="${choice%"${choice##*[![:space:]]}"}"
+
+    case "$choice" in
+      ""|1)
+        MIRROR_USE_SNI_VAL=1
+        NGINX_MIRROR_HOST_VAL=$(pick_checked_bank_host mirror)
+        logi "Зеркало временно ${NGINX_MIRROR_HOST_VAL}; после Xray/MT → SNI Finder"
+        return 0
+        ;;
+      2)
+        MIRROR_USE_SNI_VAL=0
+        host=$(pick_checked_bank_host mirror)
+        if [[ -z "$host" ]]; then
+          logw "Банк не дал пригодный Reality-host — повторите выбор"
+          continue
+        fi
+        NGINX_MIRROR_HOST_VAL="$host"
+        logi "Зеркало из банка: ${NGINX_MIRROR_HOST_VAL}"
+        return 0
+        ;;
+      *)
+        if [[ "$choice" =~ ^[0-9]+$ ]]; then
+          logw "Неизвестный пункт ${choice}"
+          continue
+        fi
+        host=$(normalize_sni_host "$choice")
+        if [[ -z "$host" || "$host" != *.* ]]; then
+          logw "Некорректный hostname: «${choice}»"
+          continue
+        fi
+        if sni_is_blocked_tld "$host"; then
+          logi "Ручной SNI ${host} (.ru/.su/.рф) — допускаю только по вашему вводу"
+        fi
+        if ! sni_reality_ok "$host"; then
+          logw "${host} не подходит для Reality (нужен TLS + ALPN h2) — снова меню (1/2) или другой host"
+          continue
+        fi
+        MIRROR_USE_SNI_VAL=0
+        NGINX_MIRROR_HOST_VAL="$host"
+        logi "Зеркало вручную: ${NGINX_MIRROR_HOST_VAL}"
+        return 0
+        ;;
+    esac
+  done
+}
+
 prompt_webui_paths_and_mirror() {
-  local ans="" ans_l="" cur_panel cur_sub cur_mirror redeploy=0
+  local ans="" cur_panel cur_sub redeploy=0
   cur_panel=$(panel_env_get WEBUI_PUBLIC_PREFIX)
   cur_sub=$(panel_env_get SUB_PUBLIC_PREFIX)
-  cur_mirror=$(panel_env_get NGINX_MIRROR_HOST)
   is_redeploy && redeploy=1
   MIRROR_USE_SNI_VAL=0
 
@@ -1467,12 +1634,7 @@ prompt_webui_paths_and_mirror() {
     WEBUI_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "${AWG_WEBUI_PUBLIC_PREFIX:-${cur_panel:-/panel}}" /panel)
     SUB_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "${AWG_SUB_PUBLIC_PREFIX:-${cur_sub:-/sub}}" /sub)
     NGINX_ROOT_BEHAVIOR_VAL="${AWG_NGINX_ROOT_BEHAVIOR:-mirror}"
-    if [[ "${AWG_MIRROR_USE_SNI:-0}" == "1" ]]; then
-      MIRROR_USE_SNI_VAL=1
-      NGINX_MIRROR_HOST_VAL="${AWG_NGINX_MIRROR_HOST:-${cur_mirror:-$(pick_default_mirror_host)}}"
-    else
-      NGINX_MIRROR_HOST_VAL="${AWG_NGINX_MIRROR_HOST:-${cur_mirror:-$(pick_default_mirror_host)}}"
-    fi
+    prompt_mirror_host
   else
     if [[ "$redeploy" -eq 1 && -n "$cur_panel" ]]; then
       read -rp "Путь панели [редеплой: ${cur_panel}]: " ans || true
@@ -1499,40 +1661,19 @@ prompt_webui_paths_and_mirror() {
       SUB_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "$ans" /sub)
     fi
 
-    ans=""
-    if [[ "$redeploy" -eq 1 && -n "$cur_mirror" ]]; then
-      read -rp "Зеркало / [редеплой: ${cur_mirror} | sni | host]: " ans || true
-    else
-      read -rp "Зеркало / [по умолчанию: банк | sni | host]: " ans || true
-    fi
-    ans="${ans//' '/}"
-    ans_l=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
-    case "$ans_l" in
-      "")
-        if [[ "$redeploy" -eq 1 && -n "$cur_mirror" ]]; then
-          NGINX_MIRROR_HOST_VAL="$cur_mirror"
-        else
-          NGINX_MIRROR_HOST_VAL=$(pick_default_mirror_host)
-        fi
-        ;;
-      sni)
-        MIRROR_USE_SNI_VAL=1
-        NGINX_MIRROR_HOST_VAL="${cur_mirror:-$(pick_default_mirror_host)}"
-        ;;
-      *)
-        NGINX_MIRROR_HOST_VAL="$ans"
-        ;;
-    esac
     NGINX_ROOT_BEHAVIOR_VAL="mirror"
+    prompt_mirror_host
   fi
 
-  NGINX_MIRROR_HOST_VAL="${NGINX_MIRROR_HOST_VAL#https://}"
-  NGINX_MIRROR_HOST_VAL="${NGINX_MIRROR_HOST_VAL#http://}"
-  NGINX_MIRROR_HOST_VAL="${NGINX_MIRROR_HOST_VAL%%/*}"
+  NGINX_MIRROR_HOST_VAL=$(normalize_sni_host "$NGINX_MIRROR_HOST_VAL")
   if [[ -z "$NGINX_MIRROR_HOST_VAL" ]]; then
-    NGINX_MIRROR_HOST_VAL=$(pick_default_mirror_host)
+    NGINX_MIRROR_HOST_VAL=$(pick_checked_bank_host mirror)
   fi
-  logi "UI=${WEBUI_PUBLIC_PREFIX_VAL}/ sub=${SUB_PUBLIC_PREFIX_VAL}/ mirror=${NGINX_MIRROR_HOST_VAL}${MIRROR_USE_SNI_VAL:+ (→ SNI после enable)}"
+  if [[ "${MIRROR_USE_SNI_VAL:-0}" -eq 1 ]]; then
+    logi "UI=${WEBUI_PUBLIC_PREFIX_VAL}/ sub=${SUB_PUBLIC_PREFIX_VAL}/ mirror=${NGINX_MIRROR_HOST_VAL} (→ SNI Finder после enable)"
+  else
+    logi "UI=${WEBUI_PUBLIC_PREFIX_VAL}/ sub=${SUB_PUBLIC_PREFIX_VAL}/ mirror=${NGINX_MIRROR_HOST_VAL}"
+  fi
 }
 
 apply_mirror_from_sni_if_requested() {
@@ -1546,11 +1687,17 @@ apply_mirror_from_sni_if_requested() {
     sni=$(api_curl GET /api/amnezia-mtproto 2>/dev/null \
       | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
   fi
+  sni=$(normalize_sni_host "$sni")
   [[ -z "$sni" ]] && return 0
-  if ! mirror_host_alive "$sni"; then
-    logw "SNI ${sni} не ответил по HTTPS — зеркало не меняю"
-    return 0
+  if sni_is_blocked_tld "$sni"; then
+    logw "SNI ${sni} (.ru/.su/.рф) — зеркало не беру из авто-SNI; банк"
+    sni=$(pick_checked_bank_host mirror)
   fi
+  if ! sni_reality_ok "$sni"; then
+    logw "SNI ${sni} не Reality-ok — зеркало из банка"
+    sni=$(pick_checked_bank_host mirror)
+  fi
+  [[ -z "$sni" ]] && return 0
   NGINX_MIRROR_HOST_VAL="$sni"
   env_set "${INSTALL_DIR}/.env" NGINX_MIRROR_HOST "$sni"
   logi "Зеркало → ${sni}"
@@ -1791,15 +1938,22 @@ enable_xray() {
 
   status=$(api_curl GET /api/amnezia-xray || true)
   sni_stored=$(printf '%s' "$status" | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  sni_stored=$(normalize_sni_host "$sni_stored")
   if [[ -n "$sni_stored" ]]; then
-    logi "Xray: оставляю SNI ${sni_stored} (без скана)"
-    body=$(printf '{"publicPort":%s}' "$pub")
-    resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
-    logi "Xray enable: ${resp:0:300}"
-    return 0
+    if sni_is_blocked_tld "$sni_stored"; then
+      logw "Xray: SNI ${sni_stored} пропущен (.ru/.su/.рф) — авто не использует; новый выбор"
+    elif sni_reality_ok "$sni_stored"; then
+      logi "Xray: оставляю SNI ${sni_stored} (без скана)"
+      body=$(printf '{"publicPort":%s}' "$pub")
+      resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
+      logi "Xray enable: ${resp:0:300}"
+      return 0
+    else
+      logw "Xray: SNI ${sni_stored} не Reality-ok — новый выбор"
+    fi
   fi
 
-  logi "Xray: SNI ещё не задан — SNI Finder + enable"
+  logi "Xray: SNI Finder + enable"
   cidr=$(base24_from_ip "${SERVER_IP:-0.0.0.0}")
   api_curl GET "/api/amnezia-xray/sni-cache?ensureBg=1" >/tmp/awg-sni-cache.json || true
   if [[ -n "$SERVER_IP" && "$cidr" != "0.0.0.0/24" ]]; then
@@ -1814,20 +1968,40 @@ enable_xray() {
   fi
   api_curl GET /api/amnezia-xray/sni-cache >/tmp/awg-sni-cache.json || true
   sni=$(python3 - <<'PY' 2>/dev/null || true
-import json
+import json, re
+blocked = re.compile(r'\.(ru|su|xn--p1ai)$', re.I)
+def ok(d):
+  d = (d or '').strip().lower().rstrip('.')
+  if not d or blocked.search(d) or d.endswith('.рф'):
+    return False
+  return True
 try:
-  d=json.load(open("/tmp/awg-sni-cache.json"))
-  print((d.get("defaultSni") or "").strip())
+  d = json.load(open('/tmp/awg-sni-cache.json'))
+  cand = (d.get('defaultSni') or '').strip()
+  if ok(cand):
+    print(cand)
+    raise SystemExit
+  for e in (d.get('entries') or []):
+    if e.get('alive') is False:
+      continue
+    dom = (e.get('domain') or '').strip()
+    if ok(dom):
+      print(dom)
+      raise SystemExit
+except SystemExit:
+  raise
 except Exception:
   pass
 PY
 )
-  if [[ -z "$sni" ]]; then
-    sni=$(sed -n 's/.*"defaultSni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/awg-sni-cache.json 2>/dev/null | head -1)
+  sni=$(normalize_sni_host "$sni")
+  if [[ -n "$sni" ]] && ( sni_is_blocked_tld "$sni" || ! sni_reality_ok "$sni" ); then
+    logw "Xray: кандидат ${sni} отклонён — банк"
+    sni=""
   fi
   if [[ -z "$sni" ]]; then
-    sni="www.sbb.ch"
-    logw "defaultSni не найден — fallback ${sni}"
+    sni=$(pick_checked_bank_host sni)
+    logw "Xray: SNI из банка ${sni}"
   else
     logi "Выбран SNI: ${sni}"
   fi
@@ -1847,12 +2021,19 @@ enable_mtproto() {
 
   status=$(api_curl GET /api/amnezia-mtproto || true)
   sni_stored=$(printf '%s' "$status" | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  sni_stored=$(normalize_sni_host "$sni_stored")
   if [[ -n "$sni_stored" ]]; then
-    logi "MTProto: оставляю SNI ${sni_stored}"
-    body=$(printf '{"address":"%s","publicPort":%s}' "$address" "$pub")
-    resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
-    logi "MTProto enable: ${resp:0:300}"
-    return 0
+    if sni_is_blocked_tld "$sni_stored"; then
+      logw "MTProto: SNI ${sni_stored} пропущен (.ru/.su/.рф) — новый выбор"
+    elif sni_reality_ok "$sni_stored"; then
+      logi "MTProto: оставляю SNI ${sni_stored}"
+      body=$(printf '{"address":"%s","publicPort":%s}' "$address" "$pub")
+      resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
+      logi "MTProto enable: ${resp:0:300}"
+      return 0
+    else
+      logw "MTProto: SNI ${sni_stored} не Reality-ok — новый выбор"
+    fi
   fi
 
   xray_sni=$(api_curl GET /api/amnezia-xray 2>/dev/null \
@@ -1861,30 +2042,35 @@ enable_mtproto() {
     xray_sni=$(api_curl GET /api/amnezia-xray 2>/dev/null \
       | sed -n 's/.*"sni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
   fi
+  xray_sni=$(normalize_sni_host "$xray_sni")
 
   api_curl GET /api/amnezia-xray/sni-cache >/tmp/awg-sni-cache.json || true
   sni=$(python3 - <<PY 2>/dev/null || true
-import json
+import json, re
 exclude = "${xray_sni}".strip().lower()
-# 1) unified sni-cache (scan + bank from panel)
+blocked = re.compile(r'\.(ru|su|xn--p1ai)$', re.I)
+def ok(d):
+  d = (d or '').strip().lower().rstrip('.')
+  if not d or d == exclude:
+    return False
+  if blocked.search(d) or d.endswith('.рф'):
+    return False
+  return True
 try:
   d = json.load(open("/tmp/awg-sni-cache.json"))
   for e in (d.get("entries") or []):
     if e.get("alive") is False:
       continue
-    dom = (e.get("domain") or "").strip()
-    if dom and dom.lower() != exclude:
-      print(dom)
+    if ok(e.get("domain") or ""):
+      print((e.get("domain") or "").strip())
       raise SystemExit
-  alt = (d.get("defaultSni") or "").strip()
-  if alt and alt.lower() != exclude:
-    print(alt)
+  if ok(d.get("defaultSni") or ""):
+    print((d.get("defaultSni") or "").strip())
     raise SystemExit
 except SystemExit:
   raise
 except Exception:
   pass
-# 2) shared Reality/MTProto bank seed
 for path in (
   "${INSTALL_DIR}/config/sni-bank.seed.json",
   "/app/config/sni-bank.seed.json",
@@ -1893,9 +2079,8 @@ for path in (
     raw = json.load(open(path))
     domains = raw if isinstance(raw, list) else list((raw or {}).get("domains") or [])
     for dom in domains:
-      dom = str(dom or "").strip()
-      if dom and dom.lower() != exclude:
-        print(dom)
+      if ok(dom):
+        print(str(dom).strip())
         raise SystemExit
   except SystemExit:
     raise
@@ -1903,13 +2088,24 @@ for path in (
     continue
 PY
 )
-  if [[ -z "$sni" || "$sni" == "$xray_sni" ]]; then
-    sni="www.ns.nl"
+  sni=$(normalize_sni_host "$sni")
+  if [[ -n "$sni" ]] && ( sni_is_blocked_tld "$sni" || ! sni_reality_ok "$sni" || [[ "$sni" == "$xray_sni" ]] ); then
+    sni=""
+  fi
+  if [[ -z "$sni" ]]; then
+    sni=$(pick_checked_bank_host sni)
     local sni_l xray_l
     sni_l=$(printf '%s' "$sni" | tr '[:upper:]' '[:lower:]')
     xray_l=$(printf '%s' "$xray_sni" | tr '[:upper:]' '[:lower:]')
     if [[ -n "$xray_l" && "$sni_l" == "$xray_l" ]]; then
-      sni="www.czc.cz"
+      # try another bank pick by excluding via second call — soft fallback
+      sni="www.ns.nl"
+      if [[ "$(printf '%s' "$sni" | tr '[:upper:]' '[:lower:]')" == "$xray_l" ]]; then
+        sni="www.czc.cz"
+      fi
+      if ! sni_reality_ok "$sni"; then
+        sni=$(pick_checked_bank_host sni)
+      fi
     fi
     logw "MTProto SNI fallback (bank): ${sni}"
   else

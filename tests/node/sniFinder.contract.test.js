@@ -27,6 +27,31 @@ test('isPublicIpv4 rejects private/special ranges', () => {
   assert.equal(f.isPublicIpv4('100.64.0.1'), false);
 });
 
+test('isBlockedAutoTld skips .ru/.su/.рф; domainsFromCert omits them', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sni-tld-'));
+  const f = loadFinder(tmp);
+  assert.equal(f.isBlockedAutoTld('www.rutube.ru'), true);
+  assert.equal(f.isBlockedAutoTld('mail.yandex.ru'), true);
+  assert.equal(f.isBlockedAutoTld('example.su'), true);
+  assert.equal(f.isBlockedAutoTld('site.xn--p1ai'), true);
+  assert.equal(f.isBlockedAutoTld('www.gov.uk'), false);
+  assert.equal(f.isBlockedAutoTld('foo.ru.com'), false);
+  const domains = f.domainsFromCert('www.rutube.ru', ['www.sbb.ch', 'cdn.example.su']);
+  assert.deepEqual(domains, ['www.sbb.ch']);
+});
+
+test('loadBankDomains / pickDefaultSni ignore blocked TLD in bank', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sni-bank-ru-'));
+  const f = loadFinder(tmp);
+  fs.mkdirSync(path.join(tmp, 'xray'), { recursive: true });
+  fs.writeFileSync(
+    path.join(tmp, 'xray', 'sni-bank.json'),
+    JSON.stringify(['www.rutube.ru', 'ok.example.com']),
+  );
+  assert.deepEqual(f.loadBankDomains(), ['ok.example.com']);
+  assert.equal(f.pickDefaultSni(), 'ok.example.com');
+});
+
 test('parseCidr / expandCidrHosts caps at /24 and rejects private', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sni-cidr-'));
   const f = loadFinder(tmp);

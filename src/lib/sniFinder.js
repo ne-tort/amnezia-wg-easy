@@ -189,6 +189,16 @@ function isDomain(d) {
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i.test(s);
 }
 
+/** Auto-pick/bank/scan must skip .ru / .su / .рф (xn--p1ai). Manual user entry may still use them. */
+function isBlockedAutoTld(domain) {
+  const s = String(domain || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!s) return false;
+  if (/\.(ru|su|xn--p1ai)$/.test(s)) return true;
+  // raw Cyrillic .рф if somehow present
+  if (s.endsWith('.рф')) return true;
+  return false;
+}
+
 function expandWildcard(d) {
   const s = String(d || '').trim().toLowerCase();
   if (s.startsWith('*.') && s.split('.').length >= 3) {
@@ -205,7 +215,7 @@ function domainsFromCert(cn, sans, { includeGeneric = true } = {}) {
     if (!low) return;
     if (!includeGeneric && GENERIC_SAN.has(low)) return;
     for (const d of expandWildcard(low)) {
-      if (isDomain(d)) items.push(d);
+      if (isDomain(d) && !isBlockedAutoTld(d)) items.push(d);
     }
   };
   if (cn) pushName(cn);
@@ -318,7 +328,11 @@ function loadBankDomains() {
       const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
       const list = Array.isArray(raw) ? raw : (raw && raw.domains);
       if (!Array.isArray(list)) continue;
-      return [...new Set(list.map((d) => String(d || '').trim().toLowerCase()).filter(isDomain))];
+      return [...new Set(
+        list
+          .map((d) => String(d || '').trim().toLowerCase())
+          .filter((d) => isDomain(d) && !isBlockedAutoTld(d)),
+      )];
     } catch {
       /* try next */
     }
@@ -340,7 +354,7 @@ function mergeScanResults(found, meta) {
   const now = Date.now();
   for (const row of found) {
     const domain = String(row.domain || '').toLowerCase();
-    if (!domain) continue;
+    if (!domain || isBlockedAutoTld(domain)) continue;
     const prev = byDomain.get(domain) || {};
     byDomain.set(domain, {
       ...prev,
@@ -393,12 +407,13 @@ function getUnifiedList() {
     }
   }
 
-  const scanAlive = [...scanMap.values()].filter((e) => e.alive !== false);
-  const scanDead = [...scanMap.values()].filter((e) => e.alive === false);
+  const notBlocked = (e) => !isBlockedAutoTld(e.domain);
+  const scanAlive = [...scanMap.values()].filter((e) => e.alive !== false && notBlocked(e));
+  const scanDead = [...scanMap.values()].filter((e) => e.alive === false && notBlocked(e));
   scanAlive.sort((a, b) => (a.score != null ? a.score : 1e9) - (b.score != null ? b.score : 1e9));
 
-  const bankAlive = [...bankMap.values()].filter((e) => e.alive !== false);
-  const bankDead = [...bankMap.values()].filter((e) => e.alive === false);
+  const bankAlive = [...bankMap.values()].filter((e) => e.alive !== false && notBlocked(e));
+  const bankDead = [...bankMap.values()].filter((e) => e.alive === false && notBlocked(e));
   const bankOrder = new Map(bankDomains.map((d, i) => [d, i]));
   bankAlive.sort((a, b) => (bankOrder.get(a.domain) ?? 999) - (bankOrder.get(b.domain) ?? 999));
 
@@ -1050,6 +1065,7 @@ module.exports = {
   expandCidrHosts,
   base24Cidr,
   isDomain,
+  isBlockedAutoTld,
   expandWildcard,
   domainsFromCert,
   scoreCandidate,
