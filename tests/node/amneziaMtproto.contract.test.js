@@ -91,7 +91,7 @@ test('getStatus exposes desired persistence keys', () => {
   assert.equal(st.healthy, false);
 });
 
-test('buildConfigToml sets middle_proxy_nat_ip for IPv4 host', () => {
+test('buildConfigToml uses Direct DC and keeps Fake-TLS', () => {
   const { amneziaMtproto } = loadMtproto();
   const toml = amneziaMtproto.buildConfigToml({
     port: 31179,
@@ -100,17 +100,12 @@ test('buildConfigToml sets middle_proxy_nat_ip for IPv4 host', () => {
     publicHost: '104.252.53.104',
     publicPort: 443,
   });
-  assert.match(toml, /middle_proxy_nat_ip = "104\.252\.53\.104"/);
+  assert.match(toml, /use_middle_proxy = false/);
+  assert.match(toml, /fast_mode = true/);
   assert.match(toml, /tls_domain = "www\.sbb\.ch"/);
+  assert.match(toml, /ignore_time_skew = true/);
+  assert.doesNotMatch(toml, /middle_proxy_nat_ip/);
   assert.doesNotMatch(toml, /proxy_protocol/);
-  const tomlDom = amneziaMtproto.buildConfigToml({
-    port: 31179,
-    sni: 'www.sbb.ch',
-    secret: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-    publicHost: 'vpn.example.com',
-    publicPort: 443,
-  });
-  assert.doesNotMatch(tomlDom, /middle_proxy_nat_ip/);
 });
 
 test('allocateInternalPort avoids demux and panel', () => {

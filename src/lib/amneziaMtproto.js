@@ -193,16 +193,15 @@ function buildConfigToml({
   port, sni, secret, publicHost, publicPort,
 }) {
   // Telemt TOML — Fake-TLS only, mask to tls_domain.
-  // Pure TCP behind nginx stream demux (ssl_preread) — no PROXY protocol.
+  // Direct DC (use_middle_proxy=false): ME often gives check/ping then dies;
+  // C→telemt→DC is more stable for full sync on typical VPS.
   const lines = [
     '[general]',
-    'use_middle_proxy = true',
+    'use_middle_proxy = false',
+    'fast_mode = true',
+    'prefer_ipv6 = false',
     'log_level = "normal"',
   ];
-  // Behind Docker NAT, pin public IP so ME handshake advertises the right address.
-  if (publicHost && net.isIPv4(String(publicHost).trim())) {
-    lines.push(`middle_proxy_nat_ip = ${JSON.stringify(String(publicHost).trim())}`);
-  }
   lines.push(
     '',
     '[general.modes]',
@@ -224,11 +223,17 @@ function buildConfigToml({
     '[[server.listeners]]',
     'ip = "0.0.0.0"',
     '',
+    '[timeouts]',
+    'client_handshake = 60',
+    '',
     '[censorship]',
     `tls_domain = ${JSON.stringify(sni)}`,
     'mask = true',
     'tls_emulation = true',
     'tls_front_dir = "tlsfront"',
+    '',
+    '[access]',
+    'ignore_time_skew = true',
     '',
     '[access.users]',
     `${USER_NAME} = ${JSON.stringify(secret)}`,
