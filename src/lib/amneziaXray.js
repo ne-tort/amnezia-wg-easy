@@ -1079,7 +1079,14 @@ async function enableInternal(opts = {}) {
     writeServerJson(obj);
 
     await ensureXrayContainer();
-    await portPlan.applyPlan();
+    try {
+      await portPlan.applyPlan();
+    } catch (planErr) {
+      // nginx name Conflict / compose glitch must not wipe a started Xray container
+      // eslint-disable-next-line no-console
+      console.error('Xray enable: portPlan.applyPlan failed:', planErr && planErr.message);
+      setPhase('degraded', planErr);
+    }
     try {
       const mt = require('./amneziaMtproto');
       if (mt.getStatus && mt.getStatus().desired && typeof mt.ensureMtprotoContainer === 'function') {
@@ -1089,7 +1096,11 @@ async function enableInternal(opts = {}) {
     await ensureXrayContainer();
     try {
       await portPlan.applyPlan();
-    } catch { /* ignore */ }
+    } catch (planErr) {
+      // eslint-disable-next-line no-console
+      console.error('Xray enable: portPlan retry failed:', planErr && planErr.message);
+      if (phase !== 'degraded') setPhase('degraded', planErr);
+    }
 
     let ready = false;
     while (Date.now() < deadline) {

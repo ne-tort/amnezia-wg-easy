@@ -262,25 +262,56 @@ EOF
 fi
 COMPOSE_FILES=(-f docker-compose.yml -f docker-compose.ports.yml)
 
+# certbot_* are external (created by install acme inject / here) — silence Compose warn.
+ensure_compose_volumes() {
+  local v
+  for v in \
+    "${COMPOSE_PROJECT_NAME}_certbot_conf" \
+    "${COMPOSE_PROJECT_NAME}_certbot_www"
+  do
+    if ! docker volume inspect "$v" >/dev/null 2>&1; then
+      echo "[deploy] Creating volume ${v}"
+      docker volume create "$v" >/dev/null || true
+    fi
+  done
+}
+ensure_compose_volumes
+
 # portPlan may recreate nginx via `docker run --name nginx` (no compose labels).
 # That orphan blocks `compose up` with "name already in use".
 clear_nginx_name_conflict() {
-  if docker inspect nginx >/dev/null 2>&1; then
-    local labels
-    labels=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' nginx 2>/dev/null || true)
-    if [[ -z "$labels" || "$labels" != "$COMPOSE_PROJECT_NAME" ]]; then
-      echo "[deploy] Removing orphan nginx container (not owned by compose project ${COMPOSE_PROJECT_NAME})"
-      docker rm -f nginx >/dev/null 2>&1 || true
-    fi
+  if ! docker inspect nginx >/dev/null 2>&1; then
+    return 0
+  fi
+  local labels
+  labels=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' nginx 2>/dev/null || true)
+  if [[ -z "$labels" || "$labels" != "$COMPOSE_PROJECT_NAME" ]]; then
+    echo "[deploy] Removing orphan nginx container (not owned by compose project ${COMPOSE_PROJECT_NAME})"
+    docker rm -f nginx >/dev/null 2>&1 || true
+    return 0
+  fi
+  # Even labeled nginx can block recreate after a failed portPlan docker-run race.
+  local state
+  state=$(docker inspect -f '{{.State.Status}}' nginx 2>/dev/null || true)
+  if [[ "$state" != "running" && "$state" != "restarting" ]]; then
+    echo "[deploy] Removing non-running nginx (state=${state:-unknown}) before compose up"
+    docker rm -f nginx >/dev/null 2>&1 || true
   fi
 }
 
 compose_ok=0
+compose_err=""
 for i in 1 2 3; do
   clear_nginx_name_conflict
-  if docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_TLS_ARGS[@]}" up -d --build --remove-orphans; then
+  compose_err=$(docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_TLS_ARGS[@]}" up -d --build --remove-orphans 2>&1) && {
     compose_ok=1
+    printf '%s\n' "$compose_err"
     break
+  }
+  printf '%s\n' "$compose_err" >&2
+  if echo "$compose_err" | grep -qiE 'already in use|Conflict|name "/?nginx"'; then
+    echo "[deploy] nginx name conflict — force removing and retrying" >&2
+    docker rm -f nginx >/dev/null 2>&1 || true
   fi
   if [ "$i" -lt 3 ]; then
     echo "[deploy] compose up --build failed (attempt $i/3); clearing nginx name + prune, retry in 5s..." >&2

@@ -475,51 +475,20 @@ async function reloadNginx() {
 }
 
 /**
- * Recreate nginx with updated publish ports.
- * Prefer `docker compose … --force-recreate nginx` so the container keeps compose labels
- * (raw `docker run --name nginx` orphans break the next deploy.sh).
+ * Remove nginx and wait until the name is free (avoids "name already in use").
  */
-async function recreateNginxForPlan(plan) {
-  writeComposePortsFile(plan);
-
-  const installDir = process.env.AWG_INSTALL_DIR || '/opt/amnezia-wg-easy';
-  const composeYml = path.join(installDir, 'docker-compose.yml');
-  const portsYml = path.join(installDir, COMPOSE_PORTS_NAME);
-  const envFile = path.join(installDir, '.env');
-
-  if (fs.existsSync(composeYml) && fs.existsSync(portsYml)) {
-    const composeArgs = ['compose'];
-    if (fs.existsSync(envFile)) {
-      composeArgs.push('--env-file', envFile);
-    }
-    composeArgs.push(
-      '-f', composeYml,
-      '-f', portsYml,
-      'up', '-d', '--no-deps', '--force-recreate', '--remove-orphans',
-      'nginx',
-    );
-    let viaCompose = await runCmd('docker', composeArgs, { timeout: 180_000 });
-    if (!viaCompose.ok) {
-      await runCmd('docker', ['rm', '-f', NGINX_CONTAINER], { timeout: 30_000 });
-      viaCompose = await runCmd('docker', composeArgs, { timeout: 180_000 });
-    }
-    if (viaCompose.ok) {
-      return { ok: true, recreated: true, via: 'compose' };
-    }
+async function removeNginxContainer({ attempts = 5 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    await runCmd('docker', ['rm', '-f', NGINX_CONTAINER], { timeout: 60_000 });
+    const check = await runCmd('docker', ['inspect', NGINX_CONTAINER], { timeout: 10_000 });
+    if (!check.ok) return true;
+    await new Promise((r) => setTimeout(r, 250 * (i + 1)));
   }
+  return false;
+}
 
-  const inspect = await runCmd('docker', ['inspect', NGINX_CONTAINER], { timeout: 15_000 });
-  if (!inspect.ok) {
-    return { ok: false, skipped: true, reason: 'nginx not found' };
-  }
-  let info;
-  try {
-    info = JSON.parse(inspect.stdout)[0];
-  } catch {
-    return { ok: false, skipped: true, reason: 'inspect parse failed' };
-  }
-
-  const image = info.Config && info.Config.Image;
+function buildNginxRunArgs(plan, info) {
+  const image = (info.Config && info.Config.Image) || 'amnezia-wg-easy-nginx:local';
   const env = (info.Config && info.Config.Env) || [];
   const restart = (info.HostConfig && info.HostConfig.RestartPolicy && info.HostConfig.RestartPolicy.Name)
     || 'unless-stopped';
@@ -546,14 +515,13 @@ async function recreateNginxForPlan(plan) {
     portArgs.push('-p', `${d.port}:${d.port}`);
   }
 
-  await runCmd('docker', ['rm', '-f', NGINX_CONTAINER], { timeout: 30_000 });
-
   const args = [
     'run', '-d',
     '--name', NGINX_CONTAINER,
     '--restart', restart,
     '--label', 'com.docker.compose.project=amnezia-wg-easy',
     '--label', 'com.docker.compose.service=nginx',
+    '--label', 'com.docker.compose.container-number=1',
   ];
   if (primaryNet) args.push('--network', primaryNet);
   for (const e of env) {
@@ -563,12 +531,104 @@ async function recreateNginxForPlan(plan) {
     args.push('-v', m);
   }
   args.push(...portArgs, image);
+  return args;
+}
 
-  const run = await runCmd('docker', args, { timeout: 90_000 });
-  if (!run.ok) {
-    throw new Error(run.stderr.trim() || 'failed to recreate nginx');
+/**
+ * Recreate nginx with updated publish ports.
+ * Prefer `docker compose … --force-recreate nginx` so the container keeps compose labels
+ * (raw `docker run --name nginx` orphans break the next deploy.sh).
+ * Always free the name first; retry on Conflict.
+ */
+async function recreateNginxForPlan(plan) {
+  writeComposePortsFile(plan);
+
+  const installDir = process.env.AWG_INSTALL_DIR || '/opt/amnezia-wg-easy';
+  const composeYml = path.join(installDir, 'docker-compose.yml');
+  const portsYml = path.join(installDir, COMPOSE_PORTS_NAME);
+  const envFile = path.join(installDir, '.env');
+
+  // Snapshot before remove — docker-run fallback needs image/env/mounts.
+  const inspectBefore = await runCmd('docker', ['inspect', NGINX_CONTAINER], { timeout: 15_000 });
+  let snap = null;
+  if (inspectBefore.ok) {
+    try {
+      snap = JSON.parse(inspectBefore.stdout)[0];
+    } catch {
+      snap = null;
+    }
   }
-  return { ok: true, recreated: true, via: 'docker-run' };
+
+  const composeAvailable = async () => {
+    if (!fs.existsSync(composeYml) || !fs.existsSync(portsYml)) return false;
+    const ver = await runCmd('docker', ['compose', 'version'], { timeout: 15_000 });
+    return ver.ok;
+  };
+
+  if (await composeAvailable()) {
+    const composeArgs = ['compose'];
+    if (fs.existsSync(envFile)) {
+      composeArgs.push('--env-file', envFile);
+    }
+    composeArgs.push(
+      '-f', composeYml,
+      '-f', portsYml,
+      'up', '-d', '--no-deps', '--force-recreate', '--remove-orphans',
+      'nginx',
+    );
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await removeNginxContainer();
+      const viaCompose = await runCmd('docker', composeArgs, { timeout: 180_000 });
+      if (viaCompose.ok) {
+        return { ok: true, recreated: true, via: 'compose' };
+      }
+      const errText = `${viaCompose.stderr || ''} ${viaCompose.stdout || ''}`;
+      if (!/already in use|Conflict/i.test(errText) && attempt >= 1) {
+        // non-conflict failure: fall through to docker-run
+        break;
+      }
+    }
+  }
+
+  if (!snap) {
+    // Last resort defaults when nginx was already gone
+    snap = {
+      Config: {
+        Image: 'amnezia-wg-easy-nginx:local',
+        Env: [],
+      },
+      HostConfig: { RestartPolicy: { Name: 'unless-stopped' } },
+      NetworkSettings: { Networks: {} },
+      Mounts: [],
+    };
+    const img = await runCmd('docker', ['image', 'inspect', 'amnezia-wg-easy-nginx:local'], { timeout: 10_000 });
+    if (!img.ok) {
+      throw new Error(
+        'nginx recreate failed: no running nginx to clone and image amnezia-wg-easy-nginx:local missing '
+        + '(compose files/plugin unavailable inside panel)',
+      );
+    }
+  }
+
+  const runArgs = buildNginxRunArgs(plan, snap);
+  let lastErr = '';
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const freed = await removeNginxContainer();
+    if (!freed) {
+      lastErr = 'failed to free container name "nginx"';
+      continue;
+    }
+    const run = await runCmd('docker', runArgs, { timeout: 90_000 });
+    if (run.ok) {
+      return { ok: true, recreated: true, via: 'docker-run' };
+    }
+    lastErr = (run.stderr || run.stdout || 'failed to recreate nginx').trim();
+    if (!/already in use|Conflict/i.test(lastErr)) {
+      throw new Error(lastErr.slice(0, 400));
+    }
+  }
+  throw new Error(lastErr.slice(0, 400) || 'failed to recreate nginx (name conflict)');
 }
 
 function portsNeedRecreate(plan) {
@@ -576,7 +636,10 @@ function portsNeedRecreate(plan) {
   return desiredNginxHostPorts(plan).filter((p) => p !== 80);
 }
 
-async function applyPlan() {
+/** Serialize applyPlan — concurrent recreate causes nginx name Conflict. */
+let applyPlanChain = Promise.resolve();
+
+async function applyPlanUnlocked() {
   const plan = computePlan();
   writeStreamConfigs(plan);
   writeComposePortsFile(plan);
@@ -637,6 +700,13 @@ async function applyPlan() {
     await reloadNginx();
   }
   return { ok: true, plan, recreated: needRecreate };
+}
+
+function applyPlan() {
+  const run = applyPlanUnlocked;
+  const next = applyPlanChain.then(run, run);
+  applyPlanChain = next.then(() => undefined, () => undefined);
+  return next;
 }
 
 /**

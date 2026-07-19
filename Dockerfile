@@ -42,6 +42,9 @@ RUN for i in 1 2 3 4 5; do \
     echo "[panel] apk add runtime tools failed, retry $i/5..." >&2; \
     sleep 2; \
 done
+# Compose plugin for portPlan recreate (community repo; optional if mirror lacks it).
+RUN apk add --no-cache docker-cli-compose 2>/dev/null \
+  || echo "[panel] docker-cli-compose unavailable — portPlan will use docker-run fallback"
 
 ENV DEBUG=Server,WireGuard
 

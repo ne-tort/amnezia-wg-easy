@@ -1701,12 +1701,26 @@ apply_mirror_from_sni_if_requested() {
   NGINX_MIRROR_HOST_VAL="$sni"
   env_set "${INSTALL_DIR}/.env" NGINX_MIRROR_HOST "$sni"
   logi "Зеркало → ${sni}"
-  (
-    cd "$INSTALL_DIR"
+  recreate_nginx_for_mirror() {
+    local out="" attempt=1
+    cd "$INSTALL_DIR" || return 0
     # shellcheck disable=SC1091
     set -a; source .env; set +a
-    docker compose -f docker-compose.yml -f docker-compose.ports.yml up -d --force-recreate nginx >/dev/null 2>&1 || true
-  ) || true
+    for attempt in 1 2 3; do
+      if out=$(docker compose -f docker-compose.yml -f docker-compose.ports.yml up -d --force-recreate nginx 2>&1); then
+        return 0
+      fi
+      if echo "$out" | grep -qiE 'already in use|Conflict|name "/?nginx"'; then
+        logw "nginx name conflict при обновлении зеркала — docker rm -f nginx (попытка ${attempt})"
+        docker rm -f nginx >/dev/null 2>&1 || true
+        sleep 1
+        continue
+      fi
+      logw "nginx recreate (mirror): ${out:0:200}"
+      return 0
+    done
+  }
+  recreate_nginx_for_mirror || true
 }
 
 write_env() {
@@ -1716,6 +1730,7 @@ write_env() {
   fi
   env_set "$envf" ADMIN_USERNAME "$ADMIN_USER"
   env_set "$envf" ADMIN_PASSWORD "$ADMIN_PASS"
+  env_set "$envf" AWG_INSTALL_DIR "${INSTALL_DIR}"
   env_set "$envf" WG_HOST "${SERVER_IP:-$PANEL_DOMAIN_VAL}"
   env_set "$envf" PANEL_DOMAIN "$PANEL_DOMAIN_VAL"
   env_set "$envf" SSL_MODE "$SSL_MODE"

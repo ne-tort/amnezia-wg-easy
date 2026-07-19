@@ -556,7 +556,13 @@ async function enableInternal(opts = {}) {
     });
 
     await ensureMtprotoContainer();
-    await portPlan.applyPlan();
+    try {
+      await portPlan.applyPlan();
+    } catch (planErr) {
+      // eslint-disable-next-line no-console
+      console.error('MTProto enable: portPlan.applyPlan failed:', planErr && planErr.message);
+      setPhase('degraded', planErr);
+    }
     try {
       const xray = require('./amneziaXray');
       if (xray.getStatus && xray.getStatus().desired && typeof xray.ensureXrayContainer === 'function') {
@@ -567,7 +573,11 @@ async function enableInternal(opts = {}) {
     // nginx demux may have been applied after peer release — refresh once more
     try {
       await portPlan.applyPlan();
-    } catch { /* ignore */ }
+    } catch (planErr) {
+      // eslint-disable-next-line no-console
+      console.error('MTProto enable: portPlan retry failed:', planErr && planErr.message);
+      if (phase !== 'degraded') setPhase('degraded', planErr);
+    }
 
     let ready = false;
     while (Date.now() < deadline) {
