@@ -1541,9 +1541,10 @@ print(s)
   printf '%s' "$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
 }
 
-# Auto bank/finder must skip .ru / .su / .рф (xn--p1ai). Manual user entry may use them.
+# Auto bank/finder: skip .ru/.su/.рф and big-tech brands (see config/sni-blocked.seed.json).
+# Manual user entry may still use them.
 sni_is_blocked_tld() {
-  local h
+  local h blocked_json
   h=$(normalize_sni_host "$1")
   [[ -z "$h" ]] && return 1
   if [[ "$h" =~ \.(ru|su|xn--p1ai)$ ]]; then
@@ -1551,6 +1552,41 @@ sni_is_blocked_tld() {
   fi
   case "$h" in
     *.рф) return 0 ;;
+  esac
+  blocked_json="${INSTALL_DIR}/config/sni-blocked.seed.json"
+  if [[ -f "$blocked_json" ]] && command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json, sys
+host = (sys.argv[1] or '').strip().lower().rstrip('.')
+path = sys.argv[2]
+if not host or '.' not in host:
+  sys.exit(1)
+try:
+  raw = json.load(open(path))
+except Exception:
+  sys.exit(1)
+suffixes = [str(s).strip().lower().lstrip('.') for s in (raw.get('suffixes') or []) if str(s).strip()]
+brands = [str(b).strip().lower() for b in (raw.get('brands') or []) if str(b).strip()]
+for suf in suffixes:
+  if host == suf or host.endswith('.' + suf):
+    sys.exit(0)
+labels = [p for p in host.split('.') if p]
+if len(labels) < 2:
+  sys.exit(1)
+name = labels[:-1]
+for brand in brands:
+  if brand in name:
+    sys.exit(0)
+sys.exit(1)
+" "$h" "$blocked_json" 2>/dev/null && return 0
+  fi
+  # Fallback without python / seed file
+  case "$h" in
+    max.ru|*.max.ru) return 0 ;;
+    google.*|*.google.*|*.googleapis.com|*.gstatic.com|*.youtube.com) return 0 ;;
+    yahoo.*|*.yahoo.*|yandex.*|*.yandex.*|*.yastatic.net) return 0 ;;
+    cloudflare.*|*.cloudflare.*|*.workers.dev|*.pages.dev) return 0 ;;
+    vk.*|*.vk.*|*.userapi.com|*.vk.me) return 0 ;;
   esac
   return 1
 }
@@ -1600,16 +1636,40 @@ pick_checked_bank_host() {
   fi
   if [[ -f "$bank" ]] && command -v python3 >/dev/null 2>&1; then
     host=$(python3 -c "
-import json, random, socket, ssl, sys, re
+import json, random, socket, ssl, sys, re, os
 path = sys.argv[1]
-blocked = re.compile(r'\\.(ru|su|xn--p1ai)$', re.I)
+blocked_tld = re.compile(r'\\.(ru|su|xn--p1ai)$', re.I)
+blocked_path = os.path.join(os.path.dirname(path), 'sni-blocked.seed.json')
+brands, suffixes = [], []
+try:
+  raw_b = json.load(open(blocked_path))
+  brands = [str(b).strip().lower() for b in (raw_b.get('brands') or []) if str(b).strip()]
+  suffixes = [str(s).strip().lower().lstrip('.') for s in (raw_b.get('suffixes') or []) if str(s).strip()]
+except Exception:
+  pass
+
+def is_blocked(d):
+  d = (d or '').strip().lower().rstrip('.')
+  if not d or blocked_tld.search(d) or d.endswith('.рф'):
+    return True
+  for suf in suffixes:
+    if d == suf or d.endswith('.' + suf):
+      return True
+  labels = [p for p in d.split('.') if p]
+  if len(labels) >= 2:
+    name = labels[:-1]
+    for brand in brands:
+      if brand in name:
+        return True
+  return False
+
 try:
   raw = json.load(open(path))
   domains = raw if isinstance(raw, list) else list(raw.get('domains') or [])
 except Exception:
   domains = []
 domains = [str(d).strip().lower().rstrip('.') for d in domains if str(d).strip()]
-domains = [d for d in domains if d and not blocked.search(d) and not d.endswith('.рф')]
+domains = [d for d in domains if d and not is_blocked(d)]
 random.shuffle(domains)
 
 def reality_ok(host):
@@ -2076,7 +2136,7 @@ enable_xray() {
   sni_stored=$(normalize_sni_host "$sni_stored")
   if [[ -n "$sni_stored" ]]; then
     if sni_is_blocked_tld "$sni_stored"; then
-      logw "Xray: SNI ${sni_stored} пропущен (.ru/.su/.рф) — авто не использует; новый выбор"
+      logw "Xray: SNI ${sni_stored} пропущен (blocked TLD/бренд) — авто не использует; новый выбор"
     elif sni_reality_ok "$sni_stored"; then
       logi "Xray: оставляю SNI ${sni_stored} (без скана)"
       body=$(printf '{"publicPort":%s}' "$pub")
@@ -2102,12 +2162,36 @@ enable_xray() {
     done
   fi
   api_curl GET /api/amnezia-xray/sni-cache >/tmp/awg-sni-cache.json || true
-  sni=$(python3 - <<'PY' 2>/dev/null || true
-import json, re, socket
-blocked = re.compile(r'\.(ru|su|xn--p1ai)$', re.I)
-def ok(d):
+  sni=$(INSTALL_DIR="$INSTALL_DIR" python3 - <<'PY' 2>/dev/null || true
+import json, re, socket, os
+blocked_tld = re.compile(r'\.(ru|su|xn--p1ai)$', re.I)
+install_dir = os.environ.get('INSTALL_DIR') or ''
+blocked_path = os.path.join(install_dir, 'config', 'sni-blocked.seed.json')
+brands, suffixes = [], []
+try:
+  raw_b = json.load(open(blocked_path))
+  brands = [str(b).strip().lower() for b in (raw_b.get('brands') or []) if str(b).strip()]
+  suffixes = [str(s).strip().lower().lstrip('.') for s in (raw_b.get('suffixes') or []) if str(s).strip()]
+except Exception:
+  pass
+
+def is_blocked(d):
   d = (d or '').strip().lower().rstrip('.')
-  if not d or blocked.search(d) or d.endswith('.рф'):
+  if not d or blocked_tld.search(d) or d.endswith('.рф'):
+    return True
+  for suf in suffixes:
+    if d == suf or d.endswith('.' + suf):
+      return True
+  labels = [p for p in d.split('.') if p]
+  if len(labels) >= 2:
+    name = labels[:-1]
+    for brand in brands:
+      if brand in name:
+        return True
+  return False
+
+def ok(d):
+  if is_blocked(d):
     return False
   try:
     socket.getaddrinfo(d, 443, type=socket.SOCK_STREAM)

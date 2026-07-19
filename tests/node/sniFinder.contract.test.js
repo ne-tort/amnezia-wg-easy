@@ -40,6 +40,27 @@ test('isBlockedAutoTld skips .ru/.su/.рф; domainsFromCert omits them', () => {
   assert.deepEqual(domains, ['www.sbb.ch']);
 });
 
+test('isBlockedAutoBrand / isBlockedAutoDomain mask giants + max.ru', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sni-brand-'));
+  const f = loadFinder(tmp);
+  assert.equal(f.isBlockedAutoBrand('www.google.com'), true);
+  assert.equal(f.isBlockedAutoBrand('googleapis.com'), true);
+  assert.equal(f.isBlockedAutoBrand('cdn.cloudflare.com'), true);
+  assert.equal(f.isBlockedAutoBrand('m.vk.com'), true);
+  assert.equal(f.isBlockedAutoBrand('mail.yandex.com'), true);
+  assert.equal(f.isBlockedAutoBrand('login.yahoo.com'), true);
+  assert.equal(f.isBlockedAutoBrand('max.ru'), true);
+  assert.equal(f.isBlockedAutoBrand('api.max.ru'), true);
+  assert.equal(f.isBlockedAutoBrand('www.gov.uk'), false);
+  assert.equal(f.isBlockedAutoBrand('www.sbb.ch'), false);
+  // .live TLD must not trip brand "live"
+  assert.equal(f.isBlockedAutoBrand('news.live'), false);
+  assert.equal(f.isBlockedAutoDomain('www.google.com'), true);
+  assert.equal(f.isBlockedAutoDomain('ya.ru'), true);
+  const domains = f.domainsFromCert('cdn.cloudflare.com', ['www.sbb.ch', 'www.google.com']);
+  assert.deepEqual(domains, ['www.sbb.ch']);
+});
+
 test('loadBankDomains / pickDefaultSni ignore blocked TLD in bank', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sni-bank-ru-'));
   const f = loadFinder(tmp);

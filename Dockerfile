@@ -68,6 +68,7 @@ COPY config/junk-ranges.seed.json /app/config/junk-ranges.seed.json
 COPY config/mtu-profiles.seed.json /app/config/mtu-profiles.seed.json
 COPY config/roles.labels.json /app/config/roles.labels.json
 COPY config/sni-bank.seed.json /app/config/sni-bank.seed.json
+COPY config/sni-blocked.seed.json /app/config/sni-blocked.seed.json
 COPY config/mirror-bank.seed.json /app/config/mirror-bank.seed.json
 
 COPY scripts/cascade-in-container-postup.sh scripts/cascade-in-container-predown.sh /app/scripts/

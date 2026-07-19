@@ -23,6 +23,8 @@ const CACHE_REL = path.join('xray', 'sni-cache.json');
 const BANK_VOL_REL = path.join('xray', 'sni-bank.json');
 const BANK_SEED = path.join(__dirname, '..', '..', 'config', 'sni-bank.seed.json');
 const BANK_SEED_IN_IMAGE = path.join(__dirname, '..', 'config', 'sni-bank.seed.json');
+const BLOCKED_SEED = path.join(__dirname, '..', '..', 'config', 'sni-blocked.seed.json');
+const BLOCKED_SEED_IN_IMAGE = path.join(__dirname, '..', 'config', 'sni-blocked.seed.json');
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_HOSTS = 256; // /24 hard cap
 const TOP_N = 30;
@@ -228,6 +230,57 @@ function isBlockedAutoTld(domain) {
   return false;
 }
 
+let blockedBrandsCache = null;
+
+function loadBlockedBrands() {
+  if (blockedBrandsCache) return blockedBrandsCache;
+  const empty = { brands: [], suffixes: [] };
+  for (const p of [BLOCKED_SEED_IN_IMAGE, BLOCKED_SEED]) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+      const brands = Array.isArray(raw && raw.brands)
+        ? raw.brands.map((b) => String(b || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+      const suffixes = Array.isArray(raw && raw.suffixes)
+        ? raw.suffixes.map((s) => String(s || '').trim().toLowerCase().replace(/^\.+/, '')).filter(Boolean)
+        : [];
+      blockedBrandsCache = { brands, suffixes };
+      return blockedBrandsCache;
+    } catch {
+      /* try next */
+    }
+  }
+  blockedBrandsCache = empty;
+  return blockedBrandsCache;
+}
+
+/**
+ * Auto SNI must skip big-tech brands (Google/Yahoo/Yandex/Cloudflare/VK/…) by label/suffix mask,
+ * plus explicit max.ru. Manual user entry may still use them.
+ */
+function isBlockedAutoBrand(domain) {
+  const s = String(domain || '').trim().toLowerCase().replace(/\.$/, '');
+  if (!s || !s.includes('.')) return false;
+  const { brands, suffixes } = loadBlockedBrands();
+  for (const suf of suffixes) {
+    if (s === suf || s.endsWith(`.${suf}`)) return true;
+  }
+  // Brand as a DNS label, excluding the final TLD label (avoids blocking *.live etc.).
+  const labels = s.split('.').filter(Boolean);
+  if (labels.length < 2) return false;
+  const nameLabels = labels.slice(0, -1);
+  for (const brand of brands) {
+    if (nameLabels.includes(brand)) return true;
+  }
+  return false;
+}
+
+/** Combined auto-block: TLD + giant brands (used by bank/scan/pick). */
+function isBlockedAutoDomain(domain) {
+  return isBlockedAutoTld(domain) || isBlockedAutoBrand(domain);
+}
+
 function expandWildcard(d) {
   const s = String(d || '').trim().toLowerCase();
   if (s.startsWith('*.') && s.split('.').length >= 3) {
@@ -244,7 +297,7 @@ function domainsFromCert(cn, sans, { includeGeneric = true } = {}) {
     if (!low) return;
     if (!includeGeneric && GENERIC_SAN.has(low)) return;
     for (const d of expandWildcard(low)) {
-      if (isDomain(d) && !isBlockedAutoTld(d)) items.push(d);
+      if (isDomain(d) && !isBlockedAutoDomain(d)) items.push(d);
     }
   };
   if (cn) pushName(cn);
@@ -360,7 +413,7 @@ function loadBankDomains() {
       return [...new Set(
         list
           .map((d) => String(d || '').trim().toLowerCase())
-          .filter((d) => isDomain(d) && !isBlockedAutoTld(d)),
+          .filter((d) => isDomain(d) && !isBlockedAutoDomain(d)),
       )];
     } catch {
       /* try next */
@@ -383,7 +436,7 @@ function mergeScanResults(found, meta) {
   const now = Date.now();
   for (const row of found) {
     const domain = String(row.domain || '').toLowerCase();
-    if (!domain || isBlockedAutoTld(domain)) continue;
+    if (!domain || isBlockedAutoDomain(domain)) continue;
     const prev = byDomain.get(domain) || {};
     byDomain.set(domain, {
       ...prev,
@@ -436,7 +489,7 @@ function getUnifiedList() {
     }
   }
 
-  const notBlocked = (e) => !isBlockedAutoTld(e.domain);
+  const notBlocked = (e) => !isBlockedAutoDomain(e.domain);
   const scanAlive = [...scanMap.values()].filter((e) => e.alive !== false && notBlocked(e));
   const scanDead = [...scanMap.values()].filter((e) => e.alive === false && notBlocked(e));
   scanAlive.sort((a, b) => (a.score != null ? a.score : 1e9) - (b.score != null ? b.score : 1e9));
@@ -1102,6 +1155,8 @@ module.exports = {
   base24Cidr,
   isDomain,
   isBlockedAutoTld,
+  isBlockedAutoBrand,
+  isBlockedAutoDomain,
   expandWildcard,
   domainsFromCert,
   scoreCandidate,
