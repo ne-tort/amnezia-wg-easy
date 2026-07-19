@@ -867,14 +867,17 @@ new Vue({
         || st.phase === 'installing'
         || st.phase === 'removing';
       this.amneziaXrayError = st.lastError || null;
-      if (st.sniStored) this.amneziaXraySni = st.sniStored;
-      else if (st.sni && !this.amneziaXraySni) this.amneziaXraySni = st.sni;
-      if (st.addressStored) this.amneziaXrayAddress = st.addressStored;
-      else if (st.address && !this.amneziaXrayAddress) this.amneziaXrayAddress = st.address;
-      if (st.fingerprint) this.amneziaXrayFingerprint = st.fingerprint;
-      if (st.flow !== undefined && st.flow !== null) this.amneziaXrayFlow = st.flow;
-      if (st.port) this.amneziaXrayPort = st.port;
-      if (st.publicPort) this.amneziaXrayPublicPort = st.publicPort;
+      // While install modal is open, keep the user's draft — status/clients poll must not clobber fields.
+      if (!this.amneziaXrayInstallOpen) {
+        if (st.sniStored) this.amneziaXraySni = st.sniStored;
+        else if (st.sni && !this.amneziaXraySni) this.amneziaXraySni = st.sni;
+        if (st.addressStored) this.amneziaXrayAddress = st.addressStored;
+        else if (st.address && !this.amneziaXrayAddress) this.amneziaXrayAddress = st.address;
+        if (st.fingerprint) this.amneziaXrayFingerprint = st.fingerprint;
+        if (st.flow !== undefined && st.flow !== null) this.amneziaXrayFlow = st.flow;
+        if (st.port) this.amneziaXrayPort = st.port;
+        if (st.publicPort) this.amneziaXrayPublicPort = st.publicPort;
+      }
       this.amneziaXrayMode = st.mode || null;
       this.amneziaXrayDemuxPeers = Array.isArray(st.demuxPeers) ? st.demuxPeers : [];
       if (Array.isArray(st.fingerprints) && st.fingerprints.length) {
