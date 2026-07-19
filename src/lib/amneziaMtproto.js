@@ -481,7 +481,7 @@ function getProxyLinks() {
 }
 
 function isAmneziaMtprotoAvailable() {
-  return phase === 'running';
+  return phase === 'running' && lastSmoke && lastSmoke.ok === true;
 }
 
 function getStatus() {
@@ -489,11 +489,14 @@ function getStatus() {
   const links = getProxyLinks();
   const portPlan = require('./portPlan');
   const plan = portPlan.computePlan();
+  const smokeOk = !!(lastSmoke && lastSmoke.ok === true);
+  const healthy = phase === 'running' && smokeOk;
   return {
     desired: desiredOn === true,
     desiredSet: desiredOn !== null,
     phase,
-    available: phase === 'running',
+    available: healthy,
+    healthy,
     lastError,
     smoke: lastSmoke,
     container: CONTAINER_NAME,

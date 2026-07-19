@@ -831,8 +831,8 @@
               :disabled="amneziaXrayBusy"
               class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
               :class="{
-                'is-warn': amneziaXrayPhase === 'error' || amneziaXrayPhase === 'degraded',
-                'is-on': (amneziaXrayPhase === 'running' || amneziaXrayAvailable) && amneziaXrayPhase !== 'error' && amneziaXrayPhase !== 'degraded',
+                'is-warn': amneziaXrayPhase === 'error' || amneziaXrayPhase === 'degraded' || (amneziaXrayPhase === 'running' && !amneziaXrayHealthy),
+                'is-on': amneziaXrayHealthy && amneziaXrayPhase === 'running',
               }"
               :title="amneziaXrayHeaderTitle()">
               <svg v-if="amneziaXrayBusy || amneziaXrayPhase === 'installing' || amneziaXrayPhase === 'removing'"
@@ -847,8 +847,8 @@
               :disabled="amneziaMtprotoBusy"
               class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
               :class="{
-                'is-warn': amneziaMtprotoPhase === 'error' || amneziaMtprotoPhase === 'degraded',
-                'is-on': (amneziaMtprotoPhase === 'running' || amneziaMtprotoAvailable) && amneziaMtprotoPhase !== 'error' && amneziaMtprotoPhase !== 'degraded',
+                'is-warn': amneziaMtprotoPhase === 'error' || amneziaMtprotoPhase === 'degraded' || (amneziaMtprotoPhase === 'running' && !amneziaMtprotoHealthy),
+                'is-on': amneziaMtprotoHealthy && amneziaMtprotoPhase === 'running',
               }"
               :title="amneziaMtprotoHeaderTitle()">
               <svg v-if="amneziaMtprotoBusy || amneziaMtprotoPhase === 'installing' || amneziaMtprotoPhase === 'removing'"
@@ -1559,7 +1559,7 @@
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('xraySni') }}</label>
                   <button type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
-                    @click="openSniFinder" :disabled="amneziaXrayBusy">
+                    @click="openSniFinder('xray')" :disabled="amneziaXrayBusy">
                     <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
@@ -1633,7 +1633,7 @@
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('mtprotoSni') }}</label>
                   <button type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
-                    @click="openSniFinder" :disabled="amneziaMtprotoBusy">
+                    @click="openSniFinder('mtproto')" :disabled="amneziaMtprotoBusy">
                     <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
@@ -1685,7 +1685,9 @@
           <div class="modal-backdrop" @click="closeSniFinder"></div>
           <div class="modal-panel modal-panel-sni" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-sni-finder-title">
             <div class="modal-title-row">
-              <h3 id="modal-sni-finder-title" class="modal-title modal-title-inline">{{ $t('xraySniFinderTitle') }}</h3>
+              <h3 id="modal-sni-finder-title" class="modal-title modal-title-inline">
+                {{ sniFinderTarget === 'mtproto' ? $t('mtprotoSniFinderTitle') : $t('xraySniFinderTitle') }}
+              </h3>
               <button type="button" class="icon-btn-sm" :title="$t('xrayInstallCancel')" @click="closeSniFinder">
                 <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -1731,17 +1733,20 @@
               <div v-if="sniFinderEntries && sniFinderEntries.length" class="sni-finder-list thin-scroll">
                 <button type="button" v-for="row in sniFinderEntries" :key="row.domain + ':' + row.source"
                   class="sni-finder-item"
-                  :disabled="row.alive === false"
+                  :disabled="sniRowBlockedForTarget(row)"
                   @click="pickSniDomain(row)">
                   <div class="sni-finder-item-main">
                     <span class="sni-finder-domain"
-                      :class="row.alive === false ? 'sni-finder-domain-dead' : (row.source === 'bank' ? 'sni-finder-domain-bank' : 'sni-finder-domain-scan')">
+                      :class="(row.alive === false || sniRowBlockedForTarget(row)) ? 'sni-finder-domain-dead' : (row.source === 'bank' ? 'sni-finder-domain-bank' : 'sni-finder-domain-scan')">
                       {{ row.domain }}
                     </span>
                     <span class="sni-finder-item-meta tabular-nums">
-                      <span v-if="row.ip">{{ row.ip }}</span>
-                      <span v-if="row.latencyMs != null">{{ Math.round(row.latencyMs) }}ms</span>
-                      <span v-if="row.source === 'bank'">bank</span>
+                      <span v-if="sniRowBlockedForTarget(row) && row.alive !== false">{{ $t('sniFinderInUseOther') }}</span>
+                      <template v-else>
+                        <span v-if="row.ip">{{ row.ip }}</span>
+                        <span v-if="row.latencyMs != null">{{ Math.round(row.latencyMs) }}ms</span>
+                        <span v-if="row.source === 'bank'">bank</span>
+                      </template>
                     </span>
                   </div>
                   <span class="icon-btn-sm" role="button" :title="$t('xraySniRecheck')"

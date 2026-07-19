@@ -200,6 +200,8 @@ new Vue({
     amneziaDnsInstallOpen: false,
     amneziaDnsInstallSelected: null,
     amneziaXrayAvailable: false,
+    amneziaXrayHealthy: false,
+    amneziaXraySmokeOk: false,
     amneziaXrayPhase: 'off',
     amneziaXrayBusy: false,
     amneziaXrayError: null,
@@ -220,6 +222,8 @@ new Vue({
       { value: '', label: '(none)' },
     ],
     amneziaMtprotoAvailable: false,
+    amneziaMtprotoHealthy: false,
+    amneziaMtprotoSmokeOk: false,
     amneziaMtprotoPhase: 'off',
     amneziaMtprotoBusy: false,
     amneziaMtprotoError: null,
@@ -233,6 +237,7 @@ new Vue({
     amneziaMtprotoLink: '',
     amneziaMtprotoInstallOpen: false,
     sniFinderDefaultSni: null,
+    sniFinderTarget: 'xray', // 'xray' | 'mtproto' — which install modal opened the finder
     sniFinderOpen: false,
     sniFinderPublicIp: null,
     sniFinderDefaultCidr: '',
@@ -868,8 +873,14 @@ new Vue({
     },
     applyAmneziaXrayCapability(caps) {
       const c = caps || {};
-      this.amneziaXrayAvailable = c.xrayAvailable === true;
       const st = c.xray || {};
+      const smokeOk = !!(st.smoke && st.smoke.ok === true);
+      const healthy = st.healthy === true
+        || (st.phase === 'running' && smokeOk)
+        || (c.xrayAvailable === true && smokeOk);
+      this.amneziaXraySmokeOk = smokeOk;
+      this.amneziaXrayHealthy = healthy;
+      this.amneziaXrayAvailable = healthy;
       if (st.phase) this.amneziaXrayPhase = st.phase;
       this.amneziaXrayBusy = st.busy === true
         || st.phase === 'installing'
@@ -893,8 +904,14 @@ new Vue({
     },
     applyAmneziaMtprotoCapability(caps) {
       const c = caps || {};
-      this.amneziaMtprotoAvailable = c.mtprotoAvailable === true;
       const st = c.mtproto || {};
+      const smokeOk = !!(st.smoke && st.smoke.ok === true);
+      const healthy = st.healthy === true
+        || (st.phase === 'running' && smokeOk)
+        || (c.mtprotoAvailable === true && smokeOk);
+      this.amneziaMtprotoSmokeOk = smokeOk;
+      this.amneziaMtprotoHealthy = healthy;
+      this.amneziaMtprotoAvailable = healthy;
       if (st.phase) this.amneziaMtprotoPhase = st.phase;
       this.amneziaMtprotoBusy = st.busy === true
         || st.phase === 'installing'
@@ -951,8 +968,10 @@ new Vue({
         return (this.amneziaXrayError && `${this.$t('xrayHeaderError')}: ${this.amneziaXrayError}`)
           || this.$t('xrayHeaderError');
       }
-      if (phase === 'degraded') return this.$t('xrayHeaderDegraded');
-      if (phase === 'running') return this.$t('xrayHeaderDisable');
+      if (phase === 'degraded' || (phase === 'running' && !this.amneziaXrayHealthy)) {
+        return this.$t('xrayHeaderDegraded');
+      }
+      if (phase === 'running' && this.amneziaXrayHealthy) return this.$t('xrayHeaderDisable');
       return this.$t('xrayHeaderEnable');
     },
     closeAmneziaXrayInstall() {
@@ -991,6 +1010,7 @@ new Vue({
       this.amneziaXrayBusy = true;
       this.ensureAmneziaXrayPoll();
       try {
+        await this.preflightSniForInstall(this.amneziaXraySni, { forService: 'xray' });
         const body = {
           address: String(this.amneziaXrayAddress).trim(),
           sni: String(this.amneziaXraySni).trim(),
@@ -1115,7 +1135,10 @@ new Vue({
         return null;
       }
     },
-    async openSniFinder() {
+    async openSniFinder(target) {
+      this.sniFinderTarget = (target === 'mtproto' || this.amneziaMtprotoInstallOpen)
+        ? 'mtproto'
+        : 'xray';
       this.sniFinderOpen = true;
       this.sniFinderError = null;
       this.sniFinderEmptyMsg = null;
@@ -1125,12 +1148,30 @@ new Vue({
       this.sniFinderOpen = false;
       this.stopSniFinderPoll();
     },
+    sniRowBlockedForTarget(row) {
+      if (!row || row.alive === false) return true;
+      const domain = String(row.domain || '').trim().toLowerCase();
+      if (!domain) return true;
+      const samePublic = (Number(this.amneziaMtprotoPublicPort) || 443)
+        === (Number(this.amneziaXrayPublicPort) || 443);
+      if (!samePublic) return false;
+      if (this.sniFinderTarget === 'mtproto') {
+        const xray = String(this.amneziaXraySni || '').trim().toLowerCase();
+        return !!xray && domain === xray;
+      }
+      const mt = String(this.amneziaMtprotoSni || '').trim().toLowerCase();
+      return !!mt && domain === mt;
+    },
     pickSniDomain(row) {
       if (!row || row.alive === false) return;
+      if (this.sniRowBlockedForTarget(row)) {
+        alert(this.$t(this.sniFinderTarget === 'mtproto' ? 'mtprotoSniConflict' : 'xraySniConflict'));
+        return;
+      }
       const domain = typeof row === 'string' ? row : row.domain;
       if (!domain) return;
       const value = String(domain).trim();
-      if (this.amneziaMtprotoInstallOpen) {
+      if (this.sniFinderTarget === 'mtproto' || this.amneziaMtprotoInstallOpen) {
         this.amneziaMtprotoSni = '';
         this.$nextTick(() => {
           this.amneziaMtprotoSni = value;
@@ -1142,6 +1183,29 @@ new Vue({
         });
       }
       this.closeSniFinder();
+    },
+    /**
+     * Recheck SNI (public DNS + TLS/h2) before enable. Reality and Telemt both need a real hostname.
+     */
+    async preflightSniForInstall(sni, { forService } = {}) {
+      const domain = String(sni || '').trim();
+      if (!domain) {
+        throw new Error(this.$t('sniPreflightEmpty') || 'SNI is required');
+      }
+      const updated = await this.api.recheckXraySni({ domain });
+      if (!updated || updated.alive === false) {
+        throw new Error(
+          this.$t('sniPreflightDead', { domain })
+          || `SNI «${domain}» failed DNS/TLS check (need a real public hostname)`,
+        );
+      }
+      if (forService === 'mtproto' && this.mtprotoSniConflictsXray) {
+        throw new Error(this.$t('mtprotoSniConflict'));
+      }
+      if (forService === 'xray' && this.xraySniConflictsMtproto) {
+        throw new Error(this.$t('xraySniConflict'));
+      }
+      return updated;
     },
     async recheckSniDomain(row) {
       if (!row || !row.domain || this.sniFinderRechecking) return;
@@ -1266,8 +1330,10 @@ new Vue({
         return (this.amneziaMtprotoError && `${this.$t('mtprotoHeaderError')}: ${this.amneziaMtprotoError}`)
           || this.$t('mtprotoHeaderError');
       }
-      if (phase === 'degraded') return this.$t('mtprotoHeaderDegraded');
-      if (phase === 'running') return this.$t('mtprotoHeaderDisable');
+      if (phase === 'degraded' || (phase === 'running' && !this.amneziaMtprotoHealthy)) {
+        return this.$t('mtprotoHeaderDegraded');
+      }
+      if (phase === 'running' && this.amneziaMtprotoHealthy) return this.$t('mtprotoHeaderDisable');
       return this.$t('mtprotoHeaderEnable');
     },
     closeAmneziaMtprotoInstall() {
@@ -1319,6 +1385,7 @@ new Vue({
       this.amneziaMtprotoBusy = true;
       this.ensureAmneziaMtprotoPoll();
       try {
+        await this.preflightSniForInstall(this.amneziaMtprotoSni, { forService: 'mtproto' });
         const body = {
           address: String(this.amneziaMtprotoAddress).trim(),
           sni: String(this.amneziaMtprotoSni).trim(),

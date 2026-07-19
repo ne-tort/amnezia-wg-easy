@@ -86,6 +86,9 @@ test('getStatus exposes desired persistence keys', () => {
   assert.equal(st.port, 25001);
   assert.equal(st.publicPort, 443);
   assert.match(st.link, /^tg:\/\/proxy\?/);
+  // Without successful smoke, available/healthy stay false (no false-green).
+  assert.equal(st.available, false);
+  assert.equal(st.healthy, false);
 });
 
 test('buildConfigToml sets middle_proxy_nat_ip for IPv4 host', () => {

@@ -839,6 +839,8 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
           publicPort: amneziaXrayStatus.publicPort,
           mode: amneziaXrayStatus.mode,
           demuxPeers: amneziaXrayStatus.demuxPeers,
+          healthy: amneziaXrayStatus.healthy === true,
+          smoke: amneziaXrayStatus.smoke || null,
         },
         mtprotoAvailable: amneziaMtprotoAvailable,
         mtproto: {
@@ -857,6 +859,8 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
           demuxPeers: amneziaMtprotoStatus.demuxPeers,
           link: amneziaMtprotoStatus.link,
           linkTme: amneziaMtprotoStatus.linkTme,
+          healthy: amneziaMtprotoStatus.healthy === true,
+          smoke: amneziaMtprotoStatus.smoke || null,
         },
       },
       serverJunk,

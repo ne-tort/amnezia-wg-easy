@@ -1921,7 +1921,7 @@ EOF
 }
 
 run_deploy() {
-  logi "Запуск deploy.sh..."
+  logi "Запуск deploy.sh (ревизия $(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo '?'))..."
   export COMPOSE_PROJECT_NAME
   cd "$INSTALL_DIR"
   chmod +x ./deploy.sh
@@ -2146,11 +2146,15 @@ enable_xray() {
   fi
   api_curl GET /api/amnezia-xray/sni-cache >/tmp/awg-sni-cache.json || true
   sni=$(python3 - <<'PY' 2>/dev/null || true
-import json, re
+import json, re, socket
 blocked = re.compile(r'\.(ru|su|xn--p1ai)$', re.I)
 def ok(d):
   d = (d or '').strip().lower().rstrip('.')
   if not d or blocked.search(d) or d.endswith('.рф'):
+    return False
+  try:
+    socket.getaddrinfo(d, 443, type=socket.SOCK_STREAM)
+  except Exception:
     return False
   return True
 try:
