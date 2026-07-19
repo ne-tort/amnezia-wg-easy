@@ -190,9 +190,10 @@ function buildTmeProxyLink({ host, port, eeSecret }) {
 }
 
 function buildConfigToml({
-  port, sni, secret, publicHost, publicPort, proxyProtocol = false,
+  port, sni, secret, publicHost, publicPort,
 }) {
   // Telemt TOML — Fake-TLS only, mask to tls_domain.
+  // Pure TCP behind nginx stream demux (ssl_preread) — no PROXY protocol.
   const lines = [
     '[general]',
     'use_middle_proxy = true',
@@ -216,16 +217,6 @@ function buildConfigToml({
     '',
     '[server]',
     `port = ${Number(port)}`,
-  );
-  // nginx SNI demux sends PROXY protocol so Telemt sees the real client IP
-  // (otherwise peer is 172.x and Fake-TLS / ME checks fail).
-  if (proxyProtocol) {
-    lines.push(
-      'proxy_protocol = true',
-      'proxy_protocol_trusted_cidrs = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]',
-    );
-  }
-  lines.push(
     '',
     '[server.api]',
     'enabled = false',
@@ -244,14 +235,6 @@ function buildConfigToml({
     '',
   );
   return lines.join('\n');
-}
-
-function mtprotoNeedsProxyProtocol() {
-  try {
-    return require('./portPlan').isDemuxService('mtproto');
-  } catch {
-    return false;
-  }
 }
 
 function writeConfigToml(opts) {
@@ -605,7 +588,6 @@ async function enableInternal(opts = {}) {
       secret,
       publicHost: address,
       publicPort,
-      proxyProtocol: tentativeMode === 'demux',
     });
 
     await ensureMtprotoContainer();
@@ -726,7 +708,6 @@ async function resetSecretInternal() {
       secret,
       publicHost: getPublicHost(),
       publicPort: getClientFacingPort(),
-      proxyProtocol: mtprotoNeedsProxyProtocol(),
     });
     if (await dockerContainerRunning()) {
       await runCmd('docker', ['restart', CONTAINER_NAME], { timeout: 60_000 });
@@ -773,7 +754,6 @@ async function reconcile() {
       secret,
       publicHost: getPublicHost(),
       publicPort: getClientFacingPort(),
-      proxyProtocol: mtprotoNeedsProxyProtocol(),
     });
     if (!(await dockerContainerRunning())) {
       setPhase('degraded', new Error('amnezia-mtproto container not running'));
