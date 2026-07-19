@@ -1,0 +1,6 @@
+# generated default — deploy.sh / portPlan may overwrite
+# Panel HTTPS only (no SNI demux until Xray/MTProto share a public port).
+services:
+  nginx:
+    ports:
+      - "${PANEL_HTTPS_PORT:-10123}:8443"

@@ -436,6 +436,29 @@ function pickDefaultSni() {
   return null;
 }
 
+/**
+ * Next SNI candidate different from exclude (for MTProto vs Xray demux).
+ * @param {string|string[]} [exclude]
+ */
+function pickAlternateSni(exclude) {
+  const blocked = new Set(
+    (Array.isArray(exclude) ? exclude : [exclude])
+      .map((s) => String(s || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const { entries } = getUnifiedList();
+  const pick = (src) => entries.find(
+    (e) => e.source === src && e.alive !== false && !blocked.has(String(e.domain).toLowerCase()),
+  );
+  const scan = pick('scan');
+  if (scan) return scan.domain;
+  const bank = pick('bank');
+  if (bank) return bank.domain;
+  const any = entries.find((e) => e.alive !== false && !blocked.has(String(e.domain).toLowerCase()));
+  if (any) return any.domain;
+  return null;
+}
+
 function cacheStatus() {
   return getUnifiedList();
 }
@@ -1037,6 +1060,7 @@ module.exports = {
   mergeScanResults,
   getUnifiedList,
   pickDefaultSni,
+  pickAlternateSni,
   cacheStatus,
   cachePath,
   loadBankDomains,

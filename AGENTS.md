@@ -2,37 +2,33 @@
 
 ## Epic: Xray VLESS Reality in panel
 
-Integrate Docker `amnezia-xray` (VLESS + REALITY) similar to Amnezia DNS: UI install toggle, per-client UUID synced with AWG clients, public `/sub/{name}`, `vless://`, QR, and Amnezia `.vpn` export.
+Integrate Docker `amnezia-xray` (VLESS + REALITY) similar to Amnezia DNS: UI install toggle, per-client UUID synced with AWG clients, public `{SUB_PUBLIC_PREFIX}/{name}` (default `/sub`), `vless://`, QR, and Amnezia `.vpn` export.
 
-Defaults: `PANEL_HTTPS_PORT=10123`, `XRAY_PORT=443` (if free; else random 20000–50000), `WG_PORT` random free UDP in 20000–50000 unless set. SNI/fp/flow/address/port configurable from UI.
+Defaults (FQDN): `PANEL_HTTPS_PORT` = `XRAY_PUBLIC_PORT` = `MTPROTO_PUBLIC_PORT` = **443** → nginx SNI demux; unknown SNI → panel TLS; UI at `/panel/`, root `/` = reverse-proxy mirror. Bare IP: panel soft-forced off shared 443 (default 10123). Internal listen 20000–50000 (exclude-list, not host-scan). `WG_PORT` random free UDP in 20000–50000 unless set.
 
-**Persistence (source of truth):** `app_settings` + `clients.xray_uuid` + `{WG_PATH}/xray/server.json` on volume `amnezia-wg-data`. Disable/redeploy panel must **not** wipe Reality keys or client UUIDs. `WireGuard.__saveConfig` / `clients.replaceAll` must round-trip `xray_uuid` (otherwise every Xray toggle regen’d UUIDs). Deploy only builds the `amnezia-xray` image; the panel starts/stops the container by `desired`.
+**Persistence (source of truth):** `app_settings` + `clients.xray_uuid` + `{WG_PATH}/xray/server.json` on volume `amnezia-wg-data`. Disable/redeploy panel must **not** wipe Reality keys or client UUIDs. `WireGuard.__saveConfig` / `clients.replaceAll` must round-trip `xray_uuid`. Deploy only builds sidecar images; panel starts/stops containers by `desired`.
 
-**Connect vs camouflage:** `amnezia_xray_address` = TCP host in `vless://`; `amnezia_xray_sni` = Reality site. `spiderX` stays empty (Amnezia/Xray default `/`; omit from URL).
+**Connect vs camouflage:** `amnezia_xray_address` = TCP host in `vless://`; `amnezia_xray_sni` = Reality site. Client-facing port = **publicPort**. `spiderX` empty.
 
-**SNI Finder:** panel-native scan (`src/lib/sniFinder.js`) — public-IP guard, default VPS `/24`, TLS+HTTP/2 probe, merge-cache `{WG_PATH}/xray/sni-cache.json` TTL 24h + bank `config/sni-bank.seed.json` (override `{WG_PATH}/xray/sni-bank.json`). Scan=green, bank=yellow, dead=red. Background ensure on boot / `?ensureBg=1`. No masscan; no GPL vendoring.
+**SNI Finder:** `src/lib/sniFinder.js` — public-IP guard, TLS+HTTP/2, cache TTL 24h + bank `config/sni-bank.seed.json`.
+
+## Epic: Unified Port Plan + paths + mirror
+
+`src/lib/portPlan.js` — group by public TCP: shared → stream SNI demux; exclusive → direct `-p`. Panel joins demux only with **FQDN** SNI; bare IP → conflict + no panel route; demux `default` → panel when panel in map, else `:9`.
+
+Nginx: `WEBUI_PUBLIC_PREFIX=/panel` (UI+API), `SUB_PUBLIC_PREFIX=/sub`, `NGINX_ROOT_BEHAVIOR=mirror` + `NGINX_MIRROR_HOST`. DNS VPN-only (no host 53/853).
 
 ### Checklist
 
-- [x] Scaffold `amneziaXray.js` + keys/settings + Dockerfile/scripts under `amnezia-xray/`
-- [x] Docker enable/disable/smoke/boot/reconcile
-- [x] DB: `xray_uuid` + migration; sync clients → `server.json`
-- [x] API + ACL (`system.xray`, admin) + `serverCapabilities`
-- [x] Public `GET /sub/:name` + vless builder
-- [x] Amnezia `.vpn` / QR export includes `amnezia-xray` when running
-- [x] UI header toggle + install modal (SNI, fingerprint, flow, port, address)
-- [x] UI Preview Xray JSON + tab **xRay** (QR → sub URL, copy sub + vless)
-- [x] compose/env/deploy docs (`XRAY_PORT`)
-- [x] Contract + HTTP tests + smoke script
-- [x] Persist keys/UUID across disable; boot teardown orphans when desired=0
-- [x] `amnezia_xray_address` (default panel hostname, override IP/domain)
-- [x] Reset API/UI (new Reality keys + all client UUIDs) — reset as title icon
-- [x] spiderX empty; QR copy fields width-locked to QR
-- [x] SNI Finder UI + cache TTL 24h + public IP guard
+- [x] Xray/MTProto + portPlan demux/direct + publicPort
+- [x] Panel FQDN catch-all default; bare-IP excluded
+- [x] `/panel` + `/panel/api` + configurable `/sub`
+- [x] install paths + mirror host from sni-bank
+- [x] SNI Finder; persist keys/UUID; Amnezia export
 
 ### Reference
 
-- Amnezia client scripts: `amnezia-client/client/server_scripts/xray/`
-- Panel DNS orchestration pattern: `src/lib/amneziaDns.js`
+- DNS: `src/lib/amneziaDns.js`
 - Export: `src/lib/amneziaClientQr.js`
-- SNI discovery inspiration: Reality-SNI-Finder, RealiTLScanner (not vendored)
+- Port plan: `src/lib/portPlan.js`
+- Nginx: `nginx/entrypoint.sh`, `nginx/panel-subpath.conf.template`

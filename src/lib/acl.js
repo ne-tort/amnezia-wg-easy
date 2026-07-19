@@ -20,6 +20,7 @@ const CAP = Object.freeze({
   SYSTEM_FIREWALL: 'system.firewall',
   SYSTEM_DNS: 'system.dns',
   SYSTEM_XRAY: 'system.xray',
+  SYSTEM_MTPROTO: 'system.mtproto',
   SYSTEM_SETTINGS: 'system.settings',
   SYSTEM_SIGNATURES: 'system.signatures',
 });
@@ -35,6 +36,7 @@ const ROLE_CAPS = Object.freeze({
     CAP.SYSTEM_FIREWALL,
     CAP.SYSTEM_DNS,
     CAP.SYSTEM_XRAY,
+    CAP.SYSTEM_MTPROTO,
     CAP.SYSTEM_SETTINGS,
     CAP.SYSTEM_SIGNATURES,
   ]),

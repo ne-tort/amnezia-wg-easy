@@ -1,24 +1,46 @@
 #!/bin/sh
-# SSL + nginx: profile entry (panel / panel+subpath) or exit (HTTPS reverse proxy only). UDP stays on other services.
+# SSL + nginx: profile entry (panel / panel+subpath) or exit (HTTPS reverse proxy only).
+# Host :443 = stream ssl_preread demux (Xray/MTProto); panel TLS listens on :8443.
 set -e
 CONF_DIR="${CONF_DIR:-/etc/nginx/conf.d}"
+STREAM_DIR="${STREAM_DIR:-/etc/nginx/stream.d}"
 CERTBOT_CONF="/etc/letsencrypt"
 OUTPUT="${CONF_DIR}/panel.conf"
+AWG_NGINX="/opt/amnezia/awg/nginx"
 
 export PANEL_DOMAIN="${PANEL_DOMAIN:-${WG_HOST:-localhost}}"
 export PANEL_PORT="${PANEL_PORT:-51821}"
 export PANEL_HTTPS_PORT="${PANEL_HTTPS_PORT:-10123}"
-# Host-facing HTTPS port in redirects (container listens on 443; publish may be 10123).
+# Host-facing HTTPS port in redirects (container listens on 8443; publish may be 10123).
 if [ "$PANEL_HTTPS_PORT" = "443" ]; then
   export PANEL_HTTPS_REDIRECT_HOST='$host'
 else
   export PANEL_HTTPS_REDIRECT_HOST="\$host:${PANEL_HTTPS_PORT}"
 fi
-export WEBUI_PUBLIC_PREFIX="${WEBUI_PUBLIC_PREFIX:-}"
-export NGINX_ROOT_BEHAVIOR="${NGINX_ROOT_BEHAVIOR:-redirect}"
+export WEBUI_PUBLIC_PREFIX="${WEBUI_PUBLIC_PREFIX:-/panel}"
+export SUB_PUBLIC_PREFIX="${SUB_PUBLIC_PREFIX:-/sub}"
+export NGINX_ROOT_BEHAVIOR="${NGINX_ROOT_BEHAVIOR:-mirror}"
 export NGINX_MIRROR_HOST="${NGINX_MIRROR_HOST:-}"
 export NGINX_LOCAL_URL="${NGINX_LOCAL_URL:-}"
 export NGINX_CONFIG_PROFILE="${NGINX_CONFIG_PROFILE:-entry}"
+
+# Normalize prefixes to start with /
+case "$WEBUI_PUBLIC_PREFIX" in
+  /*) ;;
+  "") WEBUI_PUBLIC_PREFIX="/panel" ;;
+  *) WEBUI_PUBLIC_PREFIX="/${WEBUI_PUBLIC_PREFIX}" ;;
+esac
+case "$SUB_PUBLIC_PREFIX" in
+  /*) ;;
+  "") SUB_PUBLIC_PREFIX="/sub" ;;
+  *) SUB_PUBLIC_PREFIX="/${SUB_PUBLIC_PREFIX}" ;;
+esac
+# Strip trailing slash except root
+WEBUI_PUBLIC_PREFIX="${WEBUI_PUBLIC_PREFIX%/}"
+SUB_PUBLIC_PREFIX="${SUB_PUBLIC_PREFIX%/}"
+[ -z "$WEBUI_PUBLIC_PREFIX" ] && WEBUI_PUBLIC_PREFIX="/panel"
+[ -z "$SUB_PUBLIC_PREFIX" ] && SUB_PUBLIC_PREFIX="/sub"
+export WEBUI_PUBLIC_PREFIX SUB_PUBLIC_PREFIX
 
 root_block_exit_placeholder() {
   printf '%s\n' '    location / {'
@@ -116,11 +138,28 @@ EOF
 
 LE_LIVE="/etc/letsencrypt/live/${PANEL_DOMAIN}"
 rm -f "${CONF_DIR}/default.conf"
+mkdir -p "${STREAM_DIR}" "${AWG_NGINX}"
+
+# Stream module is dynamic on nginx:alpine; skip load_module when built-in.
+if [ -f /usr/lib/nginx/modules/ngx_stream_module.so ]; then
+  if ! grep -q 'ngx_stream_module' /etc/nginx/nginx.conf; then
+    sed -i '1iload_module /usr/lib/nginx/modules/ngx_stream_module.so;' /etc/nginx/nginx.conf
+  fi
+fi
+
+# Stream demux configs from volume (portPlan writes demux-*.conf). Fallback empty.
+mkdir -p "${AWG_NGINX}/stream"
+rm -f "${STREAM_DIR}"/*.conf
+if ls "${AWG_NGINX}/stream"/*.conf >/dev/null 2>&1; then
+  cp "${AWG_NGINX}/stream"/*.conf "${STREAM_DIR}/"
+else
+  printf '%s\n' '# no demux yet' > "${STREAM_DIR}/empty.conf"
+fi
 
 inject_root() {
   _template="$1"
   _rootfile="$2"
-  envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${WEBUI_PUBLIC_PREFIX} ${PANEL_HTTPS_PORT} ${PANEL_HTTPS_REDIRECT_HOST}' < "$_template" | awk -v rf="$_rootfile" '
+  envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${WEBUI_PUBLIC_PREFIX} ${SUB_PUBLIC_PREFIX} ${PANEL_HTTPS_PORT} ${PANEL_HTTPS_REDIRECT_HOST}' < "$_template" | awk -v rf="$_rootfile" '
     /^[[:space:]]*__ROOT_BLOCK__[[:space:]]*$/ { while ((getline line < rf) > 0) print line; next }
     { print }
   '
@@ -144,7 +183,7 @@ server {
     }
 }
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
     server_name ${PANEL_DOMAIN};
     ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
@@ -153,7 +192,8 @@ server {
 EOF
   printf '%s\n' "$ROOT_BLOCK" >>"$OUTPUT"
   printf '%s\n' "}" >>"$OUTPUT"
-elif [ -z "$WEBUI_PUBLIC_PREFIX" ]; then
+elif [ "$WEBUI_PUBLIC_PREFIX" = "/" ] || [ -z "$WEBUI_PUBLIC_PREFIX" ]; then
+  # Explicit legacy: panel on entire site root
   TEMPLATE="/etc/nginx/conf.d/panel-legacy.conf.template"
   envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${PANEL_HTTPS_PORT} ${PANEL_HTTPS_REDIRECT_HOST}' < "$TEMPLATE" >"$OUTPUT"
 else
@@ -162,7 +202,7 @@ else
     mirror) ROOT_BLOCK=$(root_block_entry_mirror) ;;
     local) ROOT_BLOCK=$(root_block_entry_local) ;;
     redirect) ROOT_BLOCK=$(root_block_entry_redirect) ;;
-    *) ROOT_BLOCK=$(root_block_entry_redirect) ;;
+    *) ROOT_BLOCK=$(root_block_entry_mirror) ;;
   esac
   RF=$(mktemp)
   printf '%s\n' "$ROOT_BLOCK" >"$RF"

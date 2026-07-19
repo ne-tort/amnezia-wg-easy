@@ -16,14 +16,30 @@ module.exports.ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
 module.exports.WG_DEVICE = process.env.WG_DEVICE || 'eth0';
 module.exports.WG_HOST = process.env.WG_HOST;
 module.exports.WG_PORT = process.env.WG_PORT || '51820';
-// * Published HTTPS port on the host (nginx maps this → container :443). Used for /sub QR links.
+// * Published HTTPS port on the host (nginx maps this → container :8443). Used for /sub QR links.
 module.exports.PANEL_HTTPS_PORT = (() => {
   const raw = String(process.env.PANEL_HTTPS_PORT || '10123').trim();
   return /^\d+$/.test(raw) ? raw : '10123';
 })();
 module.exports.PANEL_DOMAIN = String(process.env.PANEL_DOMAIN || '').trim();
-// * Host TCP port for amnezia-xray (VLESS Reality). Keep separate from nginx 443.
-module.exports.XRAY_PORT = Math.max(1, parseInt(process.env.XRAY_PORT || '443', 10) || 443);
+/** Public UI path prefix (nginx), default /panel. Empty or "/" = legacy root panel. */
+module.exports.WEBUI_PUBLIC_PREFIX = (() => {
+  let p = String(process.env.WEBUI_PUBLIC_PREFIX != null ? process.env.WEBUI_PUBLIC_PREFIX : '/panel').trim();
+  if (!p || p === '/') return '/panel';
+  if (!p.startsWith('/')) p = `/${p}`;
+  return p.replace(/\/+$/, '') || '/panel';
+})();
+/** Public subscription path prefix (nginx → app /sub/), default /sub. */
+module.exports.SUB_PUBLIC_PREFIX = (() => {
+  let p = String(process.env.SUB_PUBLIC_PREFIX != null ? process.env.SUB_PUBLIC_PREFIX : '/sub').trim();
+  if (!p || p === '/') return '/sub';
+  if (!p.startsWith('/')) p = `/${p}`;
+  return p.replace(/\/+$/, '') || '/sub';
+})();
+// * Preferred internal TCP listen for amnezia-xray (SNI demux on host :443). Legacy 443 → auto-alloc.
+module.exports.XRAY_PORT = Math.max(1, parseInt(process.env.XRAY_PORT || '24443', 10) || 24443);
+// * Client-facing TCP for Reality / Fake-TLS via nginx stream demux.
+module.exports.DEMUX_PORT = Math.max(1, parseInt(process.env.DEMUX_PORT || '443', 10) || 443);
 // * MTU 1280 avoids fragmentation on mobile (large response packets often dropped otherwise). Set WG_MTU=none or empty to omit from client config.
 const _mtu = process.env.WG_MTU;
 module.exports.WG_MTU = (_mtu === '' || _mtu === 'none') ? null : (_mtu || '1280');

@@ -278,6 +278,8 @@ async function ensureUnboundContainer() {
     '--network', network,
     '--ip', AMNEZIA_DNS_UPSTREAM,
     '--name', CONTAINER_NAME,
+    '--label', 'amnezia.managed=1',
+    '--label', 'amnezia.service=dns',
     '-v', `${volume}:/opt/amnezia/awg:ro`,
     IMAGE_NAME,
   ], { timeout: 60_000 });

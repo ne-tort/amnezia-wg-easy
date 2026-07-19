@@ -10,7 +10,7 @@ server {
     }
 }
 server {
-    listen 443 ssl;
+    listen 8443 ssl;
     server_name ${PANEL_DOMAIN};
     ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;

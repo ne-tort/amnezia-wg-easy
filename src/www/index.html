@@ -8,6 +8,16 @@
   <link rel="manifest" href="./manifest.json">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <script>
+    /* API under WEBUI_PUBLIC_PREFIX (default /panel/api). Override via window.__AWG_API_ROOT__. */
+    window.__AWG_API_ROOT__ = window.__AWG_API_ROOT__ || (function () {
+      var p = (location.pathname || '/').replace(/\/+$/, '') || '/';
+      if (p === '/' || p === '') return '/api';
+      var seg = p.split('/').filter(Boolean)[0];
+      if (!seg || seg === 'api' || seg === 'sub' || seg === 'css' || seg === 'js' || seg === 'img') return '/api';
+      return '/' + seg + '/api';
+    })();
+  </script>
 </head>
 <style>
   [v-cloak] {
@@ -829,6 +839,22 @@
               </svg>
               <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">XRay</span>
             </button>
+            <!-- MTProto Telemt -->
+            <button v-if="canManageMtproto" type="button" @click="toggleAmneziaMtproto()"
+              :disabled="amneziaMtprotoBusy"
+              class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              :class="{
+                'is-warn': amneziaMtprotoPhase === 'error' || amneziaMtprotoPhase === 'degraded',
+                'is-on': (amneziaMtprotoPhase === 'running' || amneziaMtprotoAvailable) && amneziaMtprotoPhase !== 'error' && amneziaMtprotoPhase !== 'degraded',
+              }"
+              :title="amneziaMtprotoHeaderTitle()">
+              <svg v-if="amneziaMtprotoBusy || amneziaMtprotoPhase === 'installing' || amneziaMtprotoPhase === 'removing'"
+                class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">MT</span>
+            </button>
             <!-- Amnezia DNS install / remove -->
             <button type="button" @click="toggleAmneziaDns()"
               :disabled="amneziaDnsBusy"
@@ -1552,20 +1578,100 @@
                 </select>
               </div>
               <div>
-                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPort') }}</label>
-                <input v-model.number="amneziaXrayPort" type="number" min="1" max="65535" step="1"
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPublicPort') }}</label>
+                <input v-model="amneziaXrayPublicPort" type="number" min="1" max="65535" inputmode="numeric"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('xrayPublicPortHint') }}</p>
               </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPort') }}</label>
+                <input v-model="amneziaXrayPort" type="text" inputmode="numeric"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
+                  placeholder="auto" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('xrayPortHint') }}</p>
+              </div>
+              <p v-if="xraySniConflictsMtproto" class="text-sm text-red-600 dark:text-red-400">{{ $t('xraySniConflict') }}</p>
             </div>
             <div class="modal-footer flex-wrap">
               <button type="button" @click="confirmAmneziaXrayInstall"
-                :disabled="!amneziaXraySni || !amneziaXrayAddress || amneziaXrayBusy || !isValidAmneziaXrayPort"
+                :disabled="!amneziaXraySni || !amneziaXrayAddress || amneziaXrayBusy || !isValidAmneziaXrayPort || !isValidAmneziaXrayPublicPort || xraySniConflictsMtproto"
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
                 {{ $t('xrayInstallConfirm') }}
               </button>
               <button type="button" @click="closeAmneziaXrayInstall"
                 class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
                 {{ $t('xrayInstallCancel') }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- MTProto install modal -->
+        <div v-if="amneziaMtprotoInstallOpen" class="modal-root">
+          <div class="modal-backdrop" @click="closeAmneziaMtprotoInstall"></div>
+          <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-mtproto-install-title">
+            <div class="modal-title-row">
+              <h3 id="modal-mtproto-install-title" class="modal-title modal-title-inline">{{ $t('mtprotoInstallTitle') }}</h3>
+              <button type="button" class="icon-btn-sm" :title="$t('mtprotoResetSecret')"
+                @click="confirmAmneziaMtprotoReset" :disabled="amneziaMtprotoBusy">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mtprotoAddress') }}</label>
+                <input v-model.trim="amneziaMtprotoAddress" type="text"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
+                  :placeholder="$t('mtprotoAddressPlaceholder')" />
+              </div>
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-1">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('mtprotoSni') }}</label>
+                  <button type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
+                    @click="openSniFinder" :disabled="amneziaMtprotoBusy">
+                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <span v-if="sniFinderAliveCount > 0" class="icon-btn-badge-count">{{ sniFinderAliveCount }}</span>
+                  </button>
+                </div>
+                <input v-model.trim="amneziaMtprotoSni" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mtprotoPublicPort') }}</label>
+                <input v-model="amneziaMtprotoPublicPort" type="number" min="1" max="65535" inputmode="numeric"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('mtprotoPublicPortHint') }}</p>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mtprotoPort') }}</label>
+                <input v-model="amneziaMtprotoPort" type="text" inputmode="numeric"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
+                  placeholder="auto" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('mtprotoPortHint') }}</p>
+              </div>
+              <div v-if="amneziaMtprotoLink">
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mtprotoLink') }}</label>
+                <div class="flex gap-2">
+                  <input :value="amneziaMtprotoLink" type="text" readonly
+                    class="flex-1 rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 text-xs" />
+                  <button type="button" class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 py-2 px-3 rounded text-sm"
+                    @click="copyMtprotoLink">{{ $t('mtprotoCopyLink') }}</button>
+                </div>
+              </div>
+              <p v-if="mtprotoSniConflictsXray" class="text-sm text-red-600 dark:text-red-400">{{ $t('mtprotoSniConflict') }}</p>
+            </div>
+            <div class="modal-footer flex-wrap">
+              <button type="button" @click="confirmAmneziaMtprotoInstall"
+                :disabled="!amneziaMtprotoSni || !amneziaMtprotoAddress || amneziaMtprotoBusy || !isValidAmneziaMtprotoPort || !isValidAmneziaMtprotoPublicPort || mtprotoSniConflictsXray"
+                class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
+                {{ $t('mtprotoInstallConfirm') }}
+              </button>
+              <button type="button" @click="closeAmneziaMtprotoInstall"
+                class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
+                {{ $t('mtprotoInstallCancel') }}
               </button>
             </div>
           </div>

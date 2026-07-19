@@ -37,6 +37,7 @@ const {
 const { BankError } = require('./signaturesBank');
 const amneziaDns = require('./amneziaDns');
 const amneziaXray = require('./amneziaXray');
+const amneziaMtproto = require('./amneziaMtproto');
 const sniFinder = require('./sniFinder');
 const mtuProfiles = require('./mtuProfiles');
 const { applyFirewall } = require('./firewall');
@@ -1057,6 +1058,7 @@ module.exports = class Server {
             fingerprint: body && body.fingerprint,
             flow: body && body.flow,
             port: body && body.port,
+            publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
             address: body && body.address,
           });
           return { success: true, ...status };
@@ -1134,6 +1136,73 @@ module.exports = class Server {
           return await sniFinder.recheckDomain(domain);
         } catch (err) {
           throw sniHttpError(err);
+        }
+      }))
+      .get('/api/amnezia-mtproto', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
+        return amneziaMtproto.getStatus();
+      }))
+      .get('/api/port-plan', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        return require('./portPlan').getStatusSummary();
+      }))
+      .post('/api/port-plan/apply', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        try {
+          return await require('./portPlan').applyPlan();
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'port plan apply failed');
+        }
+      }))
+      .post('/api/amnezia-mtproto/enable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const status = await amneziaMtproto.enable({
+            sni: body && body.sni,
+            port: body && body.port,
+            publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
+            address: body && body.address,
+          });
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          if (err && err.status === 409) throw httpError(409, err.message);
+          if (err && err.status === 400) throw httpError(400, err.message);
+          if (err && err.status === 504) throw httpError(504, err.message);
+          if (err && err.status === 503) throw httpError(503, err.message);
+          throw httpError(500, err.message || 'Amnezia MTProto enable failed');
+        }
+      }))
+      .post('/api/amnezia-mtproto/disable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
+        try {
+          const status = await amneziaMtproto.disable();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia MTProto disable failed');
+        }
+      }))
+      .post('/api/amnezia-mtproto/force-cleanup', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
+        try {
+          const status = await amneziaMtproto.forceCleanup();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia MTProto cleanup failed');
+        }
+      }))
+      .post('/api/amnezia-mtproto/reset', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
+        try {
+          const status = await amneziaMtproto.resetSecret();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia MTProto reset failed');
         }
       }))
       .get('/api/wireguard/client/:clientId/xray', defineEventHandler(async (event) => {

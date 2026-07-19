@@ -5,10 +5,17 @@
 
 class API {
 
+  apiRoot() {
+    if (typeof window !== 'undefined' && window.__AWG_API_ROOT__) {
+      return String(window.__AWG_API_ROOT__).replace(/\/+$/, '') || '/api';
+    }
+    return '/api';
+  }
+
   async call({ method, path, body }) {
     let res;
     try {
-      res = await fetch(`/api${path}`, {
+      res = await fetch(`${this.apiRoot()}${path}`, {
         method,
         credentials: 'include',
         headers: {
@@ -464,6 +471,26 @@ class API {
 
   async getClientXray(clientId) {
     return this.call({ method: 'get', path: `/wireguard/client/${clientId}/xray` });
+  }
+
+  async getAmneziaMtprotoStatus() {
+    return this.call({ method: 'get', path: '/amnezia-mtproto' });
+  }
+
+  async enableAmneziaMtproto(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-mtproto/enable', body });
+  }
+
+  async disableAmneziaMtproto() {
+    return this.call({ method: 'post', path: '/amnezia-mtproto/disable' });
+  }
+
+  async forceCleanupAmneziaMtproto() {
+    return this.call({ method: 'post', path: '/amnezia-mtproto/force-cleanup' });
+  }
+
+  async resetAmneziaMtproto() {
+    return this.call({ method: 'post', path: '/amnezia-mtproto/reset' });
   }
 
   async getRuleProfiles() {

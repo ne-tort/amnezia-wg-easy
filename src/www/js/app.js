@@ -208,7 +208,10 @@ new Vue({
     amneziaXrayAddress: '',
     amneziaXrayFingerprint: 'chrome',
     amneziaXrayFlow: 'xtls-rprx-vision',
-    amneziaXrayPort: 443,
+    amneziaXrayPort: '',
+    amneziaXrayPublicPort: 443,
+    amneziaXrayMode: null,
+    amneziaXrayDemuxPeers: [],
     amneziaXrayInstallOpen: false,
     amneziaXrayFingerprints: ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'],
     amneziaXrayFlows: [
@@ -216,6 +219,19 @@ new Vue({
       { value: 'xtls-rprx-vision-udp443', label: 'xtls-rprx-vision-udp443' },
       { value: '', label: '(none)' },
     ],
+    amneziaMtprotoAvailable: false,
+    amneziaMtprotoPhase: 'off',
+    amneziaMtprotoBusy: false,
+    amneziaMtprotoError: null,
+    amneziaMtprotoPollTimer: null,
+    amneziaMtprotoSni: '',
+    amneziaMtprotoAddress: '',
+    amneziaMtprotoPort: '',
+    amneziaMtprotoPublicPort: 443,
+    amneziaMtprotoMode: null,
+    amneziaMtprotoDemuxPeers: [],
+    amneziaMtprotoLink: '',
+    amneziaMtprotoInstallOpen: false,
     sniFinderDefaultSni: null,
     sniFinderOpen: false,
     sniFinderPublicIp: null,
@@ -863,11 +879,35 @@ new Vue({
       if (st.fingerprint) this.amneziaXrayFingerprint = st.fingerprint;
       if (st.flow !== undefined && st.flow !== null) this.amneziaXrayFlow = st.flow;
       if (st.port) this.amneziaXrayPort = st.port;
+      if (st.publicPort) this.amneziaXrayPublicPort = st.publicPort;
+      this.amneziaXrayMode = st.mode || null;
+      this.amneziaXrayDemuxPeers = Array.isArray(st.demuxPeers) ? st.demuxPeers : [];
       if (Array.isArray(st.fingerprints) && st.fingerprints.length) {
         this.amneziaXrayFingerprints = st.fingerprints;
       }
       if (this.amneziaXrayBusy) this.ensureAmneziaXrayPoll();
       else this.stopAmneziaXrayPoll();
+    },
+    applyAmneziaMtprotoCapability(caps) {
+      const c = caps || {};
+      this.amneziaMtprotoAvailable = c.mtprotoAvailable === true;
+      const st = c.mtproto || {};
+      if (st.phase) this.amneziaMtprotoPhase = st.phase;
+      this.amneziaMtprotoBusy = st.busy === true
+        || st.phase === 'installing'
+        || st.phase === 'removing';
+      this.amneziaMtprotoError = st.lastError || null;
+      if (st.sniStored) this.amneziaMtprotoSni = st.sniStored;
+      else if (st.sni && !this.amneziaMtprotoSni) this.amneziaMtprotoSni = st.sni;
+      if (st.addressStored) this.amneziaMtprotoAddress = st.addressStored;
+      else if (st.address && !this.amneziaMtprotoAddress) this.amneziaMtprotoAddress = st.address;
+      if (st.port) this.amneziaMtprotoPort = st.port;
+      if (st.publicPort) this.amneziaMtprotoPublicPort = st.publicPort;
+      this.amneziaMtprotoMode = st.mode || null;
+      this.amneziaMtprotoDemuxPeers = Array.isArray(st.demuxPeers) ? st.demuxPeers : [];
+      if (st.link) this.amneziaMtprotoLink = st.link;
+      if (this.amneziaMtprotoBusy) this.ensureAmneziaMtprotoPoll();
+      else this.stopAmneziaMtprotoPoll();
     },
     async refreshAmneziaXrayStatus() {
       if (!this.canManageXray) return null;
@@ -938,19 +978,27 @@ new Vue({
         || !String(this.amneziaXraySni || '').trim()
         || !String(this.amneziaXrayAddress || '').trim()
         || !this.isValidAmneziaXrayPort
+        || !this.isValidAmneziaXrayPublicPort
       ) return;
+      if (this.xraySniConflictsMtproto) {
+        alert(this.$t('xraySniConflict'));
+        return;
+      }
       this.closeAmneziaXrayInstall();
       this.amneziaXrayBusy = true;
       this.ensureAmneziaXrayPoll();
       try {
+        const body = {
+          address: String(this.amneziaXrayAddress).trim(),
+          sni: String(this.amneziaXraySni).trim(),
+          fingerprint: this.amneziaXrayFingerprint,
+          flow: this.amneziaXrayFlow,
+          publicPort: Number(this.amneziaXrayPublicPort) || 443,
+        };
+        const portRaw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
+        if (portRaw !== '') body.port = Number(portRaw);
         await this.withAmneziaDnsTimeout(
-          this.api.enableAmneziaXray({
-            address: String(this.amneziaXrayAddress).trim(),
-            sni: String(this.amneziaXraySni).trim(),
-            fingerprint: this.amneziaXrayFingerprint,
-            flow: this.amneziaXrayFlow,
-            port: Number(this.amneziaXrayPort),
-          }),
+          this.api.enableAmneziaXray(body),
           180000,
         );
         await this.refreshAmneziaXrayStatus();
@@ -1078,10 +1126,18 @@ new Vue({
       if (!row || row.alive === false) return;
       const domain = typeof row === 'string' ? row : row.domain;
       if (!domain) return;
-      this.amneziaXraySni = '';
-      this.$nextTick(() => {
-        this.amneziaXraySni = String(domain).trim();
-      });
+      const value = String(domain).trim();
+      if (this.amneziaMtprotoInstallOpen) {
+        this.amneziaMtprotoSni = '';
+        this.$nextTick(() => {
+          this.amneziaMtprotoSni = value;
+        });
+      } else {
+        this.amneziaXraySni = '';
+        this.$nextTick(() => {
+          this.amneziaXraySni = value;
+        });
+      }
       this.closeSniFinder();
     },
     async recheckSniDomain(row) {
@@ -1167,6 +1223,190 @@ new Vue({
         return;
       }
       this.openAmneziaXrayInstall();
+    },
+    async refreshAmneziaMtprotoStatus() {
+      if (!this.canManageMtproto) return null;
+      try {
+        const st = await this.api.getAmneziaMtprotoStatus();
+        this.applyAmneziaMtprotoCapability({
+          mtprotoAvailable: st.available === true,
+          mtproto: st,
+        });
+        return st;
+      } catch (err) {
+        this.amneziaMtprotoError = (err && err.message) || String(err);
+        return null;
+      }
+    },
+    ensureAmneziaMtprotoPoll() {
+      if (this.amneziaMtprotoPollTimer) return;
+      this.amneziaMtprotoPollTimer = setInterval(() => {
+        this.refreshAmneziaMtprotoStatus().then((st) => {
+          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
+            this.refresh().catch(() => {});
+          }
+        });
+      }, 1000);
+    },
+    stopAmneziaMtprotoPoll() {
+      if (this.amneziaMtprotoPollTimer) {
+        clearInterval(this.amneziaMtprotoPollTimer);
+        this.amneziaMtprotoPollTimer = null;
+      }
+    },
+    amneziaMtprotoHeaderTitle() {
+      const phase = this.amneziaMtprotoPhase;
+      if (phase === 'installing' || phase === 'removing' || this.amneziaMtprotoBusy) {
+        return this.$t('mtprotoHeaderBusy');
+      }
+      if (phase === 'error') {
+        return (this.amneziaMtprotoError && `${this.$t('mtprotoHeaderError')}: ${this.amneziaMtprotoError}`)
+          || this.$t('mtprotoHeaderError');
+      }
+      if (phase === 'degraded') return this.$t('mtprotoHeaderDegraded');
+      if (phase === 'running') return this.$t('mtprotoHeaderDisable');
+      return this.$t('mtprotoHeaderEnable');
+    },
+    closeAmneziaMtprotoInstall() {
+      this.amneziaMtprotoInstallOpen = false;
+    },
+    openAmneziaMtprotoInstall() {
+      Promise.all([
+        this.refreshAmneziaMtprotoStatus(),
+        this.refreshAmneziaXrayStatus(),
+        this.refreshSniCache({ ensureBg: true }),
+      ]).finally(() => {
+        if (!String(this.amneziaMtprotoAddress || '').trim()) {
+          this.amneziaMtprotoAddress = (typeof window !== 'undefined' && window.location && window.location.hostname)
+            ? window.location.hostname
+            : '';
+        }
+        if (!String(this.amneziaMtprotoSni || '').trim()) {
+          const xraySni = String(this.amneziaXraySni || '').trim().toLowerCase();
+          const samePublic = (Number(this.amneziaMtprotoPublicPort) || 443)
+            === (Number(this.amneziaXrayPublicPort) || 443);
+          const candidates = (this.sniFinderEntries || [])
+            .filter((e) => e && e.alive !== false && e.domain)
+            .map((e) => String(e.domain).trim());
+          const alt = samePublic
+            ? candidates.find((d) => d.toLowerCase() !== xraySni)
+            : (candidates[0] || null);
+          this.amneziaMtprotoSni = alt || this.sniFinderDefaultSni || '';
+          if (samePublic && this.amneziaMtprotoSni && xraySni
+            && this.amneziaMtprotoSni.toLowerCase() === xraySni) {
+            this.amneziaMtprotoSni = '';
+          }
+        }
+        this.amneziaMtprotoInstallOpen = true;
+      });
+    },
+    async confirmAmneziaMtprotoInstall() {
+      if (
+        this.amneziaMtprotoBusy
+        || !String(this.amneziaMtprotoSni || '').trim()
+        || !String(this.amneziaMtprotoAddress || '').trim()
+        || !this.isValidAmneziaMtprotoPort
+        || !this.isValidAmneziaMtprotoPublicPort
+      ) return;
+      if (this.mtprotoSniConflictsXray) {
+        alert(this.$t('mtprotoSniConflict'));
+        return;
+      }
+      this.closeAmneziaMtprotoInstall();
+      this.amneziaMtprotoBusy = true;
+      this.ensureAmneziaMtprotoPoll();
+      try {
+        const body = {
+          address: String(this.amneziaMtprotoAddress).trim(),
+          sni: String(this.amneziaMtprotoSni).trim(),
+          publicPort: Number(this.amneziaMtprotoPublicPort) || 443,
+        };
+        const portRaw = String(this.amneziaMtprotoPort == null ? '' : this.amneziaMtprotoPort).trim();
+        if (portRaw !== '') body.port = Number(portRaw);
+        await this.withAmneziaDnsTimeout(this.api.enableAmneziaMtproto(body), 180000);
+        await this.refreshAmneziaMtprotoStatus();
+        await this.refresh();
+      } catch (err) {
+        this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
+        alert(this.amneziaMtprotoError);
+        await this.refreshAmneziaMtprotoStatus();
+      } finally {
+        this.amneziaMtprotoBusy = false;
+        if (!['installing', 'removing'].includes(this.amneziaMtprotoPhase)) {
+          this.stopAmneziaMtprotoPoll();
+        }
+      }
+    },
+    async confirmAmneziaMtprotoReset() {
+      if (this.amneziaMtprotoBusy) return;
+      if (!window.confirm(this.$t('mtprotoResetConfirm'))) return;
+      this.amneziaMtprotoBusy = true;
+      this.ensureAmneziaMtprotoPoll();
+      try {
+        await this.withAmneziaDnsTimeout(this.api.resetAmneziaMtproto(), 120000);
+        await this.refreshAmneziaMtprotoStatus();
+        await this.refresh();
+        alert(this.$t('mtprotoResetDone'));
+      } catch (err) {
+        this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
+        alert(this.amneziaMtprotoError);
+        await this.refreshAmneziaMtprotoStatus();
+      } finally {
+        this.amneziaMtprotoBusy = false;
+        if (!['installing', 'removing'].includes(this.amneziaMtprotoPhase)) {
+          this.stopAmneziaMtprotoPoll();
+        }
+      }
+    },
+    async copyMtprotoLink() {
+      const link = String(this.amneziaMtprotoLink || '').trim();
+      if (!link) return;
+      try {
+        await navigator.clipboard.writeText(link);
+      } catch {
+        /* ignore */
+      }
+    },
+    async toggleAmneziaMtproto() {
+      if (!this.canManageMtproto || this.amneziaMtprotoBusy) return;
+      const phase = this.amneziaMtprotoPhase;
+      if (phase === 'running' || phase === 'degraded') {
+        this.amneziaMtprotoBusy = true;
+        this.ensureAmneziaMtprotoPoll();
+        try {
+          await this.withAmneziaDnsTimeout(this.api.disableAmneziaMtproto(), 60000);
+          await this.refreshAmneziaMtprotoStatus();
+          await this.refresh();
+        } catch (err) {
+          this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
+          alert(this.amneziaMtprotoError);
+          await this.refreshAmneziaMtprotoStatus();
+        } finally {
+          this.amneziaMtprotoBusy = false;
+          if (!['installing', 'removing'].includes(this.amneziaMtprotoPhase)) {
+            this.stopAmneziaMtprotoPoll();
+          }
+        }
+        return;
+      }
+      if (phase === 'error') {
+        this.amneziaMtprotoBusy = true;
+        this.ensureAmneziaMtprotoPoll();
+        try {
+          await this.withAmneziaDnsTimeout(this.api.forceCleanupAmneziaMtproto(), 60000);
+          await this.refreshAmneziaMtprotoStatus();
+          await this.refresh();
+        } catch (err) {
+          this.amneziaMtprotoError = (err && err.message) || this.$t('mtprotoToggleFailed');
+          alert(this.amneziaMtprotoError);
+          await this.refreshAmneziaMtprotoStatus();
+        } finally {
+          this.amneziaMtprotoBusy = false;
+          this.stopAmneziaMtprotoPoll();
+        }
+        return;
+      }
+      this.openAmneziaMtprotoInstall();
     },
     getClientUseServerDns(client) {
       return this.clientUseServerDns[client.id] !== false;
@@ -1402,6 +1642,7 @@ new Vue({
         this.refreshError = null;
         this.applyAmneziaDnsCapability(res.serverCapabilities);
         this.applyAmneziaXrayCapability(res.serverCapabilities);
+        this.applyAmneziaMtprotoCapability(res.serverCapabilities);
         if (res.serverJunk) this.serverJunk = res.serverJunk;
         const list = Array.isArray(res.clients) ? res.clients : [];
         this.clients = list.map((client) => {
@@ -2452,9 +2693,38 @@ new Vue({
     canManageXray() {
       return this.hasCapability('system.xray');
     },
+    canManageMtproto() {
+      return this.hasCapability('system.mtproto');
+    },
     isValidAmneziaXrayPort() {
-      const n = Number(this.amneziaXrayPort);
+      const raw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
+      if (raw === '') return true;
+      const n = Number(raw);
       return Number.isInteger(n) && n >= 1 && n <= 65535;
+    },
+    isValidAmneziaMtprotoPort() {
+      const raw = String(this.amneziaMtprotoPort == null ? '' : this.amneziaMtprotoPort).trim();
+      if (raw === '') return true;
+      const n = Number(raw);
+      return Number.isInteger(n) && n >= 1 && n <= 65535;
+    },
+    xraySniConflictsMtproto() {
+      const a = String(this.amneziaXraySni || '').trim().toLowerCase();
+      const b = String(this.amneziaMtprotoSni || '').trim().toLowerCase();
+      const pa = Number(this.amneziaXrayPublicPort) || 443;
+      const pb = Number(this.amneziaMtprotoPublicPort) || 443;
+      return Boolean(a && b && a === b && pa === pb);
+    },
+    isValidAmneziaXrayPublicPort() {
+      const n = Number(this.amneziaXrayPublicPort);
+      return Number.isInteger(n) && n >= 1 && n <= 65535;
+    },
+    isValidAmneziaMtprotoPublicPort() {
+      const n = Number(this.amneziaMtprotoPublicPort);
+      return Number.isInteger(n) && n >= 1 && n <= 65535;
+    },
+    mtprotoSniConflictsXray() {
+      return this.xraySniConflictsMtproto;
     },
     sniFinderProgressPct() {
       const t = Number(this.sniFinderProgress && this.sniFinderProgress.total) || 0;

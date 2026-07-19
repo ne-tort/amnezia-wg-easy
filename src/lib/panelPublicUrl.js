@@ -50,4 +50,16 @@ function buildPanelPublicBaseUrl(opts = {}) {
 
 module.exports = {
   buildPanelPublicBaseUrl,
+  /**
+   * Normalize a public path prefix (leading slash, no trailing slash).
+   * @param {string} raw
+   * @param {string} fallback
+   */
+  normalizePublicPrefix(raw, fallback = '/panel') {
+    let p = String(raw == null ? '' : raw).trim();
+    if (!p) p = fallback;
+    if (!p.startsWith('/')) p = `/${p}`;
+    p = p.replace(/\/+$/, '');
+    return p || fallback;
+  },
 };

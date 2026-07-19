@@ -28,6 +28,7 @@ const SNI_KEY = 'amnezia_xray_sni';
 const FP_KEY = 'amnezia_xray_fingerprint';
 const FLOW_KEY = 'amnezia_xray_flow';
 const PORT_KEY = 'amnezia_xray_port';
+const PUBLIC_PORT_KEY = 'amnezia_xray_public_port';
 const ADDRESS_KEY = 'amnezia_xray_address';
 const PRIV_KEY = 'amnezia_xray_private_key';
 const PUB_KEY = 'amnezia_xray_public_key';
@@ -85,6 +86,68 @@ function getPort() {
   const fromDb = getSetting(PORT_KEY, '');
   if (fromDb && /^\d+$/.test(fromDb)) return parseInt(fromDb, 10);
   return config.XRAY_PORT;
+}
+
+function getPublicPort() {
+  const fromDb = getSetting(PUBLIC_PORT_KEY, '');
+  if (fromDb && /^\d+$/.test(fromDb)) return parseInt(fromDb, 10);
+  const fromEnv = parseInt(String(process.env.XRAY_PUBLIC_PORT || '').trim(), 10);
+  if (Number.isFinite(fromEnv) && fromEnv >= 1 && fromEnv <= 65535) return fromEnv;
+  return 443;
+}
+
+/** Client-facing TCP (public / demux port). */
+function getClientFacingPort() {
+  return getPublicPort();
+}
+
+function excludedPortsForAlloc() {
+  const list = [
+    config.PANEL_HTTPS_PORT,
+    getPublicPort(),
+    getSetting('amnezia_mtproto_public_port', '') || 443,
+    getSetting('amnezia_mtproto_port', ''),
+    80,
+    8443,
+  ];
+  return list;
+}
+
+/**
+ * Resolve listen port: demux → high internal; direct → public (or preferred).
+ */
+function resolveListenPort(preferred, { mode } = {}) {
+  const portPlan = require('./portPlan');
+  const m = mode || portPlan.modeForService('xray') || 'direct';
+  const publicPort = getPublicPort();
+  if (m === 'direct') {
+    const raw = preferred != null ? parseInt(String(preferred), 10) : getPort();
+    if (Number.isFinite(raw) && raw >= 1 && raw <= 65535
+      && raw !== 80 && raw !== 8443) {
+      return raw;
+    }
+    return publicPort;
+  }
+  // demux: never listen on the shared public port inside the container
+  const { allocateInternalPort, needsInternalRealloc } = require('./internalPort');
+  const raw = preferred != null ? preferred : getPort();
+  if (!needsInternalRealloc(raw) && parseInt(String(raw), 10) !== publicPort) {
+    const n = parseInt(String(raw), 10);
+    const mt = parseInt(getSetting('amnezia_mtproto_port', ''), 10);
+    if (Number.isFinite(mt) && mt === n) {
+      return allocateInternalPort(excludedPortsForAlloc().concat([n, publicPort]), null);
+    }
+    return n;
+  }
+  return allocateInternalPort(excludedPortsForAlloc().concat([publicPort]), null);
+}
+
+function resolveInternalListenPort(preferred) {
+  return resolveListenPort(preferred);
+}
+
+function assertSniNotMtproto(sni, publicPort) {
+  require('./portPlan').assertSniConflict('xray', sni, publicPort != null ? publicPort : getPublicPort());
 }
 
 function getSni() {
@@ -473,7 +536,7 @@ function getAddress() {
 function getClientXrayPayload(client, opts = {}) {
   if (!client || !client.xray_uuid) return null;
   const host = getPublicHost();
-  const port = getPort();
+  const port = getClientFacingPort();
   const sni = getSni();
   const fingerprint = getFingerprint();
   const flow = getFlow();
@@ -505,7 +568,10 @@ function getClientXrayPayload(client, opts = {}) {
   });
 
   const base = (opts.baseUrl || '').replace(/\/+$/, '');
-  const subPath = `/sub/${encodeURIComponent(client.name)}`;
+  const subPrefix = String(
+    opts.subPublicPrefix != null ? opts.subPublicPrefix : (require('../config').SUB_PUBLIC_PREFIX || '/sub'),
+  ).replace(/\/+$/, '') || '/sub';
+  const subPath = `${subPrefix}/${encodeURIComponent(client.name)}`;
   const subUrl = base ? `${base}${subPath}` : subPath;
 
   return {
@@ -758,26 +824,88 @@ async function removeXrayContainer() {
   await runCmd('docker', ['rm', '-fv', CONTAINER_NAME]);
 }
 
+async function containerManagedByUs() {
+  const r = await runCmd('docker', [
+    'inspect', '-f', '{{index .Config.Labels "amnezia.managed"}} {{index .Config.Labels "amnezia.service"}}',
+    CONTAINER_NAME,
+  ]);
+  if (!r.ok) return false;
+  const parts = r.stdout.trim().split(/\s+/);
+  return parts[0] === '1' && parts[1] === 'xray';
+}
+
+async function inspectContainerPortEnv() {
+  const r = await runCmd('docker', [
+    'inspect', '-f',
+    '{{range .Config.Env}}{{println .}}{{end}}',
+    CONTAINER_NAME,
+  ]);
+  if (!r.ok) return null;
+  const line = r.stdout.split(/\r?\n/).find((l) => l.startsWith('XRAY_SERVER_PORT='));
+  if (!line) return null;
+  const n = parseInt(line.slice('XRAY_SERVER_PORT='.length), 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 async function ensureXrayContainer() {
-  await runCmd('docker', ['rm', '-f', CONTAINER_NAME]);
   await ensureXrayImage();
   const volume = await resolveAwgVolumeName();
-  const port = getPort();
-  const run = await runCmd('docker', [
+  const portPlan = require('./portPlan');
+  const mode = portPlan.modeForService('xray') || 'direct';
+  const publicPort = getPublicPort();
+  const port = resolveListenPort(getPort(), { mode });
+  if (String(port) !== String(getPort())) {
+    setSetting(PORT_KEY, String(port));
+  }
+
+  const network = await portPlan.resolveNginxNetwork();
+  if (mode === 'demux' && !network) {
+    throw new Error('nginx compose network not found; is nginx running?');
+  }
+
+  const running = await dockerContainerRunning();
+  if (running && await containerManagedByUs()) {
+    const envPort = await inspectContainerPortEnv();
+    const labelMode = await runCmd('docker', [
+      'inspect', '-f', '{{index .Config.Labels "amnezia.port_mode"}}', CONTAINER_NAME,
+    ]);
+    const curMode = (labelMode.ok ? labelMode.stdout : '').trim();
+    if (envPort === port && curMode === mode) {
+      return { reused: true };
+    }
+  }
+
+  if ((await runCmd('docker', ['inspect', CONTAINER_NAME])).ok) {
+    await removeXrayContainer();
+  }
+
+  const runArgs = [
     'run', '-d',
     '--log-driver', 'none',
-    '--restart', 'always',
+    '--restart', 'unless-stopped',
     '--cap-add=NET_ADMIN',
-    '-p', `${port}:${port}/tcp`,
     '--name', CONTAINER_NAME,
+    '--label', 'amnezia.managed=1',
+    '--label', 'amnezia.service=xray',
+    '--label', `amnezia.port_mode=${mode}`,
+    '--label', `amnezia.listen_port=${port}`,
+    '--label', `amnezia.public_port=${publicPort}`,
     '-e', `XRAY_SERVER_PORT=${port}`,
     '-v', `${volume}:/opt/amnezia/awg:rw`,
-    IMAGE_NAME,
-  ], { timeout: 60_000 });
+  ];
+  if (mode === 'demux') {
+    runArgs.push('--network', network);
+  } else {
+    if (network) runArgs.push('--network', network);
+    runArgs.push('-p', `${publicPort}:${port}/tcp`);
+  }
+  runArgs.push(IMAGE_NAME);
 
+  const run = await runCmd('docker', runArgs, { timeout: 60_000 });
   if (!run.ok) {
     throw new Error(run.stderr.trim() || 'docker run amnezia-xray failed');
   }
+  return { reused: false };
 }
 
 async function reloadXrayConfig() {
@@ -825,6 +953,8 @@ function isAmneziaXrayAvailable() {
 
 function getStatus() {
   const desired = getDesired();
+  const portPlan = require('./portPlan');
+  const plan = portPlan.computePlan();
   return {
     desired: desired === true,
     desiredSet: desired !== null,
@@ -840,6 +970,9 @@ function getStatus() {
     fingerprint: getFingerprint(),
     flow: getFlow(),
     port: getPort(),
+    publicPort: getClientFacingPort(),
+    mode: plan.modes.xray || null,
+    demuxPeers: plan.demuxPeers.xray || [],
     publicKey: getSetting(PUB_KEY, '') || null,
     shortId: getSetting(SHORT_ID_KEY, '') || null,
     updatedAt,
@@ -879,15 +1012,45 @@ async function enableInternal(opts = {}) {
     if (!FINGERPRINTS.includes(fingerprint)) fingerprint = DEFAULT_FP;
     let flow = opts.flow != null ? String(opts.flow) : getFlow();
     if (flow !== '' && !FLOWS.includes(flow)) flow = DEFAULT_FLOW;
-    const port = opts.port != null
-      ? normalizePort(opts.port, getPort())
-      : getPort();
-    if (opts.port != null) {
+
+    const publicPort = opts.publicPort != null
+      ? parseInt(String(opts.publicPort).trim(), 10)
+      : getPublicPort();
+    if (!Number.isFinite(publicPort) || publicPort < 1 || publicPort > 65535) {
+      throw Object.assign(new Error('Invalid Xray public port (1–65535)'), {
+        status: 400,
+        code: 'XRAY_BAD_PUBLIC_PORT',
+      });
+    }
+    setSetting(PUBLIC_PORT_KEY, String(publicPort));
+    assertSniNotMtproto(sni, publicPort);
+
+    if (opts.port != null && String(opts.port).trim() !== '') {
       const requested = parseInt(String(opts.port).trim(), 10);
       if (!Number.isFinite(requested) || requested < 1 || requested > 65535) {
-        throw Object.assign(new Error('Invalid Xray port (1–65535)'), { status: 400, code: 'XRAY_BAD_PORT' });
+        throw Object.assign(new Error('Invalid Xray listen port (1–65535)'), {
+          status: 400,
+          code: 'XRAY_BAD_PORT',
+        });
       }
     }
+
+    const portPlan = require('./portPlan');
+    // Tentative listen for plan computation
+    const tentativeMode = (() => {
+      const mtDesired = getSetting('amnezia_mtproto_desired', '');
+      const mtOn = mtDesired === '1' || mtDesired === 'true';
+      const mtPub = parseInt(getSetting('amnezia_mtproto_public_port', '') || '443', 10);
+      if (mtOn && mtPub === publicPort) return 'demux';
+      const panelPub = parseInt(String(config.PANEL_HTTPS_PORT || '10123'), 10);
+      if (panelPub === publicPort) return 'demux';
+      return 'direct';
+    })();
+
+    const port = resolveListenPort(
+      opts.port != null && String(opts.port).trim() !== '' ? opts.port : getPort(),
+      { mode: tentativeMode },
+    );
     const addressRaw = opts.address != null ? String(opts.address).trim() : '';
     const address = addressRaw || getAddress() || getPublicHost();
     if (!address) {
@@ -900,7 +1063,10 @@ async function enableInternal(opts = {}) {
     setSetting(PORT_KEY, String(port));
     setSetting(ADDRESS_KEY, address);
 
-    // Reuse Reality keys / client UUIDs when present (stable subscriptions across toggle).
+    if (tentativeMode === 'direct') {
+      await portPlan.assertHostPortsAvailable([publicPort], { allowNginx: true });
+    }
+
     const keys = await generateRealityKeysIfMissing();
     ensureClientUuids();
     const obj = buildServerConfigObject({
@@ -913,6 +1079,17 @@ async function enableInternal(opts = {}) {
     writeServerJson(obj);
 
     await ensureXrayContainer();
+    await portPlan.applyPlan();
+    try {
+      const mt = require('./amneziaMtproto');
+      if (mt.getStatus && mt.getStatus().desired && typeof mt.ensureMtprotoContainer === 'function') {
+        await mt.ensureMtprotoContainer();
+      }
+    } catch { /* ignore */ }
+    await ensureXrayContainer();
+    try {
+      await portPlan.applyPlan();
+    } catch { /* ignore */ }
 
     let ready = false;
     while (Date.now() < deadline) {
@@ -941,6 +1118,9 @@ async function enableInternal(opts = {}) {
   } catch (err) {
     await forceCleanup();
     setDesired(false);
+    try {
+      await require('./portPlan').applyPlan();
+    } catch { /* ignore */ }
     setPhase('error', err);
     await regenerateClientConfigs();
     throw err;
@@ -952,6 +1132,9 @@ async function disableInternal() {
   setDesired(false);
   try {
     await forceCleanup();
+    try {
+      await require('./portPlan').applyPlan();
+    } catch { /* nginx may be down */ }
     setPhase('off');
     await regenerateClientConfigs();
     return getStatus();
@@ -987,6 +1170,9 @@ function forceCleanupApi() {
   return withJob(async () => {
     setDesired(false);
     await forceCleanup();
+    try {
+      await require('./portPlan').applyPlan();
+    } catch { /* ignore */ }
     setPhase('off');
     await regenerateClientConfigs();
     return getStatus();
@@ -1049,10 +1235,12 @@ async function reconcile() {
   if (activeJob) return;
   const desired = getDesired();
   if (desired !== true) {
-    // Mirror DNS: desired off → remove orphan container; keep persisted settings.
     if (await dockerContainerRunning() || phase === 'running' || phase === 'degraded' || phase === 'error') {
       try {
         await forceCleanup();
+        try {
+          await require('./portPlan').applyPlan();
+        } catch { /* ignore */ }
       } catch {
         setPhase('off');
       }
@@ -1062,11 +1250,23 @@ async function reconcile() {
     return;
   }
   try {
+    if (!getSetting(PUBLIC_PORT_KEY, '')) {
+      setSetting(PUBLIC_PORT_KEY, String(getPublicPort()));
+    }
+    const listenPort = resolveListenPort(getPort());
+    if (String(listenPort) !== String(getPort())) {
+      setSetting(PORT_KEY, String(listenPort));
+      await syncClientsFromDb();
+    }
     if (!(await dockerContainerRunning())) {
       setPhase('degraded', new Error('amnezia-xray container not running'));
       await syncClientsFromDb();
       await ensureXrayContainer();
+    } else {
+      // Mode drift (e.g. MTProto joined same public port) → recreate
+      await ensureXrayContainer();
     }
+    await require('./portPlan').applyPlan();
     const smoke = await runSmoke();
     if (smoke.ok) setPhase('running');
     else setPhase('degraded', new Error(`smoke failed: ${smoke.dial && smoke.dial.out}`));
@@ -1137,8 +1337,10 @@ module.exports = {
   probeListenInsideContainer,
   normalizePort,
   getPublicHost,
+  getClientFacingPort,
   findEnabledClientByName,
   bootAmneziaXray,
   stopAmneziaXray,
   regenerateClientConfigs,
+  ensureXrayContainer,
 };
