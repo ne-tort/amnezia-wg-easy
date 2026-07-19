@@ -1,5 +1,9 @@
 # Agent notes — Amnezia WG-Easy
 
+## Workflow
+
+После завершения задачи с изменениями в репо — **сразу commit + push** на origin, без вопроса «закоммитить?». Не коммитить `scripts/_remote_*`, секреты, `.env`.
+
 ## Epic: Xray VLESS Reality in panel
 
 Integrate Docker `amnezia-xray` (VLESS + REALITY) similar to Amnezia DNS: UI install toggle, per-client UUID synced with AWG clients, public `{SUB_PUBLIC_PREFIX}/{name}` (default `/sub`), `vless://`, QR, and Amnezia `.vpn` export.
