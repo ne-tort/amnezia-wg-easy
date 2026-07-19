@@ -49,15 +49,27 @@ root_block_exit_placeholder() {
   printf '%s\n' '    }'
 }
 
-root_block_exit_mirror() {
-  if [ -z "$NGINX_MIRROR_HOST" ]; then
-    root_block_exit_placeholder
-    return
-  fi
+# Host variants for proxy_redirect / cookie rewrite (www.example.com ↔ example.com).
+mirror_host_variants() {
+  h="${1:-}"
+  [ -z "$h" ] && return 0
+  printf '%s\n' "$h"
+  case "$h" in
+    www.*)
+      printf '%s\n' "${h#www.}"
+      ;;
+    *)
+      printf '%s\n' "www.${h}"
+      ;;
+  esac
+}
+
+# Shared reverse-proxy stanzas for root mirror (entry + exit profiles).
+mirror_proxy_directives() {
+  mhost="${1:-}"
   cat <<EOF
-    location / {
         resolver 8.8.8.8 valid=300s ipv6=off;
-        set \$mhost "${NGINX_MIRROR_HOST}";
+        set \$mhost "${mhost}";
         proxy_pass https://\$mhost;
         proxy_http_version 1.1;
         proxy_ssl_server_name on;
@@ -67,6 +79,32 @@ root_block_exit_mirror() {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_connect_timeout 15s;
         proxy_read_timeout 60s;
+        # Keep the browser on our host: upstream often 301 www→apex (e.g. www.czc.cz → czc.cz).
+EOF
+  # shellcheck disable=SC2039
+  while IFS= read -r vh; do
+    [ -z "$vh" ] && continue
+    cat <<EOF
+        proxy_redirect https://${vh}/ /;
+        proxy_redirect https://${vh} /;
+        proxy_redirect http://${vh}/ /;
+        proxy_redirect http://${vh} /;
+        proxy_cookie_domain ${vh} \$host;
+        proxy_cookie_domain .${vh#www.} \$host;
+EOF
+  done <<EOF
+$(mirror_host_variants "$mhost" | awk 'NF && !seen[$0]++')
+EOF
+}
+
+root_block_exit_mirror() {
+  if [ -z "$NGINX_MIRROR_HOST" ]; then
+    root_block_exit_placeholder
+    return
+  fi
+  cat <<EOF
+    location / {
+$(mirror_proxy_directives "$NGINX_MIRROR_HOST")
     }
 EOF
 }
@@ -104,17 +142,7 @@ root_block_entry_mirror() {
   fi
   cat <<EOF
     location / {
-        resolver 8.8.8.8 valid=300s ipv6=off;
-        set \$mhost "${NGINX_MIRROR_HOST}";
-        proxy_pass https://\$mhost;
-        proxy_http_version 1.1;
-        proxy_ssl_server_name on;
-        proxy_ssl_name \$mhost;
-        proxy_set_header Host \$mhost;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        proxy_connect_timeout 15s;
-        proxy_read_timeout 60s;
+$(mirror_proxy_directives "$NGINX_MIRROR_HOST")
     }
 EOF
 }
