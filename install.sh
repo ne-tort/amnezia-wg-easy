@@ -51,6 +51,7 @@ WEBUI_PUBLIC_PREFIX_VAL="/panel"
 SUB_PUBLIC_PREFIX_VAL="/sub"
 NGINX_ROOT_BEHAVIOR_VAL="mirror"
 NGINX_MIRROR_HOST_VAL=""
+MIRROR_USE_SNI_VAL=0
 
 # Random free ports (user/dynamic range) for AWG UDP / Xray+MTProto internal TCP.
 PORT_RAND_MIN=20000
@@ -352,11 +353,11 @@ prompt_admin() {
   fi
 
   if [[ -n "$existing_user" && -n "$existing_pass" ]]; then
-    confirm_yn "Задать новый логин/пароль admin? (Enter = оставить «${existing_user}»)" n
+    confirm_yn "Новый логин/пароль admin? [редеплой: ${existing_user}]" n
     if [[ "$CONFIRM_RESULT" -eq 0 ]]; then
       ADMIN_USER="$existing_user"
       ADMIN_PASS="$existing_pass"
-      logi "Оставляю существующие учётные данные (${ADMIN_USER})"
+      logi "admin=${ADMIN_USER}"
       return 0
     fi
     prompt_or_default ADMIN_USER "Логин admin: " "$existing_user" AWG_ADMIN_USER
@@ -368,13 +369,13 @@ prompt_admin() {
     return 0
   fi
 
-  confirm_yn "Задать логин/пароль admin вручную? (иначе случайные)" n
+  confirm_yn "Задать admin вручную?" n
   if [[ "$CONFIRM_RESULT" -eq 1 ]]; then
-    prompt_or_default ADMIN_USER "Логин admin: " "admin" AWG_ADMIN_USER
-    prompt_or_default ADMIN_PASS "Пароль admin: " "" AWG_ADMIN_PASSWORD
+    prompt_or_default ADMIN_USER "Логин admin [по умолчанию: admin]: " "admin" AWG_ADMIN_USER
+    prompt_or_default ADMIN_PASS "Пароль admin [по умолчанию: случайный]: " "" AWG_ADMIN_PASSWORD
     if [[ -z "$ADMIN_PASS" ]]; then
       ADMIN_PASS=$(gen_random_string 16)
-      logi "Пароль пустой → сгенерирован: ${ADMIN_PASS}"
+      logi "Пароль: ${ADMIN_PASS}"
     fi
   else
     ADMIN_USER=$(gen_random_string 10)
@@ -544,9 +545,9 @@ prompt_ports() {
   echo ""
   echo -e "${green}════════ Порты ════════${plain}"
   if [[ "$redeploy" -eq 1 ]]; then
-    echo -e "${blue}Редеплой: Enter = оставить текущие порты.${plain}"
+    echo -e "${blue}Редеплой: Enter = значения из .env${plain}"
   else
-    echo -e "${blue}Первая установка: Enter = 443 для панели/Xray/MT (SNI demux). Известный SNI → Xray/MT; панель по FQDN-SNI или (голый IP) catch-all → заглушка+/panel.${plain}"
+    echo -e "${blue}По умолчанию: Panel/Xray/MT = 443 (SNI demux)${plain}"
   fi
 
   # --- Panel HTTPS ---
@@ -566,11 +567,11 @@ prompt_ports() {
   else
     local hint
     if [[ -n "$cur_https" ]]; then
-      hint="Enter=оставить ${cur_https}"
+      hint="редеплой: ${cur_https}"
     else
-      hint="Enter=${DEFAULT_PANEL_HTTPS_PORT} (demux с Xray/MT)"
+      hint="по умолчанию: ${DEFAULT_PANEL_HTTPS_PORT}"
     fi
-    read -rp "HTTPS порт панели [${hint}]: " ans || true
+    read -rp "HTTPS панели [${hint}]: " ans || true
     ans="${ans// /}"
     if [[ -z "$ans" ]]; then
       assign_port_or_keep PANEL_HTTPS_PORT_VAL tcp "$cur_https" "$DEFAULT_PANEL_HTTPS_PORT" \
@@ -604,8 +605,9 @@ prompt_ports() {
   else
     while true; do
       ans=""
-      local xhint="Enter=${cur_xray_pub:-443}"
-      read -rp "Xray публичный TCP [${xhint}; одинаковый с MT → demux по SNI]: " ans || true
+      local xhint
+      if [[ -n "$cur_xray_pub" ]]; then xhint="редеплой: ${cur_xray_pub}"; else xhint="по умолчанию: 443"; fi
+      read -rp "Xray public TCP [${xhint}]: " ans || true
       ans="${ans// /}"
       if [[ -z "$ans" ]]; then
         XRAY_PUBLIC_PORT_VAL="${cur_xray_pub:-443}"
@@ -623,8 +625,9 @@ prompt_ports() {
     done
     while true; do
       ans=""
-      local mhint="Enter=${cur_mt_pub:-$XRAY_PUBLIC_PORT_VAL}"
-      read -rp "MTProto публичный TCP [${mhint}]: " ans || true
+      local mhint
+      if [[ -n "$cur_mt_pub" ]]; then mhint="редеплой: ${cur_mt_pub}"; else mhint="по умолчанию: ${XRAY_PUBLIC_PORT_VAL}"; fi
+      read -rp "MTProto public TCP [${mhint}]: " ans || true
       ans="${ans// /}"
       if [[ -z "$ans" ]]; then
         MTPROTO_PUBLIC_PORT_VAL="${cur_mt_pub:-$XRAY_PUBLIC_PORT_VAL}"
@@ -674,11 +677,11 @@ prompt_ports() {
     ans=""
     local whint
     if [[ -n "$cur_wg" ]]; then
-      whint="Enter=оставить ${cur_wg}"
+      whint="редеплой: ${cur_wg}"
     else
-      whint="Enter=случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
+      whint="по умолчанию: случайный ${PORT_RAND_MIN}-${PORT_RAND_MAX}"
     fi
-    read -rp "AWG UDP порт [${whint}]: " ans || true
+    read -rp "AWG UDP [${whint}]: " ans || true
     ans="${ans// /}"
     if [[ -z "$ans" ]]; then
       assign_port_or_keep WG_PORT_VAL udp "$cur_wg" "" \
@@ -1400,79 +1403,163 @@ normalize_path_prefix() {
   printf '%s' "$raw"
 }
 
+mirror_host_alive() {
+  local host="$1" code
+  [[ -z "$host" ]] && return 1
+  code=$(curl -4 -skI -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 \
+    "https://${host}/" 2>/dev/null || echo 000)
+  case "$code" in
+    2*|3*) return 0 ;;
+  esac
+  return 1
+}
+
+# Random host from mirror-bank; prefer HTTPS that returns HTTP 2xx/3xx.
 pick_default_mirror_host() {
-  local bank="${INSTALL_DIR}/config/sni-bank.seed.json"
+  local bank="${INSTALL_DIR}/config/mirror-bank.seed.json"
+  [[ -f "$bank" ]] || bank="${INSTALL_DIR}/config/sni-bank.seed.json"
   local host=""
   if [[ -f "$bank" ]] && command -v python3 >/dev/null 2>&1; then
     host=$(python3 -c "
-import json,sys
+import json, random, subprocess, sys
+path = sys.argv[1]
 try:
-  d=json.load(open(sys.argv[1]))
-  if isinstance(d,list) and d:
-    print(str(d[0]).strip())
+  raw = json.load(open(path))
+  domains = raw if isinstance(raw, list) else list(raw.get('domains') or [])
 except Exception:
-  pass
+  domains = []
+domains = [str(d).strip() for d in domains if str(d).strip()]
+random.shuffle(domains)
+for d in domains:
+  try:
+    r = subprocess.run(
+      ['curl','-4','-skI','-o','/dev/null','-w','%{http_code}',
+       '--connect-timeout','3','--max-time','8', f'https://{d}/'],
+      capture_output=True, text=True, timeout=12)
+    code = (r.stdout or '').strip()
+    if code.startswith('2') or code.startswith('3'):
+      print(d)
+      sys.exit(0)
+  except Exception:
+    pass
+if domains:
+  print(domains[0])
 " "$bank" 2>/dev/null || true)
   fi
   if [[ -z "$host" && -f "$bank" ]]; then
     host=$(grep -oE '"[^"]+\.[^"]+"' "$bank" | head -1 | tr -d '"' || true)
   fi
-  # strip www. optional — keep as-is for Host/SNI
-  printf '%s' "${host:-www.gov.uk}"
+  printf '%s' "${host:-www.sbb.ch}"
 }
 
 prompt_webui_paths_and_mirror() {
-  local ans="" cur_panel cur_sub cur_mirror def_mirror
-  cur_panel=$(grep -E '^WEBUI_PUBLIC_PREFIX=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  cur_sub=$(grep -E '^SUB_PUBLIC_PREFIX=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  cur_mirror=$(grep -E '^NGINX_MIRROR_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  def_mirror=$(pick_default_mirror_host)
+  local ans="" ans_l="" cur_panel cur_sub cur_mirror redeploy=0
+  cur_panel=$(panel_env_get WEBUI_PUBLIC_PREFIX)
+  cur_sub=$(panel_env_get SUB_PUBLIC_PREFIX)
+  cur_mirror=$(panel_env_get NGINX_MIRROR_HOST)
+  is_redeploy && redeploy=1
+  MIRROR_USE_SNI_VAL=0
 
   echo ""
-  echo -e "${green}════════ Пути панели и зеркало корня ════════${plain}"
+  echo -e "${green}════════ Пути / зеркало ════════${plain}"
 
   if [[ "$NONINTERACTIVE" == "1" ]]; then
     WEBUI_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "${AWG_WEBUI_PUBLIC_PREFIX:-${cur_panel:-/panel}}" /panel)
     SUB_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "${AWG_SUB_PUBLIC_PREFIX:-${cur_sub:-/sub}}" /sub)
     NGINX_ROOT_BEHAVIOR_VAL="${AWG_NGINX_ROOT_BEHAVIOR:-mirror}"
-    NGINX_MIRROR_HOST_VAL="${AWG_NGINX_MIRROR_HOST:-${cur_mirror:-$def_mirror}}"
+    if [[ "${AWG_MIRROR_USE_SNI:-0}" == "1" ]]; then
+      MIRROR_USE_SNI_VAL=1
+      NGINX_MIRROR_HOST_VAL="${AWG_NGINX_MIRROR_HOST:-${cur_mirror:-$(pick_default_mirror_host)}}"
+    else
+      NGINX_MIRROR_HOST_VAL="${AWG_NGINX_MIRROR_HOST:-${cur_mirror:-$(pick_default_mirror_host)}}"
+    fi
   else
-    ans=""
-    read -rp "Путь панели [${cur_panel:-Enter=/panel}]: " ans || true
+    if [[ "$redeploy" -eq 1 && -n "$cur_panel" ]]; then
+      read -rp "Путь панели [редеплой: ${cur_panel}]: " ans || true
+    else
+      read -rp "Путь панели [по умолчанию: /panel]: " ans || true
+    fi
     ans="${ans//' '/}"
     if [[ -z "$ans" ]]; then
       WEBUI_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "${cur_panel:-/panel}" /panel)
     else
       WEBUI_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "$ans" /panel)
     fi
+
     ans=""
-    read -rp "Путь подписок [${cur_sub:-Enter=/sub}]: " ans || true
+    if [[ "$redeploy" -eq 1 && -n "$cur_sub" ]]; then
+      read -rp "Путь подписок [редеплой: ${cur_sub}]: " ans || true
+    else
+      read -rp "Путь подписок [по умолчанию: /sub]: " ans || true
+    fi
     ans="${ans//' '/}"
     if [[ -z "$ans" ]]; then
       SUB_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "${cur_sub:-/sub}" /sub)
     else
       SUB_PUBLIC_PREFIX_VAL=$(normalize_path_prefix "$ans" /sub)
     fi
+
     ans=""
-    read -rp "Зеркало корня / (reverse-proxy host) [Enter=${def_mirror}]: " ans || true
-    ans="${ans//' '/}"
-    if [[ -z "$ans" ]]; then
-      NGINX_MIRROR_HOST_VAL="${cur_mirror:-$def_mirror}"
+    if [[ "$redeploy" -eq 1 && -n "$cur_mirror" ]]; then
+      read -rp "Зеркало / [редеплой: ${cur_mirror} | sni | host]: " ans || true
     else
-      NGINX_MIRROR_HOST_VAL="$ans"
+      read -rp "Зеркало / [по умолчанию: банк | sni | host]: " ans || true
     fi
+    ans="${ans//' '/}"
+    ans_l=$(printf '%s' "$ans" | tr '[:upper:]' '[:lower:]')
+    case "$ans_l" in
+      "")
+        if [[ "$redeploy" -eq 1 && -n "$cur_mirror" ]]; then
+          NGINX_MIRROR_HOST_VAL="$cur_mirror"
+        else
+          NGINX_MIRROR_HOST_VAL=$(pick_default_mirror_host)
+        fi
+        ;;
+      sni)
+        MIRROR_USE_SNI_VAL=1
+        NGINX_MIRROR_HOST_VAL="${cur_mirror:-$(pick_default_mirror_host)}"
+        ;;
+      *)
+        NGINX_MIRROR_HOST_VAL="$ans"
+        ;;
+    esac
     NGINX_ROOT_BEHAVIOR_VAL="mirror"
   fi
 
-  # strip scheme if user pasted URL
   NGINX_MIRROR_HOST_VAL="${NGINX_MIRROR_HOST_VAL#https://}"
   NGINX_MIRROR_HOST_VAL="${NGINX_MIRROR_HOST_VAL#http://}"
   NGINX_MIRROR_HOST_VAL="${NGINX_MIRROR_HOST_VAL%%/*}"
-
   if [[ -z "$NGINX_MIRROR_HOST_VAL" ]]; then
-    NGINX_MIRROR_HOST_VAL="$def_mirror"
+    NGINX_MIRROR_HOST_VAL=$(pick_default_mirror_host)
   fi
-  logi "UI: ${WEBUI_PUBLIC_PREFIX_VAL}/  sub: ${SUB_PUBLIC_PREFIX_VAL}/  mirror: ${NGINX_MIRROR_HOST_VAL}"
+  logi "UI=${WEBUI_PUBLIC_PREFIX_VAL}/ sub=${SUB_PUBLIC_PREFIX_VAL}/ mirror=${NGINX_MIRROR_HOST_VAL}${MIRROR_USE_SNI_VAL:+ (→ SNI после enable)}"
+}
+
+apply_mirror_from_sni_if_requested() {
+  [[ "${MIRROR_USE_SNI_VAL:-0}" -eq 1 ]] || return 0
+  local sni=""
+  sni=$(api_curl GET /api/amnezia-xray 2>/dev/null \
+    | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  [[ -z "$sni" ]] && sni=$(api_curl GET /api/amnezia-xray 2>/dev/null \
+    | sed -n 's/.*"sni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if [[ -z "$sni" ]]; then
+    sni=$(api_curl GET /api/amnezia-mtproto 2>/dev/null \
+      | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  fi
+  [[ -z "$sni" ]] && return 0
+  if ! mirror_host_alive "$sni"; then
+    logw "SNI ${sni} не ответил по HTTPS — зеркало не меняю"
+    return 0
+  fi
+  NGINX_MIRROR_HOST_VAL="$sni"
+  env_set "${INSTALL_DIR}/.env" NGINX_MIRROR_HOST "$sni"
+  logi "Зеркало → ${sni}"
+  (
+    cd "$INSTALL_DIR"
+    # shellcheck disable=SC1091
+    set -a; source .env; set +a
+    docker compose -f docker-compose.yml -f docker-compose.ports.yml up -d --force-recreate nginx >/dev/null 2>&1 || true
+  ) || true
 }
 
 write_env() {
@@ -1554,31 +1641,66 @@ install_cli() {
   logi "CLI: awg-easy"
 }
 
+panel_env_get() {
+  local key="$1"
+  grep -E "^${key}=" "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true
+}
+
+panel_probe_host() {
+  local domain
+  domain=$(panel_env_get PANEL_DOMAIN)
+  [[ -z "$domain" ]] && domain="${PANEL_DOMAIN_VAL}"
+  [[ -z "$domain" ]] && domain="127.0.0.1"
+  printf '%s' "$domain"
+}
+
 panel_probe_url() {
-  local https_port
-  https_port=$(grep -E '^PANEL_HTTPS_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  https_port="${https_port:-10123}"
-  if [[ "$https_port" == "443" ]]; then
-    echo "https://127.0.0.1"
+  local https_port host
+  https_port=$(panel_env_get PANEL_HTTPS_PORT)
+  https_port="${https_port:-${PANEL_HTTPS_PORT_VAL:-443}}"
+  host=$(panel_probe_host)
+  if is_ip_literal "$host"; then
+    if [[ "$https_port" == "443" ]]; then
+      echo "https://127.0.0.1"
+    else
+      echo "https://127.0.0.1:${https_port}"
+    fi
   else
-    echo "https://127.0.0.1:${https_port}"
+    if [[ "$https_port" == "443" ]]; then
+      echo "https://${host}"
+    else
+      echo "https://${host}:${https_port}"
+    fi
+  fi
+}
+
+# Extra curl args so FQDN@443 demux gets correct SNI (default stream is :9 without it).
+panel_curl_resolve_args() {
+  local https_port host
+  https_port=$(panel_env_get PANEL_HTTPS_PORT)
+  https_port="${https_port:-${PANEL_HTTPS_PORT_VAL:-443}}"
+  host=$(panel_probe_host)
+  if ! is_ip_literal "$host"; then
+    printf '%s\n' --resolve "${host}:${https_port}:127.0.0.1"
   fi
 }
 
 panel_api_prefix() {
   local p
-  p=$(grep -E '^WEBUI_PUBLIC_PREFIX=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
-  p=$(normalize_path_prefix "${p:-/panel}" /panel)
+  p=$(panel_env_get WEBUI_PUBLIC_PREFIX)
+  p=$(normalize_path_prefix "${p:-${WEBUI_PUBLIC_PREFIX_VAL:-/panel}}" /panel)
   echo "${p}/api"
 }
 
 wait_panel() {
   local url
+  local -a resolve=()
+  mapfile -t resolve < <(panel_curl_resolve_args)
   url="$(panel_probe_url)$(normalize_path_prefix "${WEBUI_PUBLIC_PREFIX_VAL:-/panel}" /panel)/"
   logi "Ожидание панели ${url} ..."
   local i code=000
   for i in $(seq 1 60); do
-    code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)
+    code=$(curl -sk "${resolve[@]}" -o /dev/null -w '%{http_code}' --max-time 3 "$url" || true)
     case "$code" in
       200|301|302|401) logi "Панель отвечает (HTTP ${code})"; return 0 ;;
     esac
@@ -1589,9 +1711,10 @@ wait_panel() {
 }
 
 api_curl() {
-  # api_curl METHOD PATH [json_body]  — PATH is app path (/api/...) or already prefixed
   local method="$1" path="$2" body="${3:-}"
   local url base cookie apiprefix
+  local -a resolve=()
+  mapfile -t resolve < <(panel_curl_resolve_args)
   base=$(panel_probe_url)
   apiprefix=$(panel_api_prefix)
   if [[ "$path" == /api/* ]]; then
@@ -1601,21 +1724,21 @@ api_curl() {
   local maxtime=120
   [[ "$path" == *"/amnezia-dns/enable"* ]] && maxtime=180
   if [[ -n "$body" ]]; then
-    curl -sk -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" \
+    curl -sk "${resolve[@]}" -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" \
       -H 'Content-Type: application/json' \
       -d "$body" --max-time "$maxtime"
   else
-    curl -sk -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" --max-time "$maxtime"
+    curl -sk "${resolve[@]}" -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" --max-time "$maxtime"
   fi
 }
 
 api_login() {
-  local resp
+  local resp code
+  local -a resolve=()
+  mapfile -t resolve < <(panel_curl_resolve_args)
   resp=$(api_curl POST /api/session "{\"username\":\"${ADMIN_USER}\",\"password\":\"${ADMIN_PASS}\"}" || true)
   if echo "$resp" | grep -qi 'success\|username\|true\|{}' || [[ -f "${CONF_DIR}/session.cj" ]]; then
-    # Verify with a capability-gated endpoint
-    local code
-    code=$(curl -sk -b "${CONF_DIR}/session.cj" -o /dev/null -w '%{http_code}' --max-time 10 \
+    code=$(curl -sk "${resolve[@]}" -b "${CONF_DIR}/session.cj" -o /dev/null -w '%{http_code}' --max-time 10 \
       "$(panel_probe_url)$(panel_api_prefix)/amnezia-xray" || true)
     if [[ "$code" == "200" || "$code" == "403" ]]; then
       return 0
@@ -1703,7 +1826,7 @@ PY
     sni=$(sed -n 's/.*"defaultSni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/awg-sni-cache.json 2>/dev/null | head -1)
   fi
   if [[ -z "$sni" ]]; then
-    sni="www.gov.uk"
+    sni="www.sbb.ch"
     logw "defaultSni не найден — fallback ${sni}"
   else
     logi "Выбран SNI: ${sni}"
@@ -1794,6 +1917,7 @@ post_configure() {
   if [[ "$ENABLE_MTPROTO" -eq 1 ]]; then
     enable_mtproto || logw "MTProto enable не удался"
   fi
+  apply_mirror_from_sni_if_requested || true
 }
 
 print_summary() {
@@ -1859,14 +1983,13 @@ main() {
     [[ "$dns_def" == "y" || "$dns_def" == "Y" ]] && ENABLE_DNS=1 || ENABLE_DNS=0
     [[ "$xray_def" == "y" || "$xray_def" == "Y" ]] && ENABLE_XRAY=1 || ENABLE_XRAY=0
     [[ "$mt_def" == "y" || "$mt_def" == "Y" ]] && ENABLE_MTPROTO=1 || ENABLE_MTPROTO=0
-    logi "Редеплой: DNS=${ENABLE_DNS}, Xray=${ENABLE_XRAY}, MTProto=${ENABLE_MTPROTO} (без вопросов; настройки из первого деплоя)"
+    logi "Редеплой: DNS=${ENABLE_DNS} Xray=${ENABLE_XRAY} MTProto=${ENABLE_MTPROTO} (из install.conf / контейнеров)"
   else
-    # Enter = yes ([Y/n]).
-    confirm_yn "Включить Amnezia DNS после установки?" y AWG_ENABLE_DNS
+    confirm_yn "Amnezia DNS?" y AWG_ENABLE_DNS
     ENABLE_DNS=$CONFIRM_RESULT
-    confirm_yn "Включить Xray (VLESS Reality + SNI Finder) после установки?" y AWG_ENABLE_XRAY
+    confirm_yn "Xray (VLESS Reality)?" y AWG_ENABLE_XRAY
     ENABLE_XRAY=$CONFIRM_RESULT
-    confirm_yn "Включить MTProto (Telemt Fake-TLS) после установки?" y AWG_ENABLE_MTPROTO
+    confirm_yn "MTProto (Telemt)?" y AWG_ENABLE_MTPROTO
     ENABLE_MTPROTO=$CONFIRM_RESULT
   fi
   write_env

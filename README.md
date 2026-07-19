@@ -76,6 +76,8 @@ cd amnezia-wg-easy
 |----------|-----------|
 | FQDN + все public 443 | Demux: Xray/MT/панель по **известным SNI**; unknown → `:9`; заглушка+`/panel/` только на SNI панели |
 | Голый IP панели + 443 | Xray/MT по SNI; **нет** SNI=IP в map; unknown/без SNI → панель (заглушка+`/panel/`) |
+| Редеплой | `.env` + `/etc/amnezia-wg-easy/` (admin, порты, prefixes, mirror, ENABLE_*); desired DNS/Xray/MT в БД volume |
+| Зеркало `/` | `config/mirror-bank.seed.json` — случайный живой HTTPS; Enter; `sni` = после enable взять SNI Xray/MT |
 | Разные public ports | Direct `-p`; SNI могут совпадать |
 | Internal listen | 20000–50000 (exclude-list), не host-scan |
 

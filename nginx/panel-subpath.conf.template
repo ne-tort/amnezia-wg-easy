@@ -16,9 +16,12 @@ server {
     ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_prefer_server_ciphers off;
+    # listen is :8443 inside the container; never leak that port in redirects
+    port_in_redirect off;
+    absolute_redirect off;
 
     location = ${WEBUI_PUBLIC_PREFIX} {
-        return 302 ${WEBUI_PUBLIC_PREFIX}/;
+        return 302 https://${PANEL_HTTPS_REDIRECT_HOST}${WEBUI_PUBLIC_PREFIX}/;
     }
 
     # Variable proxy_pass drops a URI suffix — rewrite + proxy_pass without path.

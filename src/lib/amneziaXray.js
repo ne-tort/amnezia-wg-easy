@@ -34,7 +34,7 @@ const PRIV_KEY = 'amnezia_xray_private_key';
 const PUB_KEY = 'amnezia_xray_public_key';
 const SHORT_ID_KEY = 'amnezia_xray_short_id';
 
-const DEFAULT_SNI = 'www.gov.uk';
+const DEFAULT_SNI = 'www.sbb.ch';
 const DEFAULT_FP = 'chrome';
 const DEFAULT_FLOW = 'xtls-rprx-vision';
 const FINGERPRINTS = Object.freeze([

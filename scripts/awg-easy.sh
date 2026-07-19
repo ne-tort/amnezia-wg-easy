@@ -157,7 +157,7 @@ cmd_xray_on() {
   fi
   api GET '/api/amnezia-xray/sni-cache?ensureBg=1' >/tmp/awg-sni-cache.json || true
   sni=$(sed -n 's/.*"defaultSni"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /tmp/awg-sni-cache.json 2>/dev/null | head -1)
-  sni="${sni:-www.gov.uk}"
+  sni="${sni:-www.sbb.ch}"
   api POST /api/amnezia-xray/enable \
     "{\"sni\":\"${sni}\",\"fingerprint\":\"chrome\",\"flow\":\"xtls-rprx-vision\",\"port\":${port},\"address\":\"${host}\"}"
 }

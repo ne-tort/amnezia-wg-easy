@@ -16,4 +16,6 @@ test('panel-subpath template rewrites API/UI when using variable proxy_pass', ()
   assert.doesNotMatch(src, /proxy_pass http:\/\/\$panel_upstream:\$\{PANEL_PORT\}\/sub\//);
   assert.doesNotMatch(src, /proxy_pass http:\/\/\$panel_upstream:\$\{PANEL_PORT\}\/;/);
   assert.match(src, /location \$\{SUB_PUBLIC_PREFIX\}\/[\s\S]*?proxy_pass http:\/\/\$panel_upstream:\$\{PANEL_PORT\};/);
+  assert.match(src, /port_in_redirect off;/);
+  assert.match(src, /return 302 https:\/\/\$\{PANEL_HTTPS_REDIRECT_HOST\}\$\{WEBUI_PUBLIC_PREFIX\}\/;/);
 });
