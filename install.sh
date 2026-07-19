@@ -388,12 +388,41 @@ install_acme() {
     return 0
   fi
   logi "Установка acme.sh..."
-  curl4 -fsSL --connect-timeout 15 --retry 3 https://get.acme.sh | sh -s email="${CERTBOT_EMAIL_VAL:-admin@localhost}"
+  # LE rejects contacts like admin@localhost ("domain needs at least one dot").
+  if is_valid_le_email "${CERTBOT_EMAIL_VAL:-}"; then
+    curl4 -fsSL --connect-timeout 15 --retry 3 https://get.acme.sh | sh -s email="${CERTBOT_EMAIL_VAL}"
+  else
+    curl4 -fsSL --connect-timeout 15 --retry 3 https://get.acme.sh | sh
+  fi
   # shellcheck source=/dev/null
   [[ -f "${ACME_HOME}/acme.sh.env" ]] && source "${ACME_HOME}/acme.sh.env" || true
   if [[ ! -x "${ACME_HOME}/acme.sh" ]]; then
     loge "acme.sh не установился"
     return 1
+  fi
+}
+
+# Let's Encrypt contact: local@domain.tld (domain must contain a dot). Empty = omit contact.
+is_valid_le_email() {
+  local e="${1:-}"
+  [[ -z "$e" ]] && return 1
+  [[ "$e" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]
+}
+
+# Register/refresh LE account. Prefer a valid email; never send admin@localhost.
+ensure_acme_le_account() {
+  local email="${1:-}"
+  "$(acme_bin)" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
+  if is_valid_le_email "$email"; then
+    if ! "$(acme_bin)" --register-account -m "$email" --server letsencrypt; then
+      logw "Регистрация LE-аккаунта с email не удалась — пробую без контакта"
+      "$(acme_bin)" --register-account --server letsencrypt >/dev/null 2>&1 || true
+    fi
+  else
+    if [[ -n "$email" ]]; then
+      logw "Email «${email}» не подходит для LE (нужен вид user@domain.tld) — регистрирую аккаунт без контакта"
+    fi
+    "$(acme_bin)" --register-account --server letsencrypt >/dev/null 2>&1 || true
   fi
 }
 
@@ -1037,8 +1066,8 @@ try_reuse_certificate() {
     install_acme || true
     if [[ -d "${ACME_HOME}/${name}_ecc" || -d "${ACME_HOME}/${name}" \
       || -d "${ACME_HOME}/${name}_rsa" ]]; then
-      logi "Найден сертификат acme.sh для ${name} — устанавливаю без повторного выпуска"
       if installcert_from_acme "$name" "$host_dir" && cert_pair_usable "$host_dir" "$min_days"; then
+        logi "Найден сертификат acme.sh для ${name} — устанавливаю без повторного выпуска"
         inject_certs_to_volume "$name" "$host_dir" || return 1
         SSL_MODE="acme"
         SSL_HOST="$name"
@@ -1098,10 +1127,7 @@ setup_domain_certificate() {
 
   install_acme || return 1
   free_port_80
-  "$(acme_bin)" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-  if [[ -n "$email" ]]; then
-    "$(acme_bin)" --register-account -m "$email" >/dev/null 2>&1 || true
-  fi
+  ensure_acme_le_account "$email"
   logi "Выпуск LE-сертификата для домена ${domain} (без --force; повторный выпуск только если нет действующего)..."
   # Do NOT pass --force: acme.sh will reuse its own cert when still valid.
   local issue_ok=0
@@ -1155,10 +1181,7 @@ setup_ip_certificate() {
   if [[ -n "$ipv6" ]] && is_ipv6 "$ipv6"; then
     domain_args+=(-d "$ipv6")
   fi
-  "$(acme_bin)" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
-  if [[ -n "${CERTBOT_EMAIL_VAL}" ]]; then
-    "$(acme_bin)" --register-account -m "${CERTBOT_EMAIL_VAL}" >/dev/null 2>&1 || true
-  fi
+  ensure_acme_le_account "${CERTBOT_EMAIL_VAL:-}"
   logi "Выпуск LE IP-сертификата (shortlived ~6 дней) для ${ipv4}..."
   local issue_ok=0
   if [[ "${AWG_SSL_FORCE_RENEW:-0}" == "1" ]]; then
@@ -1306,13 +1329,17 @@ prompt_and_setup_ssl() {
         domain_default=""
       fi
       prompt_or_default domain "Домен (A-запись на этот сервер): " "$domain_default" AWG_DOMAIN
-      prompt_or_default email "Email для Let's Encrypt: " "" AWG_EMAIL
+      prompt_or_default email "Email для Let's Encrypt (user@domain.tld, Enter = без контакта): " "" AWG_EMAIL
       if [[ -z "$domain" ]] || ! is_domain "$domain"; then
         loge "Некорректный домен — self-signed"
         SSL_MODE="selfsigned"
         SSL_HOST="${SERVER_IP:-127.0.0.1}"
         PANEL_DOMAIN_VAL="${SERVER_IP:-127.0.0.1}"
         return 0
+      fi
+      if [[ -n "$email" ]] && ! is_valid_le_email "$email"; then
+        logw "Email «${email}» отклонён LE (нужен domain с точкой) — выпускаю без контакта"
+        email=""
       fi
       CERTBOT_EMAIL_VAL="$email"
       if setup_domain_certificate "$domain" "$email"; then
@@ -1348,7 +1375,11 @@ prompt_and_setup_ssl() {
       fi
       local ipv6=""
       prompt_or_default ipv6 "IPv6 (Enter = пропустить): " "" AWG_SSL_IPV6
-      prompt_or_default CERTBOT_EMAIL_VAL "Email для LE (необязательно): " "" AWG_EMAIL
+      prompt_or_default CERTBOT_EMAIL_VAL "Email для LE (user@domain.tld, Enter = без контакта): " "" AWG_EMAIL
+      if [[ -n "${CERTBOT_EMAIL_VAL}" ]] && ! is_valid_le_email "${CERTBOT_EMAIL_VAL}"; then
+        logw "Email «${CERTBOT_EMAIL_VAL}» отклонён LE — выпускаю без контакта"
+        CERTBOT_EMAIL_VAL=""
+      fi
       if setup_ip_certificate "$ip" "$ipv6"; then
         logi "SSL IP готов"
         SERVER_IP="$ip"
