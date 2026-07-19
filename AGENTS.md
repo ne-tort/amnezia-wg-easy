@@ -10,7 +10,7 @@ Defaults: `PANEL_HTTPS_PORT` = `XRAY_PUBLIC_PORT` = `MTPROTO_PUBLIC_PORT` = **44
 
 **Connect vs camouflage:** `amnezia_xray_address` = TCP host in `vless://`; `amnezia_xray_sni` = Reality site. Client-facing port = **publicPort**. `spiderX` empty.
 
-**SNI Finder:** `src/lib/sniFinder.js` — public-IP guard, TLS+HTTP/2, cache TTL 24h + bank `config/sni-bank.seed.json`.
+**SNI bank (one for Reality + MTProto):** `config/sni-bank.seed.json` → volume override `{WG_PATH}/xray/sni-bank.json`. Used by `sniFinder` (UI Finder for both Xray and MTProto install modals), `amneziaXray.getSni` / `pickDefaultSni`, `amneziaMtproto.getSni` / `pickAlternateSni`, and `install.sh` enable fallbacks. Mirror root uses separate `config/mirror-bank.seed.json`.
 
 ## Epic: Unified Port Plan + paths + mirror
 

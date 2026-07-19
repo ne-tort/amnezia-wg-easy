@@ -28,7 +28,7 @@ const PORT_KEY = 'amnezia_mtproto_port';
 const PUBLIC_PORT_KEY = 'amnezia_mtproto_public_port';
 const ADDRESS_KEY = 'amnezia_mtproto_address';
 
-const DEFAULT_SNI = 'www.cloudflare.com';
+const DEFAULT_SNI = 'www.ns.nl';
 const USER_NAME = 'amnezia';
 
 const ENABLE_TIMEOUT_MS = 180_000;

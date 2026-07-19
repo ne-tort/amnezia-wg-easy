@@ -1866,33 +1866,52 @@ enable_mtproto() {
   sni=$(python3 - <<PY 2>/dev/null || true
 import json
 exclude = "${xray_sni}".strip().lower()
+# 1) unified sni-cache (scan + bank from panel)
 try:
   d = json.load(open("/tmp/awg-sni-cache.json"))
-  entries = d.get("entries") or []
-  for e in entries:
+  for e in (d.get("entries") or []):
     if e.get("alive") is False:
       continue
     dom = (e.get("domain") or "").strip()
     if dom and dom.lower() != exclude:
       print(dom)
-      break
-  else:
-    alt = (d.get("defaultSni") or "").strip()
-    if alt and alt.lower() != exclude:
-      print(alt)
+      raise SystemExit
+  alt = (d.get("defaultSni") or "").strip()
+  if alt and alt.lower() != exclude:
+    print(alt)
+    raise SystemExit
+except SystemExit:
+  raise
 except Exception:
   pass
+# 2) shared Reality/MTProto bank seed
+for path in (
+  "${INSTALL_DIR}/config/sni-bank.seed.json",
+  "/app/config/sni-bank.seed.json",
+):
+  try:
+    raw = json.load(open(path))
+    domains = raw if isinstance(raw, list) else list((raw or {}).get("domains") or [])
+    for dom in domains:
+      dom = str(dom or "").strip()
+      if dom and dom.lower() != exclude:
+        print(dom)
+        raise SystemExit
+  except SystemExit:
+    raise
+  except Exception:
+    continue
 PY
 )
   if [[ -z "$sni" || "$sni" == "$xray_sni" ]]; then
-    sni="www.cloudflare.com"
+    sni="www.ns.nl"
     local sni_l xray_l
     sni_l=$(printf '%s' "$sni" | tr '[:upper:]' '[:lower:]')
     xray_l=$(printf '%s' "$xray_sni" | tr '[:upper:]' '[:lower:]')
     if [[ -n "$xray_l" && "$sni_l" == "$xray_l" ]]; then
-      sni="www.microsoft.com"
+      sni="www.czc.cz"
     fi
-    logw "MTProto SNI fallback: ${sni}"
+    logw "MTProto SNI fallback (bank): ${sni}"
   else
     logi "MTProto SNI: ${sni} (≠ Xray ${xray_sni:-none})"
   fi
