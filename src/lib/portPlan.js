@@ -319,6 +319,10 @@ function writeStreamConfigs(plan) {
     fs.writeFileSync(mapPath, `${lines.join('\n')}`, 'utf8');
 
     const defaultUp = block.defaultUpstream || '127.0.0.1:9';
+    // Variable proxy_pass (map → hostname:port) needs a resolver at runtime.
+    // Without it nginx logs "no resolver defined to resolve amnezia-mtproto"
+    // and resets the client TLS — Fake-TLS/mask and Reality look dead despite
+    // healthy containers. Docker embedded DNS is 127.0.0.11.
     const conf = [
       `map $ssl_preread_server_name $demux_backend_${block.port} {`,
       `    include /opt/amnezia/awg/nginx/${mapName};`,
@@ -328,6 +332,8 @@ function writeStreamConfigs(plan) {
       'server {',
       `    listen ${block.port};`,
       '    ssl_preread on;',
+      '    resolver 127.0.0.11 valid=10s ipv6=off;',
+      '    resolver_timeout 5s;',
       `    proxy_pass $demux_backend_${block.port};`,
       '    proxy_connect_timeout 5s;',
       '    proxy_timeout 1d;',

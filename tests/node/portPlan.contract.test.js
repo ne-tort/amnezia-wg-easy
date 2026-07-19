@@ -193,3 +193,28 @@ test('assertSniConflict only when public ports match', () => {
   // Different public ports → same SNI allowed
   assert.doesNotThrow(() => portPlan.assertSniConflict('mtproto', 'www.gov.uk', 8443));
 });
+
+test('writeStreamConfigs: demux server includes Docker DNS resolver', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'portplan-'));
+  const prev = process.env.WG_PATH;
+  process.env.WG_PATH = tmp;
+  try {
+    const { portPlan } = loadPortPlan({ WG_PATH: tmp });
+    const plan = portPlan.computePlan([
+      panel(10123),
+      xray(443),
+      mtproto(443),
+    ]);
+    portPlan.writeStreamConfigs(plan);
+    const conf = fs.readFileSync(path.join(tmp, 'nginx', 'stream', 'demux-443.conf'), 'utf8');
+    assert.match(conf, /resolver 127\.0\.0\.11 valid=10s ipv6=off;/);
+    assert.match(conf, /proxy_pass \$demux_backend_443;/);
+    assert.match(conf, /ssl_preread on;/);
+  } finally {
+    if (prev == null) delete process.env.WG_PATH;
+    else process.env.WG_PATH = prev;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
