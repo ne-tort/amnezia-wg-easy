@@ -461,14 +461,52 @@ async function probeListenInsideContainer(port) {
   return { ok: false, via: 'nc', out: out || 'not listening' };
 }
 
+async function probeFakeTlsLocal() {
+  const { probeFakeTls } = require('./mtprotoFakeTlsProbe');
+  const links = getProxyLinks();
+  if (!links) {
+    return { ok: false, via: 'faketls', out: 'missing secret/sni', code: 'NO_LINK' };
+  }
+  // Prefer container listen port on loopback (host-net / published).
+  const targets = [
+    { host: '127.0.0.1', port: getPort() },
+    { host: '127.0.0.1', port: getClientFacingPort() },
+  ].filter((t, i, arr) => t.port > 0 && arr.findIndex((x) => x.port === t.port) === i);
+
+  let last = { ok: false, via: 'faketls', out: 'no targets', code: 'NO_TARGET' };
+  for (const t of targets) {
+    const r = await probeFakeTls({
+      host: t.host,
+      port: t.port,
+      eeSecret: links.eeSecret,
+      timeoutMs: 8_000,
+    });
+    last = {
+      ok: r.ok,
+      via: 'faketls',
+      out: `${r.code}: ${r.message} @${t.host}:${t.port} (${r.ms}ms)`,
+      code: r.code,
+      ms: r.ms,
+      target: `${t.host}:${t.port}`,
+    };
+    if (r.ok) return last;
+  }
+  return last;
+}
+
 async function runSmoke() {
   const containerUp = await dockerContainerRunning();
   const port = getPort();
   const dial = containerUp
     ? await probeListenInsideContainer(port)
     : { ok: false, via: 'skip', out: 'container down' };
-  const ok = containerUp && dial.ok;
-  lastSmoke = { ok, containerUp, dial, at: Date.now() };
+  let faketls = { ok: false, via: 'faketls', out: 'skipped', code: 'SKIP' };
+  if (containerUp && dial.ok) {
+    faketls = await probeFakeTlsLocal();
+  }
+  // Green only when FakeTLS HMAC verifies — listen alone is not enough.
+  const ok = containerUp && dial.ok && faketls.ok;
+  lastSmoke = { ok, containerUp, dial, faketls, at: Date.now() };
   return lastSmoke;
 }
 
@@ -822,4 +860,6 @@ module.exports = {
   getClientFacingPort,
   getPublicHost,
   ensureMtprotoContainer,
+  runSmoke,
+  probeFakeTlsLocal,
 };

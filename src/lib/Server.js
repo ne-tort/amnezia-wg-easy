@@ -1142,6 +1142,15 @@ module.exports = class Server {
         acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
         return amneziaMtproto.getStatus();
       }))
+      .post('/api/amnezia-mtproto/smoke', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MTPROTO);
+        try {
+          const smoke = await amneziaMtproto.runSmoke();
+          return { success: true, smoke, status: amneziaMtproto.getStatus() };
+        } catch (err) {
+          throw httpError(500, err.message || 'Amnezia MTProto smoke failed');
+        }
+      }))
       .get('/api/port-plan', defineEventHandler((event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
         return require('./portPlan').getStatusSummary();
