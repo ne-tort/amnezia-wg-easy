@@ -115,6 +115,14 @@ test('pickDefaultSni falls back to bank when no scan', () => {
   assert.equal(f.pickDefaultSni(), 'only-bank.example');
 });
 
+test('domainHasPublicDns rejects unresolvable CDN SANs', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sni-dns-'));
+  const f = loadFinder(tmp);
+  assert.equal(await f.domainHasPublicDns(''), false);
+  assert.equal(await f.domainHasPublicDns('not-a-real-host-zzzz.invalid'), false);
+  assert.equal(await f.domainHasPublicDns('example.com'), true);
+});
+
 test('cacheStatus marks expired scan as stale', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'sni-cache-'));
   const f = loadFinder(tmp);

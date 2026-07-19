@@ -2019,8 +2019,13 @@ api_curl() {
     path="${apiprefix}${path#/api}"
   fi
   cookie="${CONF_DIR}/session.cj"
+  # DNS/Xray/MTProto enable can exceed 2–3 minutes (image build, nginx demux, smoke).
   local maxtime=120
-  [[ "$path" == *"/amnezia-dns/enable"* ]] && maxtime=180
+  case "$path" in
+    */amnezia-dns/enable*) maxtime=300 ;;
+    */amnezia-xray/enable*|*/amnezia-mtproto/enable*) maxtime=360 ;;
+    */amnezia-xray/sni-scan*) maxtime=360 ;;
+  esac
   if [[ -n "$body" ]]; then
     curl -sk "${resolve[@]}" -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" \
       -H 'Content-Type: application/json' \
@@ -2028,6 +2033,28 @@ api_curl() {
   else
     curl -sk "${resolve[@]}" -c "$cookie" -b "$cookie" -X "$method" "${base}${path}" --max-time "$maxtime"
   fi
+}
+
+# Wait until sidecar enable/disable job finishes (busy=false).
+wait_api_service_idle() {
+  local path="$1" max_sec="${2:-240}" i status busy phase
+  for i in $(seq 1 "$max_sec"); do
+    status=$(api_curl GET "$path" 2>/dev/null || true)
+    busy=$(printf '%s' "$status" | sed -n 's/.*"busy"[[:space:]]*:[[:space:]]*\(true\|false\).*/\1/p' | head -1)
+    phase=$(printf '%s' "$status" | sed -n 's/.*"phase"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    if [[ "$busy" != "true" && "$phase" != "installing" && "$phase" != "removing" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  logw "Таймаут ожидания idle для ${path} (phase=${phase:-?} busy=${busy:-?})"
+  return 1
+}
+
+api_enable_ok() {
+  local resp="${1:-}"
+  [[ -n "$resp" ]] || return 1
+  printf '%s' "$resp" | grep -Eq '"success"[[:space:]]*:[[:space:]]*true|"phase"[[:space:]]*:[[:space:]]*"(running|degraded)"'
 }
 
 api_login() {
@@ -2159,8 +2186,26 @@ PY
 
   body=$(printf '{"sni":"%s","fingerprint":"chrome","flow":"xtls-rprx-vision","publicPort":%s,"address":"%s"}' \
     "$sni" "$pub" "$address")
+  wait_api_service_idle /api/amnezia-xray 60 || true
   resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
   logi "Xray enable: ${resp:0:300}"
+  if ! api_enable_ok "$resp"; then
+    logw "Xray enable не подтверждён — жду idle и повторяю..."
+    wait_api_service_idle /api/amnezia-xray 180 || true
+    sleep 2
+    resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
+    logi "Xray enable retry: ${resp:0:300}"
+  fi
+  wait_api_service_idle /api/amnezia-xray 180 || true
+  if ! api_enable_ok "$resp"; then
+    status=$(api_curl GET /api/amnezia-xray || true)
+    if echo "$status" | grep -Eq '"phase"[[:space:]]*:[[:space:]]*"(running|degraded)"'; then
+      logi "Xray в итоге running/degraded"
+      return 0
+    fi
+    loge "Xray enable не удался"
+    return 1
+  fi
 }
 
 enable_mtproto() {
@@ -2169,6 +2214,9 @@ enable_mtproto() {
   local xray_sni status sni_stored body resp pub
   pub=$(grep -E '^MTPROTO_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   pub="${pub:-443}"
+
+  # Xray enable may still hold the job / demux — wait so MTProto does not get 409 Conflict.
+  wait_api_service_idle /api/amnezia-xray 180 || true
 
   status=$(api_curl GET /api/amnezia-mtproto || true)
   sni_stored=$(printf '%s' "$status" | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
@@ -2179,9 +2227,13 @@ enable_mtproto() {
     elif sni_reality_ok "$sni_stored"; then
       logi "MTProto: оставляю SNI ${sni_stored}"
       body=$(printf '{"address":"%s","publicPort":%s}' "$address" "$pub")
+      wait_api_service_idle /api/amnezia-mtproto 60 || true
       resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
       logi "MTProto enable: ${resp:0:300}"
-      return 0
+      if api_enable_ok "$resp"; then
+        return 0
+      fi
+      logw "MTProto enable со старым SNI не подтверждён — новый выбор"
     else
       logw "MTProto: SNI ${sni_stored} не Reality-ok — новый выбор"
     fi
@@ -2205,6 +2257,11 @@ def ok(d):
   if not d or d == exclude:
     return False
   if blocked.search(d) or d.endswith('.рф'):
+    return False
+  try:
+    import socket
+    socket.getaddrinfo(d, 443, type=socket.SOCK_STREAM)
+  except Exception:
     return False
   return True
 try:
@@ -2264,8 +2321,26 @@ PY
   fi
 
   body=$(printf '{"sni":"%s","address":"%s","publicPort":%s}' "$sni" "$address" "$pub")
+  wait_api_service_idle /api/amnezia-mtproto 60 || true
   resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
   logi "MTProto enable: ${resp:0:300}"
+  if ! api_enable_ok "$resp"; then
+    logw "MTProto enable не подтверждён — жду idle и повторяю..."
+    wait_api_service_idle /api/amnezia-mtproto 180 || true
+    sleep 2
+    resp=$(api_curl POST /api/amnezia-mtproto/enable "$body" || true)
+    logi "MTProto enable retry: ${resp:0:300}"
+  fi
+  wait_api_service_idle /api/amnezia-mtproto 180 || true
+  if ! api_enable_ok "$resp"; then
+    status=$(api_curl GET /api/amnezia-mtproto || true)
+    if echo "$status" | grep -Eq '"phase"[[:space:]]*:[[:space:]]*"(running|degraded)"'; then
+      logi "MTProto в итоге running/degraded"
+      return 0
+    fi
+    loge "MTProto enable не удался"
+    return 1
+  fi
 }
 
 post_configure() {

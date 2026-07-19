@@ -1024,6 +1024,18 @@ async function enableInternal(opts = {}) {
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
     assertSniNotMtproto(sni, publicPort);
+    {
+      const { domainHasPublicDns } = require('./sniFinder');
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await domainHasPublicDns(sni))) {
+        throw Object.assign(
+          new Error(
+            `SNI «${sni}» не резолвится в публичном DNS (нужен реальный hostname, не CDN-SAN)`,
+          ),
+          { status: 400, code: 'XRAY_SNI_NO_DNS' },
+        );
+      }
+    }
 
     if (opts.port != null && String(opts.port).trim() !== '') {
       const requested = parseInt(String(opts.port).trim(), 10);

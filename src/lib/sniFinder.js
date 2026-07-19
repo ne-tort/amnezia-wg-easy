@@ -35,6 +35,8 @@ const EMPTY_MSG = 'Nothing found';
 const GENERIC_SAN = new Set([
   'sni.cloudflaressl.com',
   'ssl.cloudflare.com',
+  'secondary.cloudflare.com', // appears on edge certs; often no public A/AAAA
+  'sni.cloudflare.com',
   'akamai.net',
   'cloudfront.net',
   'edgekey.net',
@@ -187,6 +189,33 @@ function isDomain(d) {
   if (s.endsWith('.local') || s.endsWith('.lan') || s.endsWith('.internal')) return false;
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(s)) return false;
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i.test(s);
+}
+
+/**
+ * True if domain has a public A (or any AAAA) — required for Reality dest / Telemt Fake-TLS.
+ * Scan IPs often present CN/SAN that do not resolve on the public Internet.
+ */
+async function domainHasPublicDns(domain) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!isDomain(d)) return false;
+  try {
+    const rows = await dns.lookup(d, { all: true, verbatim: true });
+    for (const row of rows || []) {
+      if (!row || !row.address) continue;
+      if (row.family === 4 || row.family === 'IPv4') {
+        if (isPublicIpv4(row.address)) return true;
+      } else if (row.family === 6 || row.family === 'IPv6') {
+        // Accept global-ish IPv6 (reject obvious ULA / link-local)
+        const a = String(row.address).toLowerCase();
+        if (a.startsWith('fe80:') || a.startsWith('fc') || a.startsWith('fd')) continue;
+        if (a === '::1') continue;
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /** Auto-pick/bank/scan must skip .ru / .su / .рф (xn--p1ai). Manual user entry may still use them. */
@@ -847,6 +876,12 @@ async function runScanInternal({ cidr, refIp, force }) {
     if (Date.now() - job.startedAt > JOB_TIMEOUT_MS) {
       throw scanError('SCAN_TIMEOUT', 'Scan timed out', 504);
     }
+    // Cert SANs on CDN edges often lack public DNS (breaks Xray dest + Telemt tls_emulation).
+    if (!(await domainHasPublicDns(c.domain))) {
+      verifiedCount += 1;
+      setProgress(verifiedCount, candidates.length, 'verifying');
+      return { ok: false, reason: 'no_public_dns' };
+    }
     const v = await verifyHttp2OnIp(c.domain, c.ip);
     verifiedCount += 1;
     setProgress(verifiedCount, candidates.length, 'verifying');
@@ -1061,6 +1096,7 @@ module.exports = {
   TOP_N,
   EMPTY_MSG,
   isPublicIpv4,
+  domainHasPublicDns,
   parseCidr,
   expandCidrHosts,
   base24Cidr,

@@ -10,6 +10,7 @@ const { promisify } = require('node:util');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const net = require('node:net');
 const config = require('../config');
 
 const execFileAsync = promisify(execFile);
@@ -190,10 +191,16 @@ function buildTmeProxyLink({ host, port, eeSecret }) {
 
 function buildConfigToml({ port, sni, secret, publicHost, publicPort }) {
   // Telemt TOML — Fake-TLS only, mask to tls_domain.
-  return [
+  const lines = [
     '[general]',
     'use_middle_proxy = true',
     'log_level = "normal"',
+  ];
+  // Behind Docker NAT, pin public IP so ME handshake advertises the right address.
+  if (publicHost && net.isIPv4(String(publicHost).trim())) {
+    lines.push(`middle_proxy_nat_ip = ${JSON.stringify(String(publicHost).trim())}`);
+  }
+  lines.push(
     '',
     '[general.modes]',
     'classic = false',
@@ -223,7 +230,8 @@ function buildConfigToml({ port, sni, secret, publicHost, publicPort }) {
     '[access.users]',
     `${USER_NAME} = ${JSON.stringify(secret)}`,
     '',
-  ].join('\n');
+  );
+  return lines.join('\n');
 }
 
 function writeConfigToml(opts) {
@@ -237,6 +245,26 @@ function assertSniNotXray(sni, publicPort) {
     sni,
     publicPort != null ? publicPort : getPublicPort(),
   );
+}
+
+/** Fake-TLS + tls_emulation require the mask domain to resolve on public DNS. */
+async function assertSniHasPublicDns(sni) {
+  const d = String(sni || '').trim().toLowerCase();
+  if (!d) {
+    throw Object.assign(new Error('MTProto SNI is required'), {
+      status: 400,
+      code: 'MTPROTO_BAD_SNI',
+    });
+  }
+  const { domainHasPublicDns } = require('./sniFinder');
+  if (!(await domainHasPublicDns(d))) {
+    throw Object.assign(
+      new Error(
+        `SNI «${d}» не резолвится в публичном DNS — Telemt Fake-TLS нужен реальный сайт (не CDN-SAN вроде secondary.cloudflare.com)`,
+      ),
+      { status: 400, code: 'MTPROTO_SNI_NO_DNS' },
+    );
+  }
 }
 
 function excludedPortsForAlloc() {
@@ -507,6 +535,7 @@ async function enableInternal(opts = {}) {
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
     assertSniNotXray(sni, publicPort);
+    await assertSniHasPublicDns(sni);
     if (opts.port != null && String(opts.port).trim() !== '') {
       const requested = parseInt(String(opts.port).trim(), 10);
       if (!Number.isFinite(requested) || requested < 1 || requested > 65535) {

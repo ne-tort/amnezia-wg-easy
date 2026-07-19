@@ -88,6 +88,27 @@ test('getStatus exposes desired persistence keys', () => {
   assert.match(st.link, /^tg:\/\/proxy\?/);
 });
 
+test('buildConfigToml sets middle_proxy_nat_ip for IPv4 host', () => {
+  const { amneziaMtproto } = loadMtproto();
+  const toml = amneziaMtproto.buildConfigToml({
+    port: 31179,
+    sni: 'www.sbb.ch',
+    secret: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    publicHost: '104.252.53.104',
+    publicPort: 443,
+  });
+  assert.match(toml, /middle_proxy_nat_ip = "104\.252\.53\.104"/);
+  assert.match(toml, /tls_domain = "www\.sbb\.ch"/);
+  const tomlDom = amneziaMtproto.buildConfigToml({
+    port: 31179,
+    sni: 'www.sbb.ch',
+    secret: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    publicHost: 'vpn.example.com',
+    publicPort: 443,
+  });
+  assert.doesNotMatch(tomlDom, /middle_proxy_nat_ip/);
+});
+
 test('allocateInternalPort avoids demux and panel', () => {
   // eslint-disable-next-line import/no-dynamic-require, global-require
   const { allocateInternalPort, needsInternalRealloc } = require(path.join(srcRoot, 'lib', 'internalPort.js'));

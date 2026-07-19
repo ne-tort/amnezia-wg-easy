@@ -402,7 +402,29 @@ async function isHostTcpPortInUse(port) {
   return false;
 }
 
-async function nginxPublishedTcpPorts() {
+/**
+ * Host TCP ports published by nginx (what clients hit).
+ */
+async function nginxHostTcpPorts() {
+  const r = await runCmd('docker', [
+    'inspect', '-f',
+    '{{range $p, $conf := .NetworkSettings.Ports}}{{range $conf}}{{.HostPort}} {{end}}{{end}}',
+    NGINX_CONTAINER,
+  ]);
+  if (!r.ok) return [];
+  const out = [];
+  for (const part of r.stdout.trim().split(/\s+/)) {
+    const n = parseInt(part, 10);
+    if (Number.isFinite(n) && n > 0) out.push(n);
+  }
+  return [...new Set(out)].sort((a, b) => a - b);
+}
+
+/**
+ * Container-side TCP ports published by nginx (Ports map keys).
+ * Demux: 443/tcp; exclusive panel TLS: 8443/tcp — distinguishes 443→443 vs 443→8443.
+ */
+async function nginxContainerTcpPorts() {
   const r = await runCmd('docker', [
     'inspect', '-f',
     '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
@@ -415,6 +437,11 @@ async function nginxPublishedTcpPorts() {
     if (m) out.push(parseInt(m[1], 10));
   }
   return out.sort((a, b) => a - b);
+}
+
+/** @deprecated use nginxHostTcpPorts — name historically meant host publishes */
+async function nginxPublishedTcpPorts() {
+  return nginxHostTcpPorts();
 }
 
 function desiredNginxHostPorts(plan) {
@@ -667,7 +694,8 @@ async function applyPlanUnlocked() {
     }
   }
 
-  const current = await nginxPublishedTcpPorts();
+  const current = await nginxHostTcpPorts();
+  const containerPorts = await nginxContainerTcpPorts();
   const want = portsNeedRecreate(plan);
   const wantSet = new Set(want);
 
@@ -688,10 +716,13 @@ async function applyPlanUnlocked() {
   if (plan.panelExclusive && !current.includes(plan.panelExclusive.hostPort)) {
     needRecreate = true;
   }
-  if (!plan.panelExclusive && current.includes(panelPublicPort())
-    && plan.demuxPorts.some((d) => d.port === panelPublicPort())) {
-    // panel moved into demux — host still has old panel mapping style; recreate
-    needRecreate = true;
+  // Panel joined demux on its public port: must publish demux listen (443→443),
+  // not the old exclusive mapping (host→8443). Host port alone is ambiguous when
+  // PANEL_HTTPS_PORT===443 — detect leftover container 8443 instead.
+  if (!plan.panelExclusive && plan.demuxPorts.some((d) => d.port === panelPublicPort())) {
+    if (containerPorts.includes(PANEL_TLS_INTERNAL)) {
+      needRecreate = true;
+    }
   }
 
   if (needRecreate) {
