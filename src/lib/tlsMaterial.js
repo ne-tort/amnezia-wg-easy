@@ -6,8 +6,6 @@
  */
 
 const crypto = require('node:crypto');
-const fs = require('node:fs');
-const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const config = require('../config');
@@ -17,8 +15,10 @@ const NGINX_CONTAINER = 'nginx';
 
 const CERT_SOURCES = Object.freeze(['self_signed', 'panel', 'manual_pem', 'manual_path', 'issue_le']);
 
-function runCmd(bin, args, { timeout = 60_000 } = {}) {
-  return execFileAsync(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024 })
+function runCmd(bin, args, { timeout = 60_000, input } = {}) {
+  const opts = { timeout, maxBuffer: 4 * 1024 * 1024 };
+  if (input != null) opts.input = input;
+  return execFileAsync(bin, args, opts)
     .then(({ stdout, stderr }) => ({
       ok: true,
       stdout: String(stdout || ''),
@@ -131,6 +131,28 @@ async function readPemFromVolume(domain) {
   ], { timeout: 15_000 });
   if (!r.ok || !String(r.stdout || '').includes('BEGIN CERTIFICATE')) return null;
   return String(r.stdout);
+}
+
+async function readKeyFromVolume(domain) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!d) return null;
+  const vol = await resolveCertbotVolumeName();
+  const paths = certPathsForDomain(d);
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt:ro`,
+    'alpine:3.20',
+    'cat', paths.key,
+  ], { timeout: 15_000 });
+  if (!r.ok || !String(r.stdout || '').includes('BEGIN')) return null;
+  return String(r.stdout);
+}
+
+async function backupLivePair(domain) {
+  const cert = await readPemFromVolume(domain);
+  const key = await readKeyFromVolume(domain);
+  if (cert && key) return { cert, key };
+  return null;
 }
 
 async function copyLiveCert(fromDomain, toDomain) {
@@ -257,6 +279,7 @@ function certbotIssueError(detail, domain) {
 
 /**
  * Issue or renew LE cert for FQDN via certbot webroot (nginx must serve /.well-known).
+ * On force renew: backup existing PEM first; restore if issue fails and live files disappear.
  * @param {string} domain
  * @param {string} email
  * @param {{ force?: boolean }} [opts]
@@ -281,24 +304,56 @@ async function issueLetsEncrypt(domain, email, opts = {}) {
   const force = opts.force === true;
   const vol = await resolveCertbotVolumeName();
   const wwwVol = await resolveCertbotWwwVolumeName();
-  const args = [
-    'run', '--rm',
-    '-v', `${vol}:/etc/letsencrypt`,
-    '-v', `${wwwVol}:/var/www/certbot`,
-    'certbot/certbot',
-    'certonly', '--webroot', '-w', '/var/www/certbot',
-    '-d', d,
-    '--email', em,
-    '--agree-tos',
-    '--non-interactive',
-    force ? '--force-renewal' : '--keep-until-expiring',
-  ];
-  const r = await runCmd('docker', args, { timeout: 300_000 });
+  const existed = await certExistsInVolume(d);
+  const backup = (force || existed) ? await backupLivePair(d) : null;
+
+  async function restoreIfNeeded() {
+    if (!backup) return;
+    const still = await certExistsInVolume(d);
+    if (!still) {
+      await injectManualPem(d, backup.cert, backup.key).catch(() => null);
+    }
+  }
+
+  // Prefer renew when lineage already exists (avoids "live directory exists").
+  let r = { ok: false, stderr: '', stdout: '' };
+  if (existed && force) {
+    r = await runCmd('docker', [
+      'run', '--rm',
+      '-v', `${vol}:/etc/letsencrypt`,
+      '-v', `${wwwVol}:/var/www/certbot`,
+      'certbot/certbot',
+      'renew',
+      '--cert-name', d,
+      '--force-renewal',
+      '--no-random-sleep-on-renew',
+      '--non-interactive',
+    ], { timeout: 300_000 });
+  }
 
   if (!r.ok) {
+    const args = [
+      'run', '--rm',
+      '-v', `${vol}:/etc/letsencrypt`,
+      '-v', `${wwwVol}:/var/www/certbot`,
+      'certbot/certbot',
+      'certonly', '--webroot', '-w', '/var/www/certbot',
+      '-d', d,
+      '--cert-name', d,
+      '--email', em,
+      '--agree-tos',
+      '--non-interactive',
+      force ? '--force-renewal' : '--keep-until-expiring',
+    ];
+    r = await runCmd('docker', args, { timeout: 300_000 });
+  }
+
+  if (!r.ok) {
+    await restoreIfNeeded();
     throw certbotIssueError(r.stderr || r.stdout, d);
   }
   if (!(await certExistsInVolume(d))) {
+    await restoreIfNeeded();
     const err = new Error(`Certificate files missing after issue for ${d}`);
     err.status = 400;
     err.code = 'CERT_ISSUE_FAILED';
@@ -334,6 +389,15 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
   const force = opts.force === true;
   const vol = await resolveCertbotVolumeName();
   const wwwVol = await resolveCertbotWwwVolumeName();
+  const existed = await certExistsInVolume(d);
+  const backup = (force || existed) ? await backupLivePair(d) : null;
+
+  async function restoreIfNeeded() {
+    if (!backup) return;
+    if (!(await certExistsInVolume(d))) {
+      await injectManualPem(d, backup.cert, backup.key).catch(() => null);
+    }
+  }
 
   // Prefer certbot shortlived + webroot (nginx already serves ACME on :80).
   const certbotArgs = [
@@ -343,6 +407,7 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
     'certbot/certbot',
     'certonly', '--webroot', '-w', '/var/www/certbot',
     '-d', d,
+    '--cert-name', d,
     '--email', em,
     '--agree-tos',
     '--non-interactive',
@@ -371,6 +436,7 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
     ], { timeout: 300_000 });
 
     if (!r.ok) {
+      await restoreIfNeeded();
       throw certbotIssueError(r.stderr || r.stdout, d);
     }
 
@@ -401,12 +467,14 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
         `,
       ], { timeout: 30_000 });
       if (!copy.ok) {
+        await restoreIfNeeded();
         throw certbotIssueError(install.stderr || copy.stderr || 'acme install-cert failed', d);
       }
     }
   }
 
   if (!(await certExistsInVolume(d))) {
+    await restoreIfNeeded();
     const err = new Error(`Certificate files missing after IP issue for ${d}`);
     err.status = 400;
     err.code = 'CERT_ISSUE_FAILED';
@@ -417,6 +485,7 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
 
 /**
  * Write manual PEM into certbot volume live/{domain}/.
+ * Does NOT bind-mount panel WG_PATH (Docker-from-container host path mismatch).
  */
 async function injectManualPem(domain, certPem, keyPem) {
   const d = String(domain || '').trim().toLowerCase();
@@ -427,30 +496,25 @@ async function injectManualPem(domain, certPem, keyPem) {
     throw err;
   }
   const vol = await resolveCertbotVolumeName();
-  const tmpDir = path.join(config.WG_PATH || '/tmp', '_tls_inject');
-  fs.mkdirSync(tmpDir, { recursive: true });
-  const certFile = path.join(tmpDir, 'fullchain.pem');
-  const keyFile = path.join(tmpDir, 'privkey.pem');
-  fs.writeFileSync(certFile, certPem.endsWith('\n') ? certPem : `${certPem}\n`, { mode: 0o644 });
-  fs.writeFileSync(keyFile, keyPem.endsWith('\n') ? keyPem : `${keyPem}\n`, { mode: 0o600 });
+  const certB64 = Buffer.from(certPem.endsWith('\n') ? certPem : `${certPem}\n`).toString('base64');
+  const keyB64 = Buffer.from(keyPem.endsWith('\n') ? keyPem : `${keyPem}\n`).toString('base64');
+  const script = [
+    'set -e',
+    `mkdir -p '/etc/letsencrypt/live/${d}'`,
+    `printf '%s' '${certB64}' | base64 -d > '/etc/letsencrypt/live/${d}/fullchain.pem'`,
+    `printf '%s' '${keyB64}' | base64 -d > '/etc/letsencrypt/live/${d}/privkey.pem'`,
+    `chmod 644 '/etc/letsencrypt/live/${d}/fullchain.pem'`,
+    `chmod 600 '/etc/letsencrypt/live/${d}/privkey.pem'`,
+    `test -s '/etc/letsencrypt/live/${d}/fullchain.pem'`,
+    `test -s '/etc/letsencrypt/live/${d}/privkey.pem'`,
+  ].join('\n');
 
   const r = await runCmd('docker', [
-    'run', '--rm',
+    'run', '--rm', '-i',
     '-v', `${vol}:/etc/letsencrypt`,
-    '-v', `${tmpDir}:/src:ro`,
     'alpine:3.20',
-    'sh', '-c', `
-      mkdir -p '/etc/letsencrypt/live/${d}'
-      cp /src/fullchain.pem '/etc/letsencrypt/live/${d}/fullchain.pem'
-      cp /src/privkey.pem '/etc/letsencrypt/live/${d}/privkey.pem'
-      chmod 644 '/etc/letsencrypt/live/${d}/fullchain.pem'
-      chmod 600 '/etc/letsencrypt/live/${d}/privkey.pem'
-    `,
-  ], { timeout: 30_000 });
-
-  try {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  } catch { /* ignore */ }
+    'sh', '-s',
+  ], { timeout: 30_000, input: script });
 
   if (!r.ok) {
     const err = new Error((r.stderr || 'inject cert failed').trim().slice(0, 300));
@@ -462,7 +526,7 @@ async function injectManualPem(domain, certPem, keyPem) {
 }
 
 /**
- * Generate a self-signed TLS cert and store it in the certbot volume (live/{domain}/).
+ * Generate a self-signed TLS cert directly inside the certbot volume (no host tmp bind).
  */
 async function ensureSelfSignedCert(domain) {
   const d = String(domain || 'localhost').trim().toLowerCase();
@@ -477,49 +541,39 @@ async function ensureSelfSignedCert(domain) {
     return { ...certPathsForDomain(d), certPem: certPem || undefined };
   }
 
-  const tmpDir = path.join(config.WG_PATH || '/tmp', '_tls_selfsigned');
-  fs.mkdirSync(tmpDir, { recursive: true });
-  const certFile = path.join(tmpDir, 'fullchain.pem');
-  const keyFile = path.join(tmpDir, 'privkey.pem');
+  const vol = await resolveCertbotVolumeName();
+  const cn = d.replace(/'/g, '');
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt`,
+    'alpine:3.20',
+    'sh', '-c', `
+      set -e
+      apk add --no-cache openssl >/dev/null
+      mkdir -p '/etc/letsencrypt/live/${cn}'
+      openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
+        -keyout '/etc/letsencrypt/live/${cn}/privkey.pem' \
+        -out '/etc/letsencrypt/live/${cn}/fullchain.pem' \
+        -subj '/CN=${cn}'
+      chmod 644 '/etc/letsencrypt/live/${cn}/fullchain.pem'
+      chmod 600 '/etc/letsencrypt/live/${cn}/privkey.pem'
+    `,
+  ], { timeout: 120_000 });
 
-  const localOpenssl = await runCmd('openssl', [
-    'req', '-x509', '-nodes', '-days', '825', '-newkey', 'rsa:2048',
-    '-keyout', keyFile,
-    '-out', certFile,
-    '-subj', `/CN=${d}`,
-  ], { timeout: 30_000 });
-
-  if (!localOpenssl.ok) {
-    const r = await runCmd('docker', [
-      'run', '--rm',
-      '-v', `${tmpDir}:/out`,
-      'alpine:3.20',
-      'sh', '-c', `apk add --no-cache openssl >/dev/null
-openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
-  -keyout /out/privkey.pem -out /out/fullchain.pem \
-  -subj "/CN=${d}"`,
-    ], { timeout: 120_000 });
-    if (!r.ok) {
-      const err = new Error((r.stderr || 'self-signed cert generation failed').trim().slice(0, 300));
-      err.status = 400;
-      err.code = 'CERT_SELF_SIGNED_FAILED';
-      throw err;
-    }
+  if (!r.ok) {
+    const err = new Error((r.stderr || 'self-signed cert generation failed').trim().slice(0, 300));
+    err.status = 400;
+    err.code = 'CERT_SELF_SIGNED_FAILED';
+    throw err;
   }
-
-  if (!fs.existsSync(certFile) || !fs.existsSync(keyFile)) {
+  const certPem = await readPemFromVolume(d);
+  if (!certPem) {
     const err = new Error('Self-signed certificate files were not created');
     err.status = 400;
     err.code = 'CERT_SELF_SIGNED_FAILED';
     throw err;
   }
-
-  const certPem = fs.readFileSync(certFile, 'utf8');
-  const keyPem = fs.readFileSync(keyFile, 'utf8');
-  try {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  } catch { /* ignore */ }
-  return injectManualPem(d, certPem, keyPem);
+  return { ...certPathsForDomain(d), certPem };
 }
 
 /**
@@ -626,6 +680,7 @@ module.exports = {
   certExistsInVolume,
   certUsableInVolume,
   readPemFromVolume,
+  readKeyFromVolume,
   copyLiveCert,
   removeLiveCert,
   parsePemMeta,

@@ -248,10 +248,21 @@ async function list() {
   const rows = database().prepare(
     'SELECT * FROM ssl_certificates ORDER BY is_panel DESC, type ASC, domain ASC',
   ).all();
+  let publicIp = '';
+  try {
+    const wgHost = String(require('../config').WG_HOST || '').trim();
+    const portPlan = require('./portPlan');
+    if (wgHost && portPlan.isIpLiteral(wgHost)) publicIp = wgHost;
+    else {
+      const preview = await require('./sniFinder').getPublicIpPreview();
+      if (preview && preview.publicIp) publicIp = String(preview.publicIp).trim();
+    }
+  } catch { /* optional */ }
   return {
     certs: rows.map((row) => rowToPublic(row, { includeSecrets: false })),
     certbotEmail: tlsMaterial.getCertbotEmail() || '',
     panelDomain: tlsMaterial.panelLiveDomain() || '',
+    publicIp,
   };
 }
 
@@ -266,14 +277,24 @@ async function generateRealityKeypair() {
   return amneziaXray.parseX25519Output(`${r.stdout}\n${r.stderr}`);
 }
 
-function normalizeDomainInput(raw) {
+function normalizeDomainInput(raw, { optional = false } = {}) {
   const d = tlsMaterial.normalizeHostname(raw);
-  if (!d) throw httpError(400, 'Domain is required', 'SSL_BAD_DOMAIN');
+  if (!d) {
+    if (optional) return '';
+    throw httpError(400, 'Domain is required', 'SSL_BAD_DOMAIN');
+  }
   return d;
 }
 
+function defaultSelfSignedHost() {
+  return tlsMaterial.panelLiveDomain()
+    || tlsMaterial.normalizeHostname(require('../config').WG_HOST)
+    || 'panel.local';
+}
+
 async function createSelfSigned(opts = {}) {
-  const domain = normalizeDomainInput(opts.domain);
+  let domain = normalizeDomainInput(opts.domain, { optional: true });
+  if (!domain) domain = defaultSelfSignedHost();
   const issued = await tlsMaterial.ensureSelfSignedCert(domain);
   const meta = issued.certPem
     ? metaFromPem(issued.certPem)

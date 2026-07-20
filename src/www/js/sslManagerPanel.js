@@ -17,6 +17,7 @@ const SslManagerPanel = {
       sslCerts: [],
       sslCertbotEmail: '',
       sslPanelDomain: '',
+      sslPublicIp: '',
       sslSelectedId: null,
       sslDetail: null,
       sslForm: {
@@ -112,6 +113,7 @@ const SslManagerPanel = {
           if (!String(this.certbotEmail || '').trim()) this.certbotEmail = res.certbotEmail;
         }
         if (res && res.panelDomain != null) this.sslPanelDomain = res.panelDomain;
+        if (res && res.publicIp) this.sslPublicIp = res.publicIp;
       } catch (err) {
         this.sslManagerError = (err && err.message) || this.$t('sslLoadFailed');
         this.sslCerts = [];
@@ -154,6 +156,19 @@ const SslManagerPanel = {
       this.sslManagerView = 'create';
       this.resetSslForm();
       this.sslManagerError = null;
+      if (type === 'lets_encrypt') {
+        this.sslForm.leTarget = 'domain';
+      }
+      if (type === 'self_signed') {
+        this.sslForm.domain = this.sslPanelDomain || this.sslPublicIp || '';
+      }
+    },
+    onSslLeTargetChange() {
+      if (this.sslForm.leTarget === 'ip') {
+        this.sslForm.domain = this.sslPublicIp || this.sslPanelDomain || '';
+      } else if (!this.sslForm.domain || this.sslForm.domain === this.sslPublicIp) {
+        this.sslForm.domain = '';
+      }
     },
     async submitSslCreate() {
       if (this.sslManagerBusy || !this.sslManagerCreateType) return;
