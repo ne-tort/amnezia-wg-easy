@@ -103,8 +103,9 @@ function isIpLiteral(host) {
 }
 
 function getSni() {
-  const stored = getSetting(SNI_KEY, '');
-  if (stored) return stored;
+  const raw = getDb().appSettings.get(SNI_KEY);
+  if (raw === '') return '';
+  if (raw != null && String(raw).trim()) return String(raw).trim();
   try {
     const picked = require('./sniFinder').pickDefaultSni();
     if (picked) return picked;
@@ -835,29 +836,26 @@ async function enableInternal(opts = {}) {
       ? String(opts.certSource).trim().toLowerCase()
       : getCertSource();
     const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+    const tlsMaterial = require('./tlsMaterial');
+    const emailOpt = opts.email != null ? opts.email : (opts.certbotEmail != null ? opts.certbotEmail : null);
+    if (emailOpt) tlsMaterial.setCertbotEmail(emailOpt);
 
-    let sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni() || DEFAULT_SNI;
-    if (certSource === 'panel') {
-      const panelDomain = require('./tlsMaterial').panelCertDomain();
-      if (panelDomain) sni = panelDomain;
-    } else if (certSource === 'self_signed' && !(opts.sni != null && String(opts.sni).trim())) {
-      const addr = (opts.address != null ? String(opts.address).trim() : '') || getAddress() || getPublicHost();
-      if (addr && !require('./portPlan').isIpLiteral(addr) && addr.includes('.')) {
-        sni = addr.toLowerCase();
-      } else {
-        sni = 'hysteria.local';
-      }
+    let sni = tlsMaterial.normalizeHostname(opts.sni != null ? String(opts.sni) : '');
+    if (certSource === 'issue_le') {
+      sni = sni || tlsMaterial.normalizeHostname(getSniStored() || getSni() || '');
+    } else if (certSource === 'self_signed' || certSource === 'panel') {
+      // empty SNI OK (bare IP / no client SNI)
+      sni = sni || '';
+    } else {
+      sni = sni || tlsMaterial.normalizeHostname(getSniStored() || '') || '';
     }
 
-    if (certSource === 'issue_le' || certSource === 'panel') {
+    if (certSource === 'issue_le' && sni) {
       const { domainHasPublicDns } = require('./sniFinder');
-      const dnsTarget = certSource === 'panel'
-        ? (require('./tlsMaterial').panelCertDomain() || sni)
-        : sni;
-      if (dnsTarget && !(await domainHasPublicDns(dnsTarget))) {
+      if (!(await domainHasPublicDns(sni))) {
         throw Object.assign(
           new Error(
-            `SNI «${dnsTarget}» не резолвится в публичном DNS (нужен реальный hostname)`,
+            `SNI «${sni}» не резолвится в публичном DNS (нужен реальный hostname)`,
           ),
           { status: 400, code: 'HYSTERIA_SNI_NO_DNS' },
         );
@@ -890,6 +888,7 @@ async function enableInternal(opts = {}) {
     if (certSource === 'self_signed' && opts.tlsInsecureClient == null) {
       tlsInsecure = true;
     }
+    if (certSource === 'issue_le') tlsInsecure = false;
 
     setSetting(SNI_KEY, sni);
     setSetting(ADDRESS_KEY, address);
@@ -904,22 +903,16 @@ async function enableInternal(opts = {}) {
     setSetting(CERT_DOMAIN_KEY, certDomainOverride);
     setSetting(TLS_INSECURE_CLIENT_KEY, tlsInsecure ? '1' : '0');
 
-    const tlsMaterial = require('./tlsMaterial');
-    if (certSource === 'panel') {
-      tlsMaterial.assertPanelCertReuseAllowed('hysteria', publicPort);
-    }
+    // Hysteria is UDP — panel cert on same port as panel HTTPS is allowed
     let certDomainForIssue = certDomainOverride;
     if (!certDomainForIssue) {
       if (certSource === 'panel') {
-        certDomainForIssue = tlsMaterial.panelCertDomain() || sni;
-      } else if (certSource === 'issue_le' || certSource === 'self_signed') {
-        certDomainForIssue = sni || 'hysteria.local';
+        certDomainForIssue = tlsMaterial.panelCertDomain() || 'localhost';
+      } else if (certSource === 'issue_le') {
+        certDomainForIssue = sni;
       } else {
         certDomainForIssue = sni || 'hysteria.local';
       }
-    }
-    if (certSource === 'panel' && certDomainForIssue) {
-      sni = certDomainForIssue;
     }
     await tlsMaterial.resolveCertMaterial({
       certSource,
@@ -928,6 +921,7 @@ async function enableInternal(opts = {}) {
       keyPem: opts.keyPem,
       certPath: opts.certPath,
       keyPath: opts.keyPath,
+      email: emailOpt || tlsMaterial.getCertbotEmail(),
       issueIfMissing: certSource === 'issue_le',
     });
     if (!(await tlsMaterial.certExistsInVolume(resolveCertDomain()))) {

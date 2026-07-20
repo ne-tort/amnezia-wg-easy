@@ -906,6 +906,9 @@ new Vue({
       }
       if (c.panelHttpsPort != null) this.panelHttpsPort = Number(c.panelHttpsPort) || 443;
       if (c.panelDomain != null) this.panelDomain = String(c.panelDomain || '');
+      if (c.certbotEmail != null && String(c.certbotEmail).trim()) {
+        this.certbotEmail = String(c.certbotEmail).trim();
+      }
       this.amneziaXrayMode = st.mode || null;
       this.amneziaXrayDemuxPeers = Array.isArray(st.demuxPeers) ? st.demuxPeers : [];
       if (Array.isArray(st.fingerprints) && st.fingerprints.length) {
@@ -1001,6 +1004,9 @@ new Vue({
           certPath: this.amneziaXrayCertPath,
           keyPath: this.amneziaXrayKeyPath,
         });
+        if (this.amneziaXrayCertSource === 'issue_le') {
+          body.email = String(this.certbotEmail || '').trim();
+        }
       }
       const portRaw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
       if (portRaw !== '') body.port = Number(portRaw);
@@ -1021,8 +1027,7 @@ new Vue({
       try {
         const needSniPreflight = body.sni && (
           this.amneziaXraySecurity === 'reality'
-          || (this.amneziaXraySecurity === 'tls'
-            && (this.amneziaXrayCertSource === 'issue_le' || this.amneziaXrayCertSource === 'panel'))
+          || (this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'issue_le')
         );
         if (needSniPreflight) {
           await this.preflightSniForInstall(body.sni);
@@ -1177,13 +1182,15 @@ new Vue({
     onXraySecurityChange() {
       if (this.amneziaXraySecurity === 'none') {
         this.amneziaXraySni = '';
-      } else if (this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'panel' && this.panelDomain) {
-        this.amneziaXraySni = this.panelDomain;
+      } else if (this.amneziaXraySecurity === 'tls'
+        && (this.amneziaXrayCertSource === 'self_signed' || this.amneziaXrayCertSource === 'panel')) {
+        this.amneziaXraySni = '';
       }
     },
     onXrayCertSourceChange() {
-      if (this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'panel' && this.panelDomain) {
-        this.amneziaXraySni = this.panelDomain;
+      if (this.amneziaXraySecurity === 'tls'
+        && (this.amneziaXrayCertSource === 'self_signed' || this.amneziaXrayCertSource === 'panel')) {
+        this.amneziaXraySni = '';
       }
     },
     /**
@@ -2687,15 +2694,20 @@ new Vue({
       return Number.isInteger(n) && n >= 1 && n <= 65535;
     },
     showXraySniField() {
-      return this.amneziaXraySecurity !== 'none';
+      if (this.amneziaXraySecurity === 'reality') return true;
+      if (this.amneziaXraySecurity === 'tls') {
+        return this.amneziaXrayCertSource === 'issue_le'
+          || this.amneziaXrayCertSource === 'manual_pem'
+          || this.amneziaXrayCertSource === 'manual_path';
+      }
+      return false;
     },
     showXraySniFinder() {
       return this.amneziaXrayModalMode !== 'manage'
         && this.amneziaXraySecurity === 'reality';
     },
     xraySniReadonly() {
-      return this.amneziaXrayModalMode === 'manage'
-        || (this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'panel');
+      return this.amneziaXrayModalMode === 'manage';
     },
     canConfirmAmneziaXrayInstall() {
       if (!String(this.amneziaXrayAddress || '').trim()) return false;
@@ -2704,19 +2716,18 @@ new Vue({
         && this.panelCertConflict('xray', this.amneziaXrayCertSource, this.amneziaXrayPublicPort)) {
         return false;
       }
-      if (!this.certManualFieldsOk(this.amneziaXrayCertSource, {
+      if (this.amneziaXraySecurity === 'tls' && !this.certManualFieldsOk(this.amneziaXrayCertSource, {
         certPem: this.amneziaXrayCertPem,
         keyPem: this.amneziaXrayKeyPem,
         certPath: this.amneziaXrayCertPath,
         keyPath: this.amneziaXrayKeyPath,
       })) return false;
-      if (this.amneziaXraySecurity !== 'none' && !String(this.amneziaXraySni || '').trim()) return false;
+      if (this.amneziaXraySecurity === 'reality' && !String(this.amneziaXraySni || '').trim()) return false;
+      if (this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'issue_le') {
+        if (!String(this.amneziaXraySni || '').trim()) return false;
+        if (!String(this.certbotEmail || '').trim().includes('@')) return false;
+      }
       return true;
-    },
-    xraySniHintKey() {
-      if (this.amneziaXraySecurity === 'reality') return 'xraySniHint_reality';
-      if (this.amneziaXraySecurity === 'tls') return 'xraySniHint_tls';
-      return '';
     },
     sniFinderProgressPct() {
       const t = Number(this.sniFinderProgress && this.sniFinderProgress.total) || 0;

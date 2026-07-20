@@ -88,6 +88,7 @@ window.SidecarPanels = {
 
       panelHttpsPort: 443,
       panelDomain: '',
+      certbotEmail: '',
 
       amneziaNaiveAvailable: false,
       amneziaNaiveHealthy: false,
@@ -137,12 +138,17 @@ window.SidecarPanels = {
     isValidAmneziaNaivePublicPort() {
       return sidecarValidPort(this.amneziaNaivePublicPort);
     },
+    canConfirmAmneziaNaiveInstall() {
+      if (!String(this.amneziaNaiveAddress || '').trim()) return false;
+      if (!this.isValidAmneziaNaivePublicPort) return false;
+      const sni = this.normalizeHostnameInput(this.amneziaNaiveSni);
+      if (!sni || !sni.includes('.')) return false;
+      if (!String(this.certbotEmail || '').trim().includes('@')) return false;
+      return true;
+    },
     canConfirmAmneziaHysteriaInstall() {
       if (!String(this.amneziaHysteriaAddress || '').trim()) return false;
       if (!this.isValidAmneziaHysteriaPublicPort) return false;
-      if (this.panelCertConflict('hysteria', this.amneziaHysteriaCertSource, this.amneziaHysteriaPublicPort)) {
-        return false;
-      }
       if (!this.certManualFieldsOk(this.amneziaHysteriaCertSource, {
         certPem: this.amneziaHysteriaCertPem,
         keyPem: this.amneziaHysteriaKeyPem,
@@ -150,11 +156,19 @@ window.SidecarPanels = {
         keyPath: this.amneziaHysteriaKeyPath,
       })) return false;
       const src = this.amneziaHysteriaCertSource;
-      if (src === 'panel') return true;
-      return !!String(this.amneziaHysteriaSni || '').trim();
+      if (src === 'issue_le') {
+        if (!String(this.amneziaHysteriaSni || '').trim()) return false;
+        if (!String(this.certbotEmail || '').trim().includes('@')) return false;
+      }
+      return true;
     },
     hysteriaSniReadonly() {
-      return this.amneziaHysteriaModalMode === 'manage' || this.amneziaHysteriaCertSource === 'panel';
+      return this.amneziaHysteriaModalMode === 'manage';
+    },
+    showHysteriaSniField() {
+      return this.amneziaHysteriaCertSource === 'issue_le'
+        || this.amneziaHysteriaCertSource === 'manual_pem'
+        || this.amneziaHysteriaCertSource === 'manual_path';
     },
     showHysteriaSniFinder() {
       return this.amneziaHysteriaModalMode !== 'manage'
@@ -180,12 +194,8 @@ window.SidecarPanels = {
       const t = this.$t(key);
       return (t && t !== key) ? t : sec;
     },
-    certSourceHint(src) {
-      const key = `certHint_${src}`;
-      const t = this.$t(key);
-      return (t && t !== key) ? t : '';
-    },
     panelCertConflict(service, certSource, publicPort) {
+      if (service === 'hysteria') return false;
       if (certSource !== 'panel') return false;
       const panelPort = Number(this.panelHttpsPort) || 443;
       return Number(publicPort) === panelPort;
@@ -210,13 +220,18 @@ window.SidecarPanels = {
       return body;
     },
     sniPreflightRequiredForHysteria() {
-      const src = this.amneziaHysteriaCertSource;
-      return src === 'issue_le' || src === 'panel';
+      return this.amneziaHysteriaCertSource === 'issue_le';
     },
-    async setMasqueradeFromSni() {
-      const sni = String(this.amneziaHysteriaSni || '').trim();
-      if (!sni) return;
-      this.amneziaHysteriaMasqueradeUrl = `https://${sni.replace(/^https?:\/\//i, '').split('/')[0]}/`;
+    normalizeHostnameInput(raw) {
+      let s = String(raw || '').trim().toLowerCase();
+      if (!s) return '';
+      s = s.replace(/^https?:\/\//i, '');
+      s = s.split('/')[0].split('?')[0];
+      if (s.includes(':') && !s.includes(']')) {
+        const parts = s.split(':');
+        if (parts.length === 2 && /^\d+$/.test(parts[1])) s = parts[0];
+      }
+      return s.replace(/\.$/, '');
     },
     async openMasqueradeBank() {
       this.masqueradeBankOpen = true;
@@ -240,15 +255,8 @@ window.SidecarPanels = {
       this.closeMasqueradeBank();
     },
     onHysteriaCertSourceChange() {
-      if (this.amneziaHysteriaCertSource === 'panel' && this.panelDomain) {
-        this.amneziaHysteriaSni = this.panelDomain;
-      } else if (this.amneziaHysteriaCertSource === 'self_signed' && !String(this.amneziaHysteriaSni || '').trim()) {
-        const addr = String(this.amneziaHysteriaAddress || '').trim();
-        if (addr && !/^\d+\.\d+\.\d+\.\d+$/.test(addr) && addr.includes('.')) {
-          this.amneziaHysteriaSni = addr.toLowerCase();
-        } else {
-          this.amneziaHysteriaSni = 'hysteria.local';
-        }
+      if (this.amneziaHysteriaCertSource === 'self_signed' || this.amneziaHysteriaCertSource === 'panel') {
+        this.amneziaHysteriaSni = '';
       }
     },
     clearSidecarFieldErrors(service) {
@@ -302,10 +310,13 @@ window.SidecarPanels = {
     buildHysteriaInstallBody() {
       const body = {
         address: String(this.amneziaHysteriaAddress).trim(),
-        sni: String(this.amneziaHysteriaSni).trim(),
+        sni: String(this.amneziaHysteriaSni || '').trim(),
         publicPort: Number(this.amneziaHysteriaPublicPort) || 443,
         certSource: this.amneziaHysteriaCertSource,
       };
+      if (this.amneziaHysteriaCertSource === 'issue_le') {
+        body.email = String(this.certbotEmail || '').trim();
+      }
       this.appendCertFieldsToBody(body, this.amneziaHysteriaCertSource, {
         certPem: this.amneziaHysteriaCertPem,
         keyPem: this.amneziaHysteriaKeyPem,
@@ -328,8 +339,10 @@ window.SidecarPanels = {
     buildNaiveInstallBody() {
       const body = {
         address: String(this.amneziaNaiveAddress).trim(),
-        sni: String(this.amneziaNaiveSni).trim(),
+        sni: this.normalizeHostnameInput(this.amneziaNaiveSni),
         publicPort: Number(this.amneziaNaivePublicPort) || 443,
+        email: String(this.certbotEmail || '').trim(),
+        certSource: 'issue_le',
       };
       const probe = String(this.amneziaNaiveProbeDomain || '').trim();
       if (probe) body.probeResistanceDomain = probe;
@@ -339,6 +352,9 @@ window.SidecarPanels = {
       const c = caps || {};
       if (c.panelHttpsPort != null) this.panelHttpsPort = Number(c.panelHttpsPort) || 443;
       if (c.panelDomain != null) this.panelDomain = String(c.panelDomain || '');
+      if (c.certbotEmail != null && String(c.certbotEmail).trim()) {
+        this.certbotEmail = String(c.certbotEmail).trim();
+      }
       this.applyAmneziaMieruCapability(c);
       this.applyAmneziaHysteriaCapability(c);
       this.applyAmneziaNaiveCapability(c);
@@ -578,23 +594,13 @@ window.SidecarPanels = {
         if (!String(this.amneziaHysteriaAddress || '').trim()) {
           this.amneziaHysteriaAddress = sidecarDefaultAddress();
         }
-        if (!String(this.amneziaHysteriaSni || '').trim()) {
-          if (this.amneziaHysteriaCertSource === 'self_signed') {
-            const addr = sidecarDefaultAddress();
-            if (addr && !/^\d+\.\d+\.\d+\.\d+$/.test(addr) && addr.includes('.')) {
-              this.amneziaHysteriaSni = addr.toLowerCase();
-            } else {
-              this.amneziaHysteriaSni = 'hysteria.local';
-            }
-          } else if (this.sniFinderDefaultSni) {
-            this.amneziaHysteriaSni = this.sniFinderDefaultSni;
-          }
+        if (!String(this.amneziaHysteriaSni || '').trim()
+          && this.amneziaHysteriaCertSource === 'issue_le'
+          && this.sniFinderDefaultSni) {
+          this.amneziaHysteriaSni = this.sniFinderDefaultSni;
         }
-        if (!String(this.amneziaHysteriaMasqueradeUrl || '').trim()) {
-          const sni = String(this.amneziaHysteriaSni || '').trim();
-          if (sni && sni !== 'hysteria.local') {
-            this.amneziaHysteriaMasqueradeUrl = `https://${sni.replace(/^https?:\/\//i, '').split('/')[0]}/`;
-          }
+        if (!String(this.amneziaHysteriaMasqueradeUrl || '').trim() && this.sniFinderDefaultSni) {
+          this.amneziaHysteriaMasqueradeUrl = `https://${this.sniFinderDefaultSni}/`;
         }
         this.onHysteriaCertSourceChange();
         this.amneziaHysteriaInstallOpen = true;
@@ -760,20 +766,16 @@ window.SidecarPanels = {
       });
     },
     async confirmAmneziaNaiveInstall() {
-      if (
-        this.amneziaNaiveBusy
-        || !String(this.amneziaNaiveSni || '').trim()
-        || !String(this.amneziaNaiveAddress || '').trim()
-        || !this.isValidAmneziaNaivePublicPort
-      ) return;
+      if (this.amneziaNaiveBusy || !this.canConfirmAmneziaNaiveInstall) return;
       const body = this.buildNaiveInstallBody();
+      this.amneziaNaiveSni = body.sni;
       const valid = await this.runPortPlanValidate('naive', body);
       if (!valid) return;
       this.closeAmneziaNaiveInstall();
       this.amneziaNaiveBusy = true;
       this.ensureAmneziaNaivePoll();
       try {
-        await this.preflightSniForInstall(this.amneziaNaiveSni);
+        await this.preflightSniForInstall(body.sni);
         await this.withAmneziaDnsTimeout(this.api.enableAmneziaNaive(body), 180000);
         await this.refreshAmneziaNaiveStatus();
         await this.refresh();

@@ -33,6 +33,30 @@ test('buildVlessUrl supports tls and none security', () => {
   assert.doesNotMatch(plain, /type=/);
 });
 
+test('buildVlessUrl omits empty sni and serverName for tls', () => {
+  const url = xrayVless.buildVlessUrl({
+    uuid: '11111111-1111-4111-8111-111111111111',
+    host: '1.2.3.4',
+    port: 443,
+    security: 'tls',
+    sni: '',
+    fingerprint: 'chrome',
+    network: 'tcp',
+    allowInsecure: true,
+  });
+  assert.doesNotMatch(url, /[?&]sni=/);
+  const json = xrayVless.buildClientJson({
+    uuid: '11111111-1111-4111-8111-111111111111',
+    host: '1.2.3.4',
+    port: 443,
+    security: 'tls',
+    sni: '',
+    network: 'tcp',
+    allowInsecure: true,
+  });
+  assert.equal(json.outbounds[0].streamSettings.tlsSettings.serverName, undefined);
+});
+
 test('buildClientJson produces SOCKS inbound for all security modes', () => {
   const json = xrayVless.buildClientJson({
     uuid: '11111111-1111-4111-8111-111111111111',

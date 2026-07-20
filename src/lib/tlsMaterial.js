@@ -78,10 +78,25 @@ async function certExistsInVolume(domain) {
   return r.ok && r.stdout.trim() === 'ok';
 }
 
+const CERTBOT_EMAIL_KEY = 'certbot_email';
+
 function getCertbotEmail() {
+  try {
+    const fromDb = require('./db').appSettings.get(CERTBOT_EMAIL_KEY);
+    const stored = String(fromDb || '').trim();
+    if (stored && stored.includes('@')) return stored;
+  } catch { /* db may be unavailable in scripts */ }
   const fromEnv = String(process.env.CERTBOT_EMAIL || '').trim();
   if (fromEnv && fromEnv.includes('@')) return fromEnv;
   return '';
+}
+
+function setCertbotEmail(email) {
+  const em = String(email || '').trim();
+  if (!em || !em.includes('@')) return;
+  try {
+    require('./db').appSettings.set(CERTBOT_EMAIL_KEY, em);
+  } catch { /* ignore */ }
 }
 
 /**
@@ -97,11 +112,12 @@ async function issueLetsEncrypt(domain, email) {
   }
   const em = String(email || getCertbotEmail() || '').trim();
   if (!em || !em.includes('@')) {
-    const err = new Error('CERTBOT_EMAIL is required to issue Let\'s Encrypt certificates');
+    const err = new Error('Email is required for Let\'s Encrypt');
     err.status = 400;
     err.code = 'CERT_NO_EMAIL';
     throw err;
   }
+  setCertbotEmail(em);
 
   const vol = await resolveCertbotVolumeName();
   const r = await runCmd('docker', [
@@ -280,9 +296,9 @@ async function resolveCertMaterial(opts = {}) {
 
   if (!(await certExistsInVolume(certDomain))) {
     if (source === 'issue_le') {
-      await issueLetsEncrypt(certDomain);
+      await issueLetsEncrypt(certDomain, opts.email);
     } else if (opts.issueIfMissing) {
-      await issueLetsEncrypt(certDomain);
+      await issueLetsEncrypt(certDomain, opts.email);
     } else {
       const err = new Error(`Certificate not found for ${certDomain} in certbot volume`);
       err.status = 400;
@@ -293,20 +309,41 @@ async function resolveCertMaterial(opts = {}) {
   return { ...certPathsForDomain(certDomain), source: source === 'panel' ? 'panel' : source };
 }
 
+/**
+ * Block panel cert reuse on the same *TCP* public port as panel HTTPS.
+ * Hysteria is UDP — call sites must not use this for hysteria.
+ */
 function assertPanelCertReuseAllowed(serviceId, publicPort) {
+  if (serviceId === 'hysteria') return;
   const panelPort = parseInt(String(config.PANEL_HTTPS_PORT || '443'), 10);
   const pub = parseInt(String(publicPort), 10);
   if (Number.isFinite(panelPort) && pub === panelPort) {
     const err = new Error(`${serviceId} cannot reuse panel certificate on the same public port (${pub})`);
     err.status = 400;
     err.code = 'CERT_PORT_CONFLICT';
-    err.field = 'publicPort';
+    err.field = 'certSource';
     throw err;
   }
 }
 
+/** Normalize hostname for LE / Naive SNI: strip scheme, path, port. */
+function normalizeHostname(raw) {
+  let s = String(raw || '').trim().toLowerCase();
+  if (!s) return '';
+  s = s.replace(/^https?:\/\//i, '');
+  s = s.split('/')[0];
+  s = s.split('?')[0];
+  // strip :port if not IPv6
+  if (s.includes(':') && !s.includes(']')) {
+    const parts = s.split(':');
+    if (parts.length === 2 && /^\d+$/.test(parts[1])) s = parts[0];
+  }
+  return s.replace(/\.$/, '');
+}
+
 module.exports = {
   CERT_SOURCES,
+  CERTBOT_EMAIL_KEY,
   NGINX_CONTAINER,
   isFqdn,
   panelCertDomain,
@@ -319,4 +356,6 @@ module.exports = {
   resolveCertMaterial,
   assertPanelCertReuseAllowed,
   getCertbotEmail,
+  setCertbotEmail,
+  normalizeHostname,
 };

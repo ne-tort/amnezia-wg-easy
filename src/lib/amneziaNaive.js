@@ -624,9 +624,12 @@ async function enableInternal(opts = {}) {
       });
     }
 
-    const sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni();
-    if (!sni || !isFqdn(sni)) {
-      throw Object.assign(new Error('Naive SNI must be a valid FQDN'), {
+    const tlsMaterial = require('./tlsMaterial');
+    const sni = tlsMaterial.normalizeHostname(
+      (opts.sni != null ? String(opts.sni) : '') || getSni() || '',
+    );
+    if (!sni || !tlsMaterial.isFqdn(sni)) {
+      throw Object.assign(new Error('Naive requires a real domain (FQDN)'), {
         status: 400,
         code: 'NAIVE_BAD_SNI',
       });
@@ -651,26 +654,19 @@ async function enableInternal(opts = {}) {
       setSetting(PROBE_KEY, probeDomain);
     }
 
-    const certSource = opts.certSource != null
-      ? String(opts.certSource).trim().toLowerCase()
-      : getCertSource();
-    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
-    setSetting(CERT_SOURCE_KEY, certSource);
-    setSetting(CERT_DOMAIN_KEY, certDomainOverride);
+    const emailOpt = opts.email != null ? opts.email : (opts.certbotEmail != null ? opts.certbotEmail : null);
+    if (emailOpt) tlsMaterial.setCertbotEmail(emailOpt);
 
-    const tlsMaterial = require('./tlsMaterial');
-    const certDomain = certDomainOverride || sni;
-    if (certSource === 'panel') {
-      tlsMaterial.assertPanelCertReuseAllowed('naive', publicPort);
-    }
+    // Naive always uses Let's Encrypt on the modal SNI
+    const certSource = 'issue_le';
+    setSetting(CERT_SOURCE_KEY, certSource);
+    setSetting(CERT_DOMAIN_KEY, sni);
+
     await tlsMaterial.resolveCertMaterial({
       certSource,
-      domain: certDomain,
-      certPem: opts.certPem,
-      keyPem: opts.keyPem,
-      certPath: opts.certPath,
-      keyPath: opts.keyPath,
-      issueIfMissing: certSource === 'issue_le',
+      domain: sni,
+      email: emailOpt || tlsMaterial.getCertbotEmail(),
+      issueIfMissing: true,
     });
     if (!(await tlsMaterial.certExistsInVolume(sni))) {
       throw Object.assign(

@@ -156,8 +156,9 @@ function assertSniDemux(sni, publicPort) {
 }
 
 function getSni() {
-  const stored = getSetting(SNI_KEY, '');
-  if (stored) return stored;
+  const raw = getDb().appSettings.get(SNI_KEY);
+  if (raw === '') return '';
+  if (raw != null && String(raw).trim()) return String(raw).trim();
   try {
     // eslint-disable-next-line global-require
     const picked = require('./sniFinder').pickDefaultSni();
@@ -1080,13 +1081,24 @@ async function enableInternal(opts = {}) {
       ? String(opts.certSource).trim().toLowerCase()
       : getCertSource();
     const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+    const tlsMaterial = require('./tlsMaterial');
+    const emailOpt = opts.email != null ? opts.email : (opts.certbotEmail != null ? opts.certbotEmail : null);
+    if (emailOpt) tlsMaterial.setCertbotEmail(emailOpt);
 
-    let sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni() || DEFAULT_SNI;
+    let sni = tlsMaterial.normalizeHostname(
+      opts.sni != null ? String(opts.sni) : (getSniStored() || ''),
+    );
     if (security === 'none') {
       sni = '';
-    } else if (security === 'tls' && certSource === 'panel') {
-      const panelDomain = require('./tlsMaterial').panelCertDomain();
-      if (panelDomain) sni = panelDomain;
+    } else if (security === 'reality') {
+      sni = sni || getSni() || DEFAULT_SNI;
+    } else if (security === 'tls') {
+      if (certSource === 'issue_le') {
+        sni = sni || tlsMaterial.normalizeHostname(opts.sni || '');
+      } else {
+        // self_signed / panel / manual: allow empty SNI (bare IP)
+        sni = sni || '';
+      }
     }
 
     let fingerprint = opts.fingerprint != null ? String(opts.fingerprint).trim() : getFingerprint();
@@ -1108,15 +1120,12 @@ async function enableInternal(opts = {}) {
       assertSniDemux(sni, publicPort);
     }
 
-    if (security === 'reality' || (security === 'tls' && (certSource === 'issue_le' || certSource === 'panel'))) {
+    if (security === 'reality' || (security === 'tls' && certSource === 'issue_le' && sni)) {
       const { domainHasPublicDns } = require('./sniFinder');
-      const dnsTarget = (security === 'tls' && certSource === 'panel')
-        ? (require('./tlsMaterial').panelCertDomain() || sni)
-        : sni;
-      if (dnsTarget && !(await domainHasPublicDns(dnsTarget))) {
+      if (sni && !(await domainHasPublicDns(sni))) {
         throw Object.assign(
           new Error(
-            `SNI «${dnsTarget}» не резолвится в публичном DNS (нужен реальный hostname, не CDN-SAN)`,
+            `SNI «${sni}» не резолвится в публичном DNS (нужен реальный hostname, не CDN-SAN)`,
           ),
           { status: 400, code: 'XRAY_SNI_NO_DNS' },
         );
@@ -1143,21 +1152,23 @@ async function enableInternal(opts = {}) {
     if (security === 'tls' && certSource === 'self_signed' && opts.allowInsecure == null) {
       allowInsecure = true;
     }
+    if (security === 'tls' && certSource === 'issue_le') {
+      allowInsecure = false;
+    }
     setSetting(ALLOW_INSECURE_KEY, allowInsecure ? '1' : '0');
 
     if (security === 'tls') {
-      const tlsMaterial = require('./tlsMaterial');
       if (certSource === 'panel') {
         tlsMaterial.assertPanelCertReuseAllowed('xray', publicPort);
       }
       let certDomain = certDomainOverride;
       if (!certDomain) {
         if (certSource === 'panel') {
-          certDomain = tlsMaterial.panelCertDomain() || sni;
-        } else if (certSource === 'issue_le' || certSource === 'self_signed') {
-          certDomain = sni || 'xray.local';
+          certDomain = tlsMaterial.panelCertDomain() || sni || 'localhost';
+        } else if (certSource === 'issue_le') {
+          certDomain = sni;
         } else {
-          certDomain = resolveCertDomain();
+          certDomain = sni || 'xray.local';
         }
       }
       await tlsMaterial.resolveCertMaterial({
@@ -1167,6 +1178,7 @@ async function enableInternal(opts = {}) {
         keyPem: opts.keyPem,
         certPath: opts.certPath,
         keyPath: opts.keyPath,
+        email: emailOpt || tlsMaterial.getCertbotEmail(),
         issueIfMissing: certSource === 'issue_le',
       });
     }

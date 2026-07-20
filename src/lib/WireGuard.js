@@ -833,6 +833,9 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
       serverCapabilities: {
         panelHttpsPort: parseInt(String(config.PANEL_HTTPS_PORT || '443'), 10),
         panelDomain: String(config.PANEL_DOMAIN || '').trim(),
+        certbotEmail: (() => {
+          try { return require('./tlsMaterial').getCertbotEmail() || ''; } catch { return ''; }
+        })(),
         amneziaDnsAvailable,
         amneziaDns: {
           phase: amneziaDnsStatus.phase,

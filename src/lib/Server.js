@@ -1076,6 +1076,7 @@ module.exports = class Server {
             grpcMultiMode: body && (body.grpcMultiMode != null ? body.grpcMultiMode : body.grpc_multi_mode),
             alpn: body && (body.alpn != null ? body.alpn : body.tls_alpn),
             allowInsecure: body && (body.allowInsecure != null ? body.allowInsecure : body.allow_insecure),
+            email: body && (body.email != null ? body.email : body.certbotEmail),
           });
           return { success: true, ...status };
         } catch (err) {
@@ -1287,6 +1288,7 @@ module.exports = class Server {
             tlsInsecureClient: body && (body.tlsInsecureClient != null
               ? body.tlsInsecureClient
               : body.tls_insecure_client),
+            email: body && (body.email != null ? body.email : body.certbotEmail),
           });
           return { success: true, ...status };
         } catch (err) {
@@ -1338,6 +1340,7 @@ module.exports = class Server {
             keyPem: body && (body.keyPem != null ? body.keyPem : body.key_pem),
             certPath: body && (body.certPath != null ? body.certPath : body.cert_path),
             keyPath: body && (body.keyPath != null ? body.keyPath : body.key_path),
+            email: body && (body.email != null ? body.email : body.certbotEmail),
           });
           return { success: true, ...status };
         } catch (err) {

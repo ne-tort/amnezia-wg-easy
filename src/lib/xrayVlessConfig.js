@@ -34,11 +34,11 @@ function buildStreamSettings(opts) {
     };
   } else if (security === 'tls') {
     stream.tlsSettings = {
-      serverName: opts.sni || opts.host || '',
       allowInsecure: opts.allowInsecure === true,
       fingerprint: opts.fingerprint || '',
       alpn: opts.alpn ? (Array.isArray(opts.alpn) ? opts.alpn : String(opts.alpn).split(',')) : undefined,
     };
+    if (opts.sni) stream.tlsSettings.serverName = opts.sni;
     if (stream.tlsSettings.alpn == null) delete stream.tlsSettings.alpn;
     if (!stream.tlsSettings.fingerprint) delete stream.tlsSettings.fingerprint;
   }
