@@ -12,7 +12,9 @@ sleep 2
 
 if [ -n "$CFG" ]; then
   APPLY="$CFG"
-  if jq -e '.port and (.portBindings|not)' "$CFG" >/dev/null 2>&1; then
+  if jq -e '.portBindings' "$CFG" >/dev/null 2>&1; then
+    : # use portBindings directly
+  elif jq -e '.port and (.portBindings|not)' "$CFG" >/dev/null 2>&1; then
     APPLY="/tmp/mita-apply.json"
     jq --argjson p "$(jq -r .port "$CFG")" --arg pr "$(jq -r .protocol "$CFG")" \
       '. + {portBindings:[{port:$p,protocol:$pr}]} | del(.port,.protocol)' "$CFG" > "$APPLY"

@@ -27,9 +27,18 @@ const PORT_KEY = 'amnezia_mieru_port';
 const PUBLIC_PORT_KEY = 'amnezia_mieru_public_port';
 const PROTOCOL_KEY = 'amnezia_mieru_protocol';
 const ADDRESS_KEY = 'amnezia_mieru_address';
+const TCP_ENABLED_KEY = 'amnezia_mieru_tcp_enabled';
+const UDP_ENABLED_KEY = 'amnezia_mieru_udp_enabled';
+const TCP_PUBLIC_PORT_KEY = 'amnezia_mieru_tcp_public_port';
+const UDP_PUBLIC_PORT_KEY = 'amnezia_mieru_udp_public_port';
+const TCP_PORT_KEY = 'amnezia_mieru_tcp_port';
+const UDP_PORT_KEY = 'amnezia_mieru_udp_port';
+const MTU_KEY = 'amnezia_mieru_mtu';
+const LOGGING_LEVEL_KEY = 'amnezia_mieru_logging_level';
 
 const DEFAULT_PROTOCOL = 'TCP';
 const PROTOCOLS = Object.freeze(['TCP', 'UDP']);
+const LOGGING_LEVELS = Object.freeze(['ERROR', 'WARN', 'INFO', 'DEBUG']);
 const DEFAULT_INTERNAL_PORT = 35000;
 const DEFAULT_PUBLIC_PORT = 3080;
 const CLOCK_SKEW_WARN_SEC = 30;
@@ -87,8 +96,24 @@ function getPublicPort() {
   return DEFAULT_PUBLIC_PORT;
 }
 
-/** Client-facing port (host publish). */
+function getTcpPublicPort() {
+  const fromDb = getSetting(TCP_PUBLIC_PORT_KEY, '');
+  if (fromDb && /^\d+$/.test(fromDb)) return parseInt(fromDb, 10);
+  return getPublicPort();
+}
+
+function getUdpPublicPort() {
+  const fromDb = getSetting(UDP_PUBLIC_PORT_KEY, '');
+  if (fromDb && /^\d+$/.test(fromDb)) return parseInt(fromDb, 10);
+  const fromEnv = parseInt(String(process.env.MIERU_UDP_PUBLIC_PORT || process.env.MIERU_PUBLIC_PORT || '').trim(), 10);
+  if (Number.isFinite(fromEnv) && fromEnv >= 1 && fromEnv <= 65535) return fromEnv;
+  return getPublicPort();
+}
+
+/** Primary client-facing port (host publish). */
 function getClientFacingPort() {
+  if (isTcpEnabled()) return getTcpPublicPort();
+  if (isUdpEnabled()) return getUdpPublicPort();
   return getPublicPort();
 }
 
@@ -97,27 +122,115 @@ function getProtocol() {
   return PROTOCOLS.includes(p) ? p : DEFAULT_PROTOCOL;
 }
 
+function truthySetting(key, fallback = false) {
+  const raw = getSetting(key, '');
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return fallback;
+}
+
+function isTcpEnabled() {
+  const explicit = getSetting(TCP_ENABLED_KEY, '');
+  if (explicit !== '') return truthySetting(TCP_ENABLED_KEY, false);
+  return getProtocol() === 'TCP';
+}
+
+function isUdpEnabled() {
+  const explicit = getSetting(UDP_ENABLED_KEY, '');
+  if (explicit !== '') return truthySetting(UDP_ENABLED_KEY, false);
+  return getProtocol() === 'UDP';
+}
+
+function getLoggingLevel() {
+  const lvl = (getSetting(LOGGING_LEVEL_KEY, 'INFO') || 'INFO').toUpperCase();
+  return LOGGING_LEVELS.includes(lvl) ? lvl : 'INFO';
+}
+
+function getMtu() {
+  const raw = getSetting(MTU_KEY, '');
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  const n = parseInt(raw, 10);
+  if (n < 576 || n > 9000) return null;
+  return n;
+}
+
+function getTcpListenPort() {
+  const fromDb = getSetting(TCP_PORT_KEY, '');
+  if (fromDb && /^\d+$/.test(fromDb)) return parseInt(fromDb, 10);
+  return getPort();
+}
+
+function getUdpListenPort() {
+  const fromDb = getSetting(UDP_PORT_KEY, '');
+  if (fromDb && /^\d+$/.test(fromDb)) return parseInt(fromDb, 10);
+  if (isUdpEnabled() && !isTcpEnabled()) return getPort();
+  return DEFAULT_INTERNAL_PORT + 1;
+}
+
 function excludedPortsForAlloc() {
-  return [
+  const ports = [
     config.PANEL_HTTPS_PORT,
     getPublicPort(),
+    getTcpPublicPort(),
+    getUdpPublicPort(),
     80,
     443,
     8443,
   ];
+  if (isTcpEnabled()) ports.push(getTcpListenPort());
+  if (isUdpEnabled()) ports.push(getUdpListenPort());
+  return [...new Set(ports.filter((p) => Number.isFinite(p) && p > 0))];
 }
 
 /**
  * Internal listen port (20000–50000); never the public publish port.
  */
-function resolveListenPort(preferred) {
+function resolveListenPort(preferred, { publicPort, exclude = [] } = {}) {
   const { allocateInternalPort, needsInternalRealloc } = require('./internalPort');
-  const publicPort = getPublicPort();
+  const pub = publicPort != null ? publicPort : getPublicPort();
   const raw = preferred != null ? preferred : getPort();
-  if (!needsInternalRealloc(raw) && parseInt(String(raw), 10) !== publicPort) {
-    return parseInt(String(raw), 10);
+  const n = parseInt(String(raw), 10);
+  if (Number.isFinite(n) && !needsInternalRealloc(n) && n !== pub && !exclude.includes(n)) {
+    return n;
   }
-  return allocateInternalPort(excludedPortsForAlloc().concat([publicPort]), null);
+  return allocateInternalPort(excludedPortsForAlloc().concat([pub, ...exclude]), null);
+}
+
+function resolveTcpListenPort(preferred) {
+  const exclude = isUdpEnabled() ? [getUdpListenPort()] : [];
+  const pub = getTcpPublicPort();
+  const raw = preferred != null ? preferred : getTcpListenPort();
+  const { allocateInternalPort, needsInternalRealloc } = require('./internalPort');
+  const n = parseInt(String(raw), 10);
+  if (Number.isFinite(n) && !needsInternalRealloc(n) && n !== pub && !exclude.includes(n)) {
+    return n;
+  }
+  return allocateInternalPort(excludedPortsForAlloc().concat([pub, ...exclude]), null);
+}
+
+function resolveUdpListenPort(preferred) {
+  const exclude = isTcpEnabled() ? [getTcpListenPort()] : [];
+  const pub = getUdpPublicPort();
+  const raw = preferred != null ? preferred : (
+    isUdpEnabled() && !isTcpEnabled() ? getPort() : getUdpListenPort()
+  );
+  const { allocateInternalPort, needsInternalRealloc } = require('./internalPort');
+  const n = parseInt(String(raw), 10);
+  if (Number.isFinite(n) && !needsInternalRealloc(n) && n !== pub && !exclude.includes(n)) {
+    return n;
+  }
+  return allocateInternalPort(excludedPortsForAlloc().concat([pub, ...exclude]), null);
+}
+
+function buildPortBindings({ tcpListen, udpListen } = {}) {
+  const bindings = [];
+  if (isTcpEnabled()) {
+    bindings.push({ port: tcpListen != null ? tcpListen : getTcpListenPort(), protocol: 'TCP' });
+  }
+  if (isUdpEnabled()) {
+    bindings.push({ port: udpListen != null ? udpListen : getUdpListenPort(), protocol: 'UDP' });
+  }
+  return bindings;
 }
 
 function setPhase(next, err = null) {
@@ -211,9 +324,7 @@ function randomPassword(len = 16) {
 }
 
 function setMieruPassword(id, password) {
-  const now = Math.floor(Date.now() / 1000);
-  getDb().prepare('UPDATE clients SET mieru_password = ?, updated_at = ? WHERE id = ?')
-    .run(password || null, now, id);
+  getDb().clients.setMieruPassword(id, password);
 }
 
 /**
@@ -252,17 +363,19 @@ function ensureClientPasswords() {
   });
 }
 
-function buildServerConfigObject({ port, protocol }) {
+function buildServerConfigObject({ portBindings, loggingLevel, mtu } = {}) {
   const users = ensureClientPasswords();
-  return {
-    port,
-    protocol,
-    loggingLevel: 'INFO',
+  const obj = {
+    portBindings: portBindings || buildPortBindings(),
+    loggingLevel: loggingLevel || getLoggingLevel(),
     users: users.map((c) => ({
       name: c.username,
       password: c.mieru_password,
     })),
   };
+  const mtuVal = mtu != null ? mtu : getMtu();
+  if (mtuVal) obj.mtu = mtuVal;
+  return obj;
 }
 
 function writeServerJson(obj) {
@@ -311,18 +424,62 @@ function getClientMieruPayload(client) {
 
   const username = clientUsername(client.name);
   const host = getPublicHost();
-  const port = getClientFacingPort();
-  const protocol = getProtocol();
-  const mieruUrl = buildMieruUrl({ username, password, host, port, protocol });
+  const mieruUrls = [];
+  if (isTcpEnabled()) {
+    mieruUrls.push(buildMieruUrl({
+      username, password, host, port: getTcpPublicPort(), protocol: 'TCP',
+    }));
+  }
+  if (isUdpEnabled()) {
+    mieruUrls.push(buildMieruUrl({
+      username, password, host, port: getUdpPublicPort(), protocol: 'UDP',
+    }));
+  }
+  if (!mieruUrls.length) return null;
 
+  const primary = mieruUrls[0];
   return {
     username,
     password,
     host,
-    port,
-    protocol,
-    mieruUrl,
+    port: getClientFacingPort(),
+    protocol: isTcpEnabled() ? 'TCP' : 'UDP',
+    mieruUrl: primary,
+    mieruUrls,
+    tcpEnabled: isTcpEnabled(),
+    udpEnabled: isUdpEnabled(),
+    tcpPublicPort: isTcpEnabled() ? getTcpPublicPort() : null,
+    udpPublicPort: isUdpEnabled() ? getUdpPublicPort() : null,
   };
+}
+
+const AMNEZIA_MIERU_SUBNET = '10.8.3.0';
+
+function buildAmneziaMieruContainer(client) {
+  const payload = getClientMieruPayload(client);
+  if (!payload) return null;
+  return {
+    container: 'amnezia-mieru',
+    mieru: {
+      mieru_url: payload.mieruUrl,
+      port: String(payload.port),
+      subnet_address: AMNEZIA_MIERU_SUBNET,
+      transport_proto: String(payload.protocol || 'TCP').toLowerCase(),
+    },
+  };
+}
+
+function findEnabledClientByName(name) {
+  if (!name) return null;
+  const rows = getDb().clients.getAll();
+  const row = rows.find((c) => c.name === name);
+  if (!row || !row.enabled) return null;
+  if (!row.mieru_password) {
+    const pwd = randomPassword();
+    getDb().clients.setMieruPassword(row.id, pwd);
+    row.mieru_password = pwd;
+  }
+  return row;
 }
 
 /**
@@ -346,26 +503,50 @@ async function probeListenInsideContainer(port) {
   return { ok: false, via: 'nc/sh', out: out || 'not listening' };
 }
 
+async function probeUdpListenInsideContainer(port) {
+  const p = String(port);
+  const nc = await runCmd('docker', [
+    'exec', CONTAINER_NAME, 'nc', '-z', '-u', '-w', '2', '127.0.0.1', p,
+  ], { timeout: 8_000 });
+  if (nc.ok) return { ok: true, via: 'nc-udp', out: 'connected' };
+  const out = (nc.stderr || nc.stdout || 'not listening').trim().slice(0, 160);
+  return { ok: false, via: 'nc-udp', out: out || 'not listening' };
+}
+
 async function runSmoke() {
   const containerUp = await dockerContainerRunning();
   let statusOk = false;
   let statusOut = '';
-  let dial = { ok: false, via: 'skip', out: 'container down' };
-  const port = getPort();
+  const probes = [];
   if (containerUp) {
     const st = await runCmd('docker', ['exec', CONTAINER_NAME, 'mita', 'status'], { timeout: 10_000 });
     statusOk = st.ok && /RUNNING/i.test(`${st.stdout}\n${st.stderr}`);
     statusOut = (st.stdout || st.stderr || '').trim().slice(0, 120);
-    dial = await probeListenInsideContainer(port);
+    if (isTcpEnabled()) {
+      probes.push({
+        proto: 'tcp',
+        port: getTcpListenPort(),
+        dial: await probeListenInsideContainer(getTcpListenPort()),
+      });
+    }
+    if (isUdpEnabled()) {
+      probes.push({
+        proto: 'udp',
+        port: getUdpListenPort(),
+        dial: await probeUdpListenInsideContainer(getUdpListenPort()),
+      });
+    }
   }
-  const ok = containerUp && statusOk && dial.ok;
+  const dialOk = probes.length > 0 && probes.every((p) => p.dial && p.dial.ok);
+  const ok = containerUp && statusOk && dialOk;
   lastSmoke = {
     ok,
     containerUp,
     statusOk,
     statusOut,
-    dial,
-    port,
+    probes,
+    dial: probes[0] ? probes[0].dial : { ok: false, via: 'skip', out: 'container down' },
+    port: getPort(),
     at: Date.now(),
   };
   return lastSmoke;
@@ -429,62 +610,69 @@ async function containerManagedByUs() {
   return parts[0] === '1' && parts[1] === 'mieru';
 }
 
-async function inspectContainerListenPort() {
-  const r = await runCmd('docker', [
-    'inspect', '-f',
-    '{{range .Config.Env}}{{println .}}{{end}}',
-    CONTAINER_NAME,
-  ]);
-  if (!r.ok) return null;
-  const line = r.stdout.split(/\r?\n/).find((l) => l.startsWith('MIERU_SERVER_PORT='));
-  if (!line) return null;
-  const n = parseInt(line.slice('MIERU_SERVER_PORT='.length), 10);
-  return Number.isFinite(n) ? n : null;
-}
-
-async function inspectPublishedPublicPort() {
+async function inspectPublishedBindings() {
   const r = await runCmd('docker', [
     'inspect', '-f', '{{json .HostConfig.PortBindings}}', CONTAINER_NAME,
   ]);
-  if (!r.ok) return null;
+  if (!r.ok) return { tcp: null, udp: null };
   try {
     const bindings = JSON.parse(r.stdout.trim() || '{}');
-    const proto = getProtocol().toLowerCase();
-    const key = `${getPort()}/${proto}`;
-    const altKey = `${getPort()}/tcp`;
-    const entry = bindings[key] || bindings[altKey];
-    if (!entry || !entry[0] || !entry[0].HostPort) return null;
-    return parseInt(entry[0].HostPort, 10);
+    const out = { tcp: null, udp: null };
+    for (const [key, entry] of Object.entries(bindings)) {
+      if (!entry || !entry[0] || !entry[0].HostPort) continue;
+      const hostPort = parseInt(entry[0].HostPort, 10);
+      if (key.endsWith('/tcp')) out.tcp = hostPort;
+      if (key.endsWith('/udp')) out.udp = hostPort;
+    }
+    return out;
   } catch {
-    return null;
+    return { tcp: null, udp: null };
   }
 }
 
+function bindingsMatchPublished({ tcpPublic, udpPublic, published }) {
+  if (isTcpEnabled()) {
+    if (published.tcp !== tcpPublic) return false;
+  } else if (published.tcp != null) return false;
+  if (isUdpEnabled()) {
+    if (published.udp !== udpPublic) return false;
+  } else if (published.udp != null) return false;
+  return true;
+}
+
 /**
- * Direct mode: publish publicPort → internal listenPort on host.
+ * Direct mode: publish publicPort → internal listenPort on host for each enabled protocol.
  */
 async function ensureMieruContainer() {
   await ensureMieruImage();
   const volume = await resolveAwgVolumeName();
   const portPlan = require('./portPlan');
-  const publicPort = getPublicPort();
-  const port = resolveListenPort(getPort());
-  if (String(port) !== String(getPort())) {
-    setSetting(PORT_KEY, String(port));
+  const tcpPublic = getTcpPublicPort();
+  const udpPublic = getUdpPublicPort();
+  const tcpListen = isTcpEnabled() ? resolveTcpListenPort(getTcpListenPort()) : null;
+  const udpListen = isUdpEnabled() ? resolveUdpListenPort(getUdpListenPort()) : null;
+  if (isTcpEnabled() && String(tcpListen) !== String(getTcpListenPort())) {
+    setSetting(TCP_PORT_KEY, String(tcpListen));
+    setSetting(PORT_KEY, String(tcpListen));
+  }
+  if (isUdpEnabled() && String(udpListen) !== String(getUdpListenPort())) {
+    setSetting(UDP_PORT_KEY, String(udpListen));
+    if (!isTcpEnabled()) setSetting(PORT_KEY, String(udpListen));
   }
 
   const network = await portPlan.resolveNginxNetwork();
-  const proto = getProtocol().toLowerCase();
 
   const running = await dockerContainerRunning();
   if (running && await containerManagedByUs()) {
-    const envPort = await inspectContainerListenPort();
-    const pub = await inspectPublishedPublicPort();
+    const pub = await inspectPublishedBindings();
     const labelMode = await runCmd('docker', [
       'inspect', '-f', '{{index .Config.Labels "amnezia.port_mode"}}', CONTAINER_NAME,
     ]);
     const curMode = (labelMode.ok ? labelMode.stdout : '').trim();
-    if (envPort === port && pub === publicPort && curMode === 'direct') {
+    const pubOk = bindingsMatchPublished({
+      tcpPublic, udpPublic, published: pub,
+    });
+    if (pubOk && curMode === 'direct') {
       return { reused: true };
     }
   }
@@ -501,12 +689,20 @@ async function ensureMieruContainer() {
     '--label', 'amnezia.managed=1',
     '--label', 'amnezia.service=mieru',
     '--label', 'amnezia.port_mode=direct',
-    '--label', `amnezia.listen_port=${port}`,
-    '--label', `amnezia.public_port=${publicPort}`,
-    '-e', `MIERU_SERVER_PORT=${port}`,
-    '-v', `${volume}:/opt/amnezia/awg:rw`,
-    '-p', `${publicPort}:${port}/${proto}`,
   ];
+  if (isTcpEnabled()) {
+    runArgs.push('--label', `amnezia.listen_port=${tcpListen}`);
+    runArgs.push('--label', `amnezia.public_port=${tcpPublic}`);
+    runArgs.push('-p', `${tcpPublic}:${tcpListen}/tcp`);
+  }
+  if (isUdpEnabled()) {
+    runArgs.push('--label', `amnezia.udp_listen_port=${udpListen}`);
+    runArgs.push('--label', `amnezia.udp_public_port=${udpPublic}`);
+    runArgs.push('-p', `${udpPublic}:${udpListen}/udp`);
+  }
+  const primaryListen = isTcpEnabled() ? tcpListen : udpListen;
+  runArgs.push('-e', `MIERU_SERVER_PORT=${primaryListen}`);
+  runArgs.push('-v', `${volume}:/opt/amnezia/awg:rw`);
   if (network) runArgs.push('--network', network);
   runArgs.push(IMAGE_NAME);
 
@@ -530,9 +726,10 @@ async function syncClientsFromDb() {
   if (getDesired() !== true && phase !== 'running' && phase !== 'degraded') {
     return { skipped: true };
   }
-  const port = getPort();
-  const protocol = getProtocol();
-  const obj = buildServerConfigObject({ port, protocol });
+  const tcpListen = isTcpEnabled() ? resolveTcpListenPort(getTcpListenPort()) : null;
+  const udpListen = isUdpEnabled() ? resolveUdpListenPort(getUdpListenPort()) : null;
+  const portBindings = buildPortBindings({ tcpListen, udpListen });
+  const obj = buildServerConfigObject({ portBindings });
   writeServerJson(obj);
 
   if (await dockerContainerRunning()) {
@@ -565,6 +762,12 @@ function getStatus() {
     publicPort: getClientFacingPort(),
     protocol: getProtocol(),
     protocols: PROTOCOLS,
+    tcpEnabled: isTcpEnabled(),
+    udpEnabled: isUdpEnabled(),
+    tcpPublicPort: isTcpEnabled() ? getTcpPublicPort() : null,
+    udpPublicPort: isUdpEnabled() ? getUdpPublicPort() : null,
+    mtu: getMtu(),
+    loggingLevel: getLoggingLevel(),
     mode: 'direct',
     updatedAt,
     busy: Boolean(activeJob),
@@ -592,20 +795,52 @@ async function enableInternal(opts = {}) {
   setDesired(true);
   const deadline = Date.now() + ENABLE_TIMEOUT_MS;
   try {
-    const publicPort = opts.publicPort != null
-      ? parseInt(String(opts.publicPort).trim(), 10)
-      : getPublicPort();
-    if (!Number.isFinite(publicPort) || publicPort < 1 || publicPort > 65535) {
-      throw Object.assign(new Error('Invalid Mieru public port (1–65535)'), {
+    let tcpOn = opts.enableTcp !== false && opts.enableTcp !== '0';
+    let udpOn = opts.enableUdp === true || opts.enableUdp === '1' || opts.enableUdp === 1;
+    if (opts.protocol != null && String(opts.protocol).trim() !== '') {
+      const p = String(opts.protocol).trim().toUpperCase();
+      if (p === 'TCP') { tcpOn = true; udpOn = false; }
+      else if (p === 'UDP') { tcpOn = false; udpOn = true; }
+    } else if (opts.enableTcp == null && opts.enableUdp == null) {
+      tcpOn = isTcpEnabled() || !isUdpEnabled();
+      udpOn = isUdpEnabled();
+    }
+    if (!tcpOn && !udpOn) {
+      throw Object.assign(new Error('Enable at least one of TCP or UDP'), {
         status: 400,
-        code: 'MIERU_BAD_PUBLIC_PORT',
+        code: 'MIERU_NO_PROTOCOL',
       });
     }
-    setSetting(PUBLIC_PORT_KEY, String(publicPort));
 
-    let protocol = opts.protocol != null ? String(opts.protocol).trim().toUpperCase() : getProtocol();
-    if (!PROTOCOLS.includes(protocol)) protocol = DEFAULT_PROTOCOL;
-    setSetting(PROTOCOL_KEY, protocol);
+    const legacyPublic = opts.publicPort != null
+      ? parseInt(String(opts.publicPort).trim(), 10)
+      : null;
+    const tcpPublicPort = opts.tcpPublicPort != null
+      ? parseInt(String(opts.tcpPublicPort).trim(), 10)
+      : (legacyPublic != null && Number.isFinite(legacyPublic) ? legacyPublic : getTcpPublicPort());
+    const udpPublicPort = opts.udpPublicPort != null
+      ? parseInt(String(opts.udpPublicPort).trim(), 10)
+      : (legacyPublic != null && Number.isFinite(legacyPublic) ? legacyPublic : getUdpPublicPort());
+
+    if (tcpOn && (!Number.isFinite(tcpPublicPort) || tcpPublicPort < 1 || tcpPublicPort > 65535)) {
+      throw Object.assign(new Error('Invalid Mieru TCP public port (1–65535)'), {
+        status: 400,
+        code: 'MIERU_BAD_TCP_PUBLIC_PORT',
+      });
+    }
+    if (udpOn && (!Number.isFinite(udpPublicPort) || udpPublicPort < 1 || udpPublicPort > 65535)) {
+      throw Object.assign(new Error('Invalid Mieru UDP public port (1–65535)'), {
+        status: 400,
+        code: 'MIERU_BAD_UDP_PUBLIC_PORT',
+      });
+    }
+
+    setSetting(TCP_ENABLED_KEY, tcpOn ? '1' : '0');
+    setSetting(UDP_ENABLED_KEY, udpOn ? '1' : '0');
+    if (tcpOn) setSetting(TCP_PUBLIC_PORT_KEY, String(tcpPublicPort));
+    if (udpOn) setSetting(UDP_PUBLIC_PORT_KEY, String(udpPublicPort));
+    setSetting(PUBLIC_PORT_KEY, String(tcpOn ? tcpPublicPort : udpPublicPort));
+    setSetting(PROTOCOL_KEY, tcpOn && udpOn ? 'TCP' : (tcpOn ? 'TCP' : 'UDP'));
 
     if (opts.port != null && String(opts.port).trim() !== '') {
       const requested = parseInt(String(opts.port).trim(), 10);
@@ -617,28 +852,63 @@ async function enableInternal(opts = {}) {
       }
     }
 
-    const port = resolveListenPort(
-      opts.port != null && String(opts.port).trim() !== '' ? opts.port : getPort(),
-    );
+    let loggingLevel = opts.loggingLevel != null
+      ? String(opts.loggingLevel).trim().toUpperCase()
+      : getLoggingLevel();
+    if (!LOGGING_LEVELS.includes(loggingLevel)) loggingLevel = 'INFO';
+    setSetting(LOGGING_LEVEL_KEY, loggingLevel);
+
+    let mtu = null;
+    if (opts.mtu != null && String(opts.mtu).trim() !== '') {
+      mtu = parseInt(String(opts.mtu).trim(), 10);
+      if (!Number.isFinite(mtu) || mtu < 576 || mtu > 9000) {
+        throw Object.assign(new Error('Invalid Mieru MTU (576–9000)'), {
+          status: 400,
+          code: 'MIERU_BAD_MTU',
+        });
+      }
+      setSetting(MTU_KEY, String(mtu));
+    } else {
+      setSetting(MTU_KEY, '');
+    }
 
     const addressRaw = opts.address != null ? String(opts.address).trim() : '';
     const address = addressRaw || getAddress() || getPublicHost();
     if (!address) {
       throw Object.assign(new Error('Mieru address is required'), { status: 400, code: 'MIERU_BAD_ADDRESS' });
     }
-
-    setSetting(PORT_KEY, String(port));
     setSetting(ADDRESS_KEY, address);
 
-    await require('./portPlan').assertHostPortsAvailable([publicPort], { allowNginx: true });
+    const portPlan = require('./portPlan');
+    const tcpPorts = tcpOn ? [tcpPublicPort] : [];
+    const udpPorts = udpOn ? [udpPublicPort] : [];
+    if (tcpPorts.length) await portPlan.assertHostPortsAvailable(tcpPorts, { allowNginx: true });
+    if (udpPorts.length) await portPlan.assertHostUdpPortsAvailable(udpPorts, { allowSidecar: true });
+
+    const listenPreferred = opts.port != null && String(opts.port).trim() !== '' ? opts.port : null;
+    const tcpListen = tcpOn
+      ? resolveTcpListenPort(listenPreferred != null ? listenPreferred : getTcpListenPort())
+      : null;
+    const udpListen = udpOn
+      ? resolveUdpListenPort(listenPreferred != null && !tcpOn ? listenPreferred : getUdpListenPort())
+      : null;
+    if (tcpOn) {
+      setSetting(TCP_PORT_KEY, String(tcpListen));
+      setSetting(PORT_KEY, String(tcpListen));
+    }
+    if (udpOn) {
+      setSetting(UDP_PORT_KEY, String(udpListen));
+      if (!tcpOn) setSetting(PORT_KEY, String(udpListen));
+    }
 
     ensureClientPasswords();
-    const obj = buildServerConfigObject({ port, protocol });
+    const portBindings = buildPortBindings({ tcpListen, udpListen });
+    const obj = buildServerConfigObject({ portBindings, loggingLevel, mtu });
     writeServerJson(obj);
 
     await ensureMieruContainer();
     try {
-      await require('./portPlan').applyPlan();
+      await portPlan.applyPlan();
     } catch (planErr) {
       // eslint-disable-next-line no-console
       console.error('Mieru enable: portPlan.applyPlan failed:', planErr && planErr.message);
@@ -659,9 +929,12 @@ async function enableInternal(opts = {}) {
     }
     if (!ready) {
       const smoke = await runSmoke();
+      const dialOut = smoke.probes && smoke.probes.length
+        ? smoke.probes.map((p) => `${p.proto}=${p.dial && p.dial.out}`).join('; ')
+        : (smoke.dial && smoke.dial.out);
       throw Object.assign(
         new Error(
-          `Mieru did not become ready in time (listen=${smoke.dial && smoke.dial.out}; statusOk=${smoke.statusOk})`,
+          `Mieru did not become ready in time (listen=${dialOut}; statusOk=${smoke.statusOk})`,
         ),
         { code: 'MIERU_TIMEOUT', status: 504 },
       );
@@ -757,11 +1030,30 @@ async function reconcile() {
     if (!getSetting(PUBLIC_PORT_KEY, '')) {
       setSetting(PUBLIC_PORT_KEY, String(getPublicPort()));
     }
-    const listenPort = resolveListenPort(getPort());
-    if (String(listenPort) !== String(getPort())) {
-      setSetting(PORT_KEY, String(listenPort));
-      await syncClientsFromDb();
+    if (isTcpEnabled() && !getSetting(TCP_PUBLIC_PORT_KEY, '')) {
+      setSetting(TCP_PUBLIC_PORT_KEY, String(getTcpPublicPort()));
     }
+    if (isUdpEnabled() && !getSetting(UDP_PUBLIC_PORT_KEY, '')) {
+      setSetting(UDP_PUBLIC_PORT_KEY, String(getUdpPublicPort()));
+    }
+    let needsSync = false;
+    if (isTcpEnabled()) {
+      const tcpListen = resolveTcpListenPort(getTcpListenPort());
+      if (String(tcpListen) !== String(getTcpListenPort())) {
+        setSetting(TCP_PORT_KEY, String(tcpListen));
+        setSetting(PORT_KEY, String(tcpListen));
+        needsSync = true;
+      }
+    }
+    if (isUdpEnabled()) {
+      const udpListen = resolveUdpListenPort(getUdpListenPort());
+      if (String(udpListen) !== String(getUdpListenPort())) {
+        setSetting(UDP_PORT_KEY, String(udpListen));
+        if (!isTcpEnabled()) setSetting(PORT_KEY, String(udpListen));
+        needsSync = true;
+      }
+    }
+    if (needsSync) await syncClientsFromDb();
     if (!(await dockerContainerRunning())) {
       setPhase('degraded', new Error('amnezia-mieru container not running'));
       await syncClientsFromDb();
@@ -822,6 +1114,12 @@ module.exports = {
   syncClientsFromDb,
   getClientMieruPayload,
   buildMieruUrl,
+  buildAmneziaMieruContainer,
+  findEnabledClientByName,
+  buildServerConfigObject,
+  buildPortBindings,
+  isTcpEnabled,
+  isUdpEnabled,
   bootAmneziaMieru,
   stopAmneziaMieru,
   ensureMieruContainer,

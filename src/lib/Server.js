@@ -1062,6 +1062,20 @@ module.exports = class Server {
             port: body && body.port,
             publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
             address: body && body.address,
+            security: body && body.security,
+            network: body && body.network,
+            certSource: body && (body.certSource != null ? body.certSource : body.cert_source),
+            certDomain: body && (body.certDomain != null ? body.certDomain : body.cert_domain),
+            certPem: body && (body.certPem != null ? body.certPem : body.cert_pem),
+            keyPem: body && (body.keyPem != null ? body.keyPem : body.key_pem),
+            certPath: body && (body.certPath != null ? body.certPath : body.cert_path),
+            keyPath: body && (body.keyPath != null ? body.keyPath : body.key_path),
+            wsPath: body && (body.wsPath != null ? body.wsPath : body.ws_path),
+            wsHost: body && (body.wsHost != null ? body.wsHost : body.ws_host),
+            grpcServiceName: body && (body.grpcServiceName != null ? body.grpcServiceName : body.grpc_service_name),
+            grpcMultiMode: body && (body.grpcMultiMode != null ? body.grpcMultiMode : body.grpc_multi_mode),
+            alpn: body && (body.alpn != null ? body.alpn : body.tls_alpn),
+            allowInsecure: body && (body.allowInsecure != null ? body.allowInsecure : body.allow_insecure),
           });
           return { success: true, ...status };
         } catch (err) {
@@ -1140,6 +1154,42 @@ module.exports = class Server {
           throw sniHttpError(err);
         }
       }))
+      .post('/api/tls/preflight-domain', defineEventHandler(async (event) => {
+        acl.requireAnyCapability(event, [
+          acl.CAP.SYSTEM_XRAY,
+          acl.CAP.SYSTEM_NAIVE,
+          acl.CAP.SYSTEM_HYSTERIA,
+          acl.CAP.SYSTEM_MIERU,
+        ]);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const domain = body && body.domain;
+          if (!domain || !String(domain).trim()) {
+            throw httpError(400, 'domain is required');
+          }
+          return await sniFinder.recheckDomain(String(domain).trim());
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          throw sniHttpError(err);
+        }
+      }))
+      .post('/api/port-plan/validate', defineEventHandler(async (event) => {
+        acl.requireAnyCapability(event, [
+          acl.CAP.SYSTEM_XRAY,
+          acl.CAP.SYSTEM_NAIVE,
+          acl.CAP.SYSTEM_HYSTERIA,
+          acl.CAP.SYSTEM_MIERU,
+          acl.CAP.SYSTEM_SETTINGS,
+        ]);
+        const body = await readBody(event).catch(() => ({}));
+        const service = body && body.service;
+        if (!service) throw httpError(400, 'service is required');
+        const result = require('./sidecarValidate').validateInstall(String(service), body || {});
+        if (!result.ok) {
+          return { ok: false, fieldErrors: result.fieldErrors, code: result.code };
+        }
+        return { ok: true, ...result };
+      }))
       .get('/api/amnezia-mieru', defineEventHandler((event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_MIERU);
         return amneziaMieru.getStatus();
@@ -1153,6 +1203,12 @@ module.exports = class Server {
             port: body && body.port,
             publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
             protocol: body && body.protocol,
+            enableTcp: body && body.enableTcp,
+            enableUdp: body && body.enableUdp,
+            tcpPublicPort: body && (body.tcpPublicPort != null ? body.tcpPublicPort : body.tcp_public_port),
+            udpPublicPort: body && (body.udpPublicPort != null ? body.udpPublicPort : body.udp_public_port),
+            mtu: body && body.mtu,
+            loggingLevel: body && (body.loggingLevel != null ? body.loggingLevel : body.logging_level),
           });
           return { success: true, ...status };
         } catch (err) {
@@ -1196,6 +1252,23 @@ module.exports = class Server {
             sni: body && body.sni,
             publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
             masqueradeUrl: body && (body.masqueradeUrl != null ? body.masqueradeUrl : body.masquerade_url),
+            masqueradeType: body && (body.masqueradeType != null ? body.masqueradeType : body.masquerade_type),
+            obfsType: body && (body.obfsType != null ? body.obfsType : body.obfs_type),
+            obfsPassword: body && (body.obfsPassword != null ? body.obfsPassword : body.obfs_password),
+            bandwidthUp: body && (body.bandwidthUp != null ? body.bandwidthUp : body.bandwidth_up),
+            bandwidthDown: body && (body.bandwidthDown != null ? body.bandwidthDown : body.bandwidth_down),
+            ignoreClientBandwidth: body && (body.ignoreClientBandwidth != null
+              ? body.ignoreClientBandwidth
+              : body.ignore_client_bandwidth),
+            certSource: body && (body.certSource != null ? body.certSource : body.cert_source),
+            certDomain: body && (body.certDomain != null ? body.certDomain : body.cert_domain),
+            certPem: body && (body.certPem != null ? body.certPem : body.cert_pem),
+            keyPem: body && (body.keyPem != null ? body.keyPem : body.key_pem),
+            certPath: body && (body.certPath != null ? body.certPath : body.cert_path),
+            keyPath: body && (body.keyPath != null ? body.keyPath : body.key_path),
+            tlsInsecureClient: body && (body.tlsInsecureClient != null
+              ? body.tlsInsecureClient
+              : body.tls_insecure_client),
           });
           return { success: true, ...status };
         } catch (err) {
@@ -1241,6 +1314,12 @@ module.exports = class Server {
             probeResistanceDomain: body && (body.probeResistanceDomain != null
               ? body.probeResistanceDomain
               : body.probe_resistance_domain),
+            certSource: body && (body.certSource != null ? body.certSource : body.cert_source),
+            certDomain: body && (body.certDomain != null ? body.certDomain : body.cert_domain),
+            certPem: body && (body.certPem != null ? body.certPem : body.cert_pem),
+            keyPem: body && (body.keyPem != null ? body.keyPem : body.key_pem),
+            certPath: body && (body.certPath != null ? body.certPath : body.cert_path),
+            keyPath: body && (body.keyPath != null ? body.keyPath : body.key_path),
           });
           return { success: true, ...status };
         } catch (err) {
@@ -1835,39 +1914,83 @@ module.exports = class Server {
         return db.protocolTemplates.getAll();
       }));
 
-    // Public Xray subscription (no session; path is outside /api/)
+    // Public subscription bundle (no session; path is outside /api/)
+    const decodeSubName = (event) => {
+      const raw = getRouterParam(event, 'name') || '';
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        throw httpError(400, 'Invalid name');
+      }
+    };
+
+    const buildSubBundle = (name) => {
+      /** @type {Record<string, unknown>} */
+      const bundle = {};
+      let count = 0;
+
+      if (amneziaXray.isAmneziaXrayAvailable()) {
+        const client = amneziaXray.findEnabledClientByName(name);
+        if (client) {
+          const payload = amneziaXray.getClientXrayPayload(client);
+          if (payload) {
+            bundle.xray = { clientJson: payload.clientJson, vlessUrl: payload.vlessUrl };
+            count += 1;
+          }
+        }
+      }
+      if (amneziaHysteria.isAmneziaHysteriaAvailable()) {
+        const client = amneziaHysteria.findEnabledClientByName(name);
+        if (client) {
+          const payload = amneziaHysteria.getClientHysteriaPayload(client);
+          if (payload) {
+            bundle.hysteria = { hy2Url: payload.hy2Url, clientJson: payload };
+            count += 1;
+          }
+        }
+      }
+      if (amneziaNaive.isAmneziaNaiveAvailable()) {
+        const client = amneziaNaive.findEnabledClientByName(name);
+        if (client) {
+          const payload = amneziaNaive.getClientNaivePayload(client);
+          if (payload) {
+            bundle.naive = { shareUrl: payload.shareUrl, clientJson: payload.clientJson };
+            count += 1;
+          }
+        }
+      }
+      if (amneziaMieru.isAmneziaMieruAvailable()) {
+        const client = amneziaMieru.findEnabledClientByName(name);
+        if (client) {
+          const payload = amneziaMieru.getClientMieruPayload(client);
+          if (payload) {
+            bundle.mieru = { mieruUrl: payload.mieruUrl, mieruUrls: payload.mieruUrls };
+            count += 1;
+          }
+        }
+      }
+
+      if (count === 0) throw httpError(404, 'Not Found');
+      if (count === 1 && bundle.xray && bundle.xray.clientJson) {
+        return { single: true, body: bundle.xray.clientJson };
+      }
+      return { single: false, body: bundle };
+    };
+
     const subRouter = createRouter();
     subRouter
       .get('/sub/:name', defineEventHandler((event) => {
-        if (!amneziaXray.isAmneziaXrayAvailable()) {
-          throw httpError(503, 'Xray is not available');
-        }
-        const raw = getRouterParam(event, 'name') || '';
-        let name;
-        try {
-          name = decodeURIComponent(raw);
-        } catch {
-          throw httpError(400, 'Invalid name');
-        }
-        const client = amneziaXray.findEnabledClientByName(name);
-        if (!client) throw httpError(404, 'Not Found');
-        const payload = amneziaXray.getClientXrayPayload(client);
-        if (!payload) throw httpError(503, 'Xray keys not ready');
+        const name = decodeSubName(event);
+        const result = buildSubBundle(name);
         setHeader(event, 'Content-Type', 'application/json; charset=utf-8');
         setHeader(event, 'Cache-Control', 'no-store');
-        return payload.clientJson;
+        return result.body;
       }))
       .get('/sub/:name/vless', defineEventHandler((event) => {
         if (!amneziaXray.isAmneziaXrayAvailable()) {
           throw httpError(503, 'Xray is not available');
         }
-        const raw = getRouterParam(event, 'name') || '';
-        let name;
-        try {
-          name = decodeURIComponent(raw);
-        } catch {
-          throw httpError(400, 'Invalid name');
-        }
+        const name = decodeSubName(event);
         const client = amneziaXray.findEnabledClientByName(name);
         if (!client) throw httpError(404, 'Not Found');
         const payload = amneziaXray.getClientXrayPayload(client);
@@ -1875,6 +1998,48 @@ module.exports = class Server {
         setHeader(event, 'Content-Type', 'text/plain; charset=utf-8');
         setHeader(event, 'Cache-Control', 'no-store');
         return payload.vlessUrl;
+      }))
+      .get('/sub/:name/hy2', defineEventHandler((event) => {
+        if (!amneziaHysteria.isAmneziaHysteriaAvailable()) {
+          throw httpError(503, 'Hysteria is not available');
+        }
+        const name = decodeSubName(event);
+        const client = amneziaHysteria.findEnabledClientByName(name);
+        if (!client) throw httpError(404, 'Not Found');
+        amneziaHysteria.ensureClientPasswords();
+        const payload = amneziaHysteria.getClientHysteriaPayload(client);
+        if (!payload) throw httpError(503, 'Hysteria not ready');
+        setHeader(event, 'Content-Type', 'text/plain; charset=utf-8');
+        setHeader(event, 'Cache-Control', 'no-store');
+        return payload.hy2Url;
+      }))
+      .get('/sub/:name/naive', defineEventHandler((event) => {
+        if (!amneziaNaive.isAmneziaNaiveAvailable()) {
+          throw httpError(503, 'Naive is not available');
+        }
+        const name = decodeSubName(event);
+        const client = amneziaNaive.findEnabledClientByName(name);
+        if (!client) throw httpError(404, 'Not Found');
+        amneziaNaive.ensureClientPasswords();
+        const payload = amneziaNaive.getClientNaivePayload(client);
+        if (!payload) throw httpError(503, 'Naive not ready');
+        setHeader(event, 'Content-Type', 'text/plain; charset=utf-8');
+        setHeader(event, 'Cache-Control', 'no-store');
+        return payload.shareUrl;
+      }))
+      .get('/sub/:name/mieru', defineEventHandler((event) => {
+        if (!amneziaMieru.isAmneziaMieruAvailable()) {
+          throw httpError(503, 'Mieru is not available');
+        }
+        const name = decodeSubName(event);
+        const client = amneziaMieru.findEnabledClientByName(name);
+        if (!client) throw httpError(404, 'Not Found');
+        amneziaMieru.ensureClientPasswords();
+        const payload = amneziaMieru.getClientMieruPayload(client);
+        if (!payload) throw httpError(503, 'Mieru not ready');
+        setHeader(event, 'Content-Type', 'text/plain; charset=utf-8');
+        setHeader(event, 'Cache-Control', 'no-store');
+        return payload.mieruUrl;
       }));
     app.use(subRouter);
 

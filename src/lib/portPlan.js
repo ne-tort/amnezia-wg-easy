@@ -101,6 +101,27 @@ function panelCanJoinDemuxBySni(sni) {
   return !isIpLiteral(s);
 }
 
+function desiredBool(key, fallback = false) {
+  const raw = setting(key, '');
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return fallback;
+}
+
+function mieruTcpEnabled() {
+  const explicit = setting('amnezia_mieru_tcp_enabled', '');
+  if (explicit !== '') return desiredBool('amnezia_mieru_tcp_enabled', false);
+  const proto = (setting('amnezia_mieru_protocol', 'TCP') || 'TCP').toUpperCase();
+  return proto === 'TCP';
+}
+
+function mieruUdpEnabled() {
+  const explicit = setting('amnezia_mieru_udp_enabled', '');
+  if (explicit !== '') return desiredBool('amnezia_mieru_udp_enabled', false);
+  const proto = (setting('amnezia_mieru_protocol', 'TCP') || 'TCP').toUpperCase();
+  return proto === 'UDP';
+}
+
 /**
  * Collect candidate services for the plan (desired sidecars + always panel).
  */
@@ -151,14 +172,19 @@ function collectServices() {
     });
   }
 
-  if (desired('amnezia_mieru_desired')) {
+  if (desired('amnezia_mieru_desired') && mieruTcpEnabled()) {
     const pub = parsePort(
-      setting('amnezia_mieru_public_port', '') || process.env.MIERU_PUBLIC_PORT || '3080',
+      setting('amnezia_mieru_tcp_public_port', '')
+      || setting('amnezia_mieru_public_port', '')
+      || process.env.MIERU_PUBLIC_PORT || '3080',
       3080,
     );
-    const listen = parsePort(setting('amnezia_mieru_port', ''), 0);
+    const listen = parsePort(
+      setting('amnezia_mieru_tcp_port', '') || setting('amnezia_mieru_port', ''),
+      0,
+    );
     services.push({
-      id: 'mieru',
+      id: 'mieru-tcp',
       publicPort: pub,
       listenPort: listen,
       sni: '',
@@ -184,6 +210,25 @@ function collectUdpDirectServices() {
       id: 'hysteria',
       publicPort: pub,
       listenPort: 443,
+      protocol: 'udp',
+    });
+  }
+  if (desired('amnezia_mieru_desired') && mieruUdpEnabled()) {
+    const pub = parsePort(
+      setting('amnezia_mieru_udp_public_port', '')
+      || setting('amnezia_mieru_public_port', '')
+      || process.env.MIERU_UDP_PUBLIC_PORT
+      || process.env.MIERU_PUBLIC_PORT || '3080',
+      3080,
+    );
+    const listen = parsePort(
+      setting('amnezia_mieru_udp_port', '') || setting('amnezia_mieru_port', ''),
+      0,
+    );
+    services.push({
+      id: 'mieru-udp',
+      publicPort: pub,
+      listenPort: listen || 35001,
       protocol: 'udp',
     });
   }
@@ -466,6 +511,12 @@ async function assertHostUdpPortsAvailable(ports, opts = {}) {
         'amnezia-hysteria',
       ]);
       if (hy.ok && new RegExp(`${port}/udp`).test(hy.stdout)) continue;
+      const mieru = await runCmd('docker', [
+        'inspect', '-f',
+        '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
+        'amnezia-mieru',
+      ]);
+      if (mieru.ok && new RegExp(`${port}/udp`).test(mieru.stdout)) continue;
     }
     if (port === wgPort) continue;
     if (await isHostUdpPortInUse(port)) {
@@ -567,6 +618,12 @@ async function assertHostPortsAvailable(ports, opts = {}) {
         'amnezia-naive',
       ]);
       if (naive.ok && new RegExp(`${port}/tcp`).test(naive.stdout)) continue;
+      const mieru = await runCmd('docker', [
+        'inspect', '-f',
+        '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
+        'amnezia-mieru',
+      ]);
+      if (mieru.ok && new RegExp(`${port}/tcp`).test(mieru.stdout)) continue;
     }
 
     if (await isHostTcpPortInUse(port)) {
@@ -883,6 +940,17 @@ async function ensureUdpDirectSidecars(plan) {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('portPlan: ensure hysteria for udpDirect failed:', err && err.message);
+    }
+  }
+  if (ids.has('mieru-udp')) {
+    try {
+      const mieru = require('./amneziaMieru');
+      if (typeof mieru.ensureMieruContainer === 'function') {
+        await mieru.ensureMieruContainer();
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('portPlan: ensure mieru for udpDirect failed:', err && err.message);
     }
   }
 }

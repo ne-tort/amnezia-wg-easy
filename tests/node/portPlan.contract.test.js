@@ -239,11 +239,24 @@ test('writeStreamConfigs: demux server includes Docker DNS resolver', () => {
 test('computePlan: mieru high port → direct TCP', () => {
   const { portPlan, settings } = loadPortPlan();
   settings.amnezia_mieru_desired = '1';
+  settings.amnezia_mieru_tcp_enabled = '1';
   settings.amnezia_mieru_public_port = '3080';
+  settings.amnezia_mieru_tcp_public_port = '3080';
   settings.amnezia_mieru_port = '35001';
+  settings.amnezia_mieru_tcp_port = '35001';
   const plan = portPlan.computePlan();
-  assert.equal(plan.modes.mieru, 'direct');
-  assert.ok(plan.direct.some((d) => d.service === 'mieru' && d.publicPort === 3080));
+  assert.equal(plan.modes['mieru-tcp'], 'direct');
+  assert.ok(plan.direct.some((d) => d.service === 'mieru-tcp' && d.publicPort === 3080));
+});
+
+test('computePlan: mieru UDP → udpDirect', () => {
+  const { portPlan, settings } = loadPortPlan();
+  settings.amnezia_mieru_desired = '1';
+  settings.amnezia_mieru_udp_enabled = '1';
+  settings.amnezia_mieru_udp_public_port = '3081';
+  settings.amnezia_mieru_udp_port = '35002';
+  const plan = portPlan.computePlan();
+  assert.ok(plan.udpDirect.some((d) => d.id === 'mieru-udp' && d.publicPort === 3081));
 });
 
 test('computePlan: naive + xray on 443 → demux', () => {
