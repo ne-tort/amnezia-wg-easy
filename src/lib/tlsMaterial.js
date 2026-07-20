@@ -359,6 +359,48 @@ async function issueLetsEncrypt(domain, email, opts = {}) {
     err.code = 'CERT_ISSUE_FAILED';
     throw err;
   }
+
+  // Force renew must actually extend lifetime; certbot can exit 0 while leaving the same leaf.
+  if (force && backup && backup.cert) {
+    const before = parsePemMeta(backup.cert);
+    const afterPem = await readPemFromVolume(d);
+    const after = parsePemMeta(afterPem);
+    if (
+      before.notAfter != null
+      && after.notAfter != null
+      && after.notAfter <= before.notAfter
+    ) {
+      // Retry once via certonly --force-renewal (renew path may have been a no-op).
+      const retry = await runCmd('docker', [
+        'run', '--rm',
+        '-v', `${vol}:/etc/letsencrypt`,
+        '-v', `${wwwVol}:/var/www/certbot`,
+        'certbot/certbot',
+        'certonly', '--webroot', '-w', '/var/www/certbot',
+        '-d', d,
+        '--cert-name', d,
+        '--email', em,
+        '--agree-tos',
+        '--non-interactive',
+        '--force-renewal',
+      ], { timeout: 300_000 });
+      if (!retry.ok) {
+        await restoreIfNeeded();
+        throw certbotIssueError(retry.stderr || retry.stdout || 'force renew did not extend certificate', d);
+      }
+      const afterRetry = parsePemMeta(await readPemFromVolume(d));
+      if (afterRetry.notAfter == null || afterRetry.notAfter <= before.notAfter) {
+        await restoreIfNeeded();
+        const err = new Error(
+          `Renew completed but certificate expiry did not extend for ${d} (still ${before.notAfter})`,
+        );
+        err.status = 400;
+        err.code = 'CERT_RENEW_NO_EXTEND';
+        throw err;
+      }
+    }
+  }
+
   return certPathsForDomain(d);
 }
 
@@ -480,6 +522,24 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
     err.code = 'CERT_ISSUE_FAILED';
     throw err;
   }
+
+  if (force && backup && backup.cert) {
+    const before = parsePemMeta(backup.cert);
+    const after = parsePemMeta(await readPemFromVolume(d));
+    if (
+      before.notAfter != null
+      && after.notAfter != null
+      && after.notAfter <= before.notAfter
+    ) {
+      const err = new Error(
+        `IP renew completed but certificate expiry did not extend for ${d}`,
+      );
+      err.status = 400;
+      err.code = 'CERT_RENEW_NO_EXTEND';
+      throw err;
+    }
+  }
+
   return certPathsForDomain(d);
 }
 

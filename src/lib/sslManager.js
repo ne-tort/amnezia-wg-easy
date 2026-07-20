@@ -7,6 +7,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const db = require('./db');
@@ -120,6 +121,58 @@ async function metaFromVolume(storageKey) {
   return pem ? metaFromPem(pem) : { notAfter: null, issuer: '', fingerprintSha256: '' };
 }
 
+function installDir() {
+  return process.env.AWG_INSTALL_DIR || '/opt/amnezia-wg-easy';
+}
+
+function confDir() {
+  return process.env.AWG_CONF_DIR || '/etc/amnezia-wg-easy';
+}
+
+function upsertKeyValueFile(filePath, key, value) {
+  const k = String(key || '').trim();
+  const v = String(value == null ? '' : value).trim();
+  if (!k || !filePath) return false;
+  try {
+    let text = '';
+    if (fs.existsSync(filePath)) {
+      text = fs.readFileSync(filePath, 'utf8');
+    }
+    const re = new RegExp(`^${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=.*$`, 'm');
+    if (re.test(text)) {
+      text = text.replace(re, `${k}=${v}`);
+    } else {
+      text = `${text.replace(/\s*$/, '')}\n${k}=${v}\n`;
+    }
+    fs.writeFileSync(filePath, text, 'utf8');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Persist active panel TLS identity for install.sh redeploy reuse
+ * (storage_key of is_panel cert — may differ from stale PANEL_DOMAIN/SSL_HOST).
+ */
+function persistPanelSslHost(host) {
+  const h = tlsMaterial.normalizeHostname(host);
+  if (!h || h === 'localhost') return;
+  const config = require('../config');
+  const paths = [
+    path.join(config.WG_PATH, 'ssl-panel-host'),
+    path.join(installDir(), '.ssl-panel-host'),
+  ];
+  for (const p of paths) {
+    try {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, `${h}\n`, 'utf8');
+    } catch { /* optional paths */ }
+  }
+  upsertKeyValueFile(path.join(installDir(), '.env'), 'SSL_HOST', h);
+  upsertKeyValueFile(path.join(confDir(), 'install.conf'), 'SSL_HOST', h);
+}
+
 function insertRow(fields) {
   const t = nowSec();
   const id = fields.id || newId();
@@ -212,6 +265,30 @@ function clearPanelFlags() {
 /**
  * Ensure a panel-role inventory row exists (DB only, no volume inspect).
  */
+async function refreshRowMetaFromVolume(rowOrId) {
+  const raw = typeof rowOrId === 'string'
+    ? getRaw(rowOrId)
+    : (rowOrId && rowOrId.storage_key != null ? rowOrId : getRaw(rowOrId && rowOrId.id));
+  if (!raw || raw.type === 'reality' || !raw.storage_key) {
+    return raw ? getByIdSync(raw.id, { includeSecrets: true }) : null;
+  }
+  const meta = await metaFromVolume(raw.storage_key);
+  if (meta.notAfter == null && !meta.fingerprintSha256) {
+    return getByIdSync(raw.id, { includeSecrets: true });
+  }
+  const same = meta.notAfter === raw.not_after
+    && (meta.issuer || '') === (raw.issuer || '')
+    && (meta.fingerprintSha256 || '') === (raw.fingerprint_sha256 || '');
+  if (same) {
+    return getByIdSync(raw.id, { includeSecrets: true });
+  }
+  return updateRow(raw.id, {
+    not_after: meta.notAfter != null ? meta.notAfter : raw.not_after,
+    issuer: meta.issuer || raw.issuer,
+    fingerprint_sha256: meta.fingerprintSha256 || raw.fingerprint_sha256,
+  });
+}
+
 async function syncPanel() {
   const domain = tlsMaterial.panelLiveDomain();
   if (!domain) return null;
@@ -220,7 +297,10 @@ async function syncPanel() {
     'SELECT * FROM ssl_certificates WHERE is_panel = 1 LIMIT 1',
   ).get();
   if (existingPanel) {
-    return updateRow(existingPanel.id, { is_panel: 1, managed: 1 });
+    const key = existingPanel.storage_key || existingPanel.domain || domain;
+    persistPanelSslHost(key);
+    updateRow(existingPanel.id, { is_panel: 1, managed: 1 });
+    return refreshRowMetaFromVolume(existingPanel.id);
   }
 
   const byKey = database().prepare(
@@ -228,15 +308,22 @@ async function syncPanel() {
   ).get(domain);
   if (byKey && byKey.type !== 'reality') {
     clearPanelFlags();
-    return updateRow(byKey.id, { is_panel: 1, managed: 1 });
+    persistPanelSslHost(byKey.storage_key || domain);
+    updateRow(byKey.id, { is_panel: 1, managed: 1 });
+    return refreshRowMetaFromVolume(byKey.id);
   }
 
+  const meta = await metaFromVolume(domain);
+  persistPanelSslHost(domain);
   return insertRow({
     type: guessPanelMaterialType(),
     label: 'Panel',
     domain,
     sni: domain,
     storage_key: domain,
+    not_after: meta.notAfter,
+    issuer: meta.issuer,
+    fingerprint_sha256: meta.fingerprintSha256,
     source: 'synced_panel',
     managed: 1,
     is_panel: 1,
@@ -245,7 +332,15 @@ async function syncPanel() {
 
 async function list() {
   await syncPanel().catch(() => null);
-  const rows = database().prepare(
+  let rows = database().prepare(
+    'SELECT * FROM ssl_certificates ORDER BY is_panel DESC, type ASC, domain ASC',
+  ).all();
+  // Refresh expiry/fingerprint from live PEM so UI matches volume after renew/assign.
+  for (const row of rows) {
+    if (row.type === 'reality' || !row.storage_key) continue;
+    await refreshRowMetaFromVolume(row).catch(() => null);
+  }
+  rows = database().prepare(
     'SELECT * FROM ssl_certificates ORDER BY is_panel DESC, type ASC, domain ASC',
   ).all();
   let publicIp = '';
@@ -428,6 +523,7 @@ async function renew(id, opts = {}) {
   const domain = row.storage_key || row.domain;
   const email = row.email || tlsMaterial.getCertbotEmail();
   const force = opts.force !== false;
+  const beforeMeta = await metaFromVolume(domain);
   const portPlan = require('./portPlan');
   if (portPlan.isIpLiteral(domain)) {
     await tlsMaterial.issueLetsEncryptIp(domain, email, { force });
@@ -435,16 +531,35 @@ async function renew(id, opts = {}) {
     await tlsMaterial.issueLetsEncrypt(domain, email, { force });
   }
   const meta = await metaFromVolume(domain);
-  return updateRow(id, {
+  if (meta.notAfter == null) {
+    throw httpError(500, 'Renew completed but could not read new certificate metadata', 'SSL_RENEW_META');
+  }
+  if (
+    force
+    && beforeMeta.notAfter != null
+    && meta.notAfter <= beforeMeta.notAfter
+  ) {
+    throw httpError(
+      400,
+      'Renew did not extend certificate lifetime',
+      'CERT_RENEW_NO_EXTEND',
+    );
+  }
+  const updated = updateRow(id, {
     not_after: meta.notAfter,
     issuer: meta.issuer,
     fingerprint_sha256: meta.fingerprintSha256,
     source: 'issued',
   });
+  if (isPanelRow(row)) {
+    persistPanelSslHost(domain);
+  }
+  return updated;
 }
 
 /**
  * Assign inventory cert as panel TLS: copy PEM into live/${PANEL_DOMAIN}/ and reload nginx.
+ * Persists storage_key as the redeploy reuse default (even when PANEL_DOMAIN is still old).
  */
 async function assignPanel(id) {
   const row = getRaw(id);
@@ -467,7 +582,15 @@ async function assignPanel(id) {
     await tlsMaterial.copyLiveCert(storageKey, panelKey);
   }
   clearPanelFlags();
-  const updated = updateRow(id, { is_panel: 1, managed: 1 });
+  const meta = await metaFromVolume(storageKey);
+  const updated = updateRow(id, {
+    is_panel: 1,
+    managed: 1,
+    not_after: meta.notAfter != null ? meta.notAfter : row.not_after,
+    issuer: meta.issuer || row.issuer,
+    fingerprint_sha256: meta.fingerprintSha256 || row.fingerprint_sha256,
+  });
+  persistPanelSslHost(storageKey);
   const portPlan = require('./portPlan');
   await portPlan.reloadNginx();
   return updated;

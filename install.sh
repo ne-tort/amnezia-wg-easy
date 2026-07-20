@@ -999,43 +999,77 @@ remember_reuse_candidate() {
   return 0
 }
 
+# Active panel TLS identity written by SSL manager assignPanel (storage_key / LE lineage).
+# Takes priority over stale PANEL_DOMAIN/SSL_HOST after switching certs in the UI.
+read_ssl_panel_host_hint() {
+  local f h
+  for f in \
+    "${INSTALL_DIR}/.ssl-panel-host" \
+    "${INSTALL_DIR}/ssl-panel-host" \
+    "/opt/amnezia/awg/ssl-panel-host"; do
+    [[ -f "$f" ]] || continue
+    h=$(head -1 "$f" 2>/dev/null | tr -d '\r\n' | tr '[:upper:]' '[:lower:]')
+    [[ -n "$h" && "$h" != "127.0.0.1" && "$h" != "localhost" ]] || continue
+    printf '%s' "$h"
+    return 0
+  done
+  return 1
+}
+
+try_reuse_hint_name() {
+  # try_reuse_hint_name NAME — export/copy and remember if usable
+  local hint="$1" dir tmp min_d
+  [[ -z "$hint" || "$hint" == "127.0.0.1" || "$hint" == "localhost" ]] && return 1
+  if is_ipv4 "$hint"; then
+    min_d="$CERT_REUSE_MIN_DAYS_IP"
+  else
+    min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
+  fi
+  for dir in \
+    "${CERT_HOST_DIR}/${hint}" \
+    "/root/cert/${hint}"; do
+    remember_reuse_candidate "$hint" "$dir" "host:${dir}" "$min_d" && return 0
+  done
+  if is_ipv4 "$hint"; then
+    remember_reuse_candidate "$hint" "${CERT_HOST_DIR}/ip" "host:${CERT_HOST_DIR}/ip" "$min_d" && return 0
+  fi
+  tmp=$(mktemp -d)
+  if export_certs_from_volume "$hint" "$tmp" && cert_pair_usable "$tmp" "$min_d"; then
+    mkdir -p "${CERT_HOST_DIR}/${hint}"
+    cp "${tmp}/fullchain.pem" "${CERT_HOST_DIR}/${hint}/fullchain.pem"
+    cp "${tmp}/privkey.pem" "${CERT_HOST_DIR}/${hint}/privkey.pem"
+    rm -rf "$tmp"
+    remember_reuse_candidate "$hint" "${CERT_HOST_DIR}/${hint}" "volume" "$min_d" && return 0
+  fi
+  rm -rf "$tmp"
+  return 1
+}
+
 discover_reusable_certs() {
   REUSE_SSL_NAME=""
   REUSE_SSL_DIR=""
   REUSE_SSL_EXPIRES=""
   REUSE_SSL_SOURCE=""
   local name="" dir="" tmp v live hint min_d
+  local env_panel conf_panel env_ssl conf_ssl active_hint
 
-  # 1) Last install / env hints
-  for hint in \
-    "$(grep -E '^SSL_HOST=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2-)" \
-    "$(grep -E '^PANEL_DOMAIN=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2-)" \
-    "$(grep -E '^PANEL_DOMAIN=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2-)" \
-    "$(grep -E '^SSL_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2-)"; do
+  active_hint=$(read_ssl_panel_host_hint || true)
+  env_panel=$(grep -E '^PANEL_DOMAIN=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true)
+  conf_panel=$(grep -E '^PANEL_DOMAIN=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true)
+  env_ssl=$(grep -E '^SSL_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true)
+  conf_ssl=$(grep -E '^SSL_HOST=' "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true)
+
+  # 0) SSL manager active panel cert (after UI assign) — before stale install.conf SSL_HOST
+  if [[ -n "$active_hint" ]]; then
+    try_reuse_hint_name "$active_hint" && return 0
+  fi
+
+  # Prefer current PANEL_DOMAIN (.env) over stale SSL_HOST from a previous install.
+  # Order: PANEL_DOMAIN (.env) → PANEL_DOMAIN (install.conf) → SSL_HOST (.env) → SSL_HOST (install.conf)
+  for hint in "$env_panel" "$conf_panel" "$env_ssl" "$conf_ssl"; do
     hint="${hint//$'\r'/}"
-    [[ -z "$hint" || "$hint" == "127.0.0.1" || "$hint" == "localhost" ]] && continue
-    if is_ipv4 "$hint"; then
-      min_d="$CERT_REUSE_MIN_DAYS_IP"
-    else
-      min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
-    fi
-    for dir in \
-      "${CERT_HOST_DIR}/${hint}" \
-      "/root/cert/${hint}"; do
-      remember_reuse_candidate "$hint" "$dir" "host:${dir}" "$min_d" && return 0
-    done
-    if is_ipv4 "$hint"; then
-      remember_reuse_candidate "$hint" "${CERT_HOST_DIR}/ip" "host:${CERT_HOST_DIR}/ip" "$min_d" && return 0
-    fi
-    tmp=$(mktemp -d)
-    if export_certs_from_volume "$hint" "$tmp" && cert_pair_usable "$tmp" "$min_d"; then
-      mkdir -p "${CERT_HOST_DIR}/${hint}"
-      cp "${tmp}/fullchain.pem" "${CERT_HOST_DIR}/${hint}/fullchain.pem"
-      cp "${tmp}/privkey.pem" "${CERT_HOST_DIR}/${hint}/privkey.pem"
-      rm -rf "$tmp"
-      remember_reuse_candidate "$hint" "${CERT_HOST_DIR}/${hint}" "volume" "$min_d" && return 0
-    fi
-    rm -rf "$tmp"
+    [[ -n "$active_hint" && "$hint" == "$active_hint" ]] && continue
+    try_reuse_hint_name "$hint" && return 0
   done
 
   # 2) Host directories under /root/cert (incl. amnezia-wg-easy/<name>)
@@ -1057,27 +1091,37 @@ discover_reusable_certs() {
     remember_reuse_candidate "$name" "$dir" "host:${dir}" "$min_d" && return 0
   done < <(find /root/cert -type f -name fullchain.pem 2>/dev/null | head -50)
 
-  # 3) Any docker certbot_conf volumes → live/*
+  # 3) Any docker certbot_conf volumes → live/* (prefer active panel SSL / PANEL_DOMAIN first)
+  local prefer="${active_hint:-${env_panel:-$conf_panel}}"
+  prefer="${prefer//$'\r'/}"
   while IFS= read -r v; do
     [[ -z "$v" ]] && continue
     live=$(docker run --rm -v "${v}:/etc/letsencrypt:ro" alpine:3.20 \
       sh -c 'ls -1 /etc/letsencrypt/live 2>/dev/null' 2>/dev/null || true)
-    for name in $live; do
-      [[ "$name" == "README" ]] && continue
-      if is_ipv4 "$name"; then
-        min_d="$CERT_REUSE_MIN_DAYS_IP"
-      else
-        min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
-      fi
-      tmp=$(mktemp -d)
-      if export_certs_from_volume "$name" "$tmp" "$v" && cert_pair_usable "$tmp" "$min_d"; then
-        mkdir -p "${CERT_HOST_DIR}/${name}"
-        cp "${tmp}/fullchain.pem" "${CERT_HOST_DIR}/${name}/fullchain.pem"
-        cp "${tmp}/privkey.pem" "${CERT_HOST_DIR}/${name}/privkey.pem"
+    # Two passes: preferred panel domain, then the rest
+    for pass in prefer rest; do
+      for name in $live; do
+        [[ "$name" == "README" ]] && continue
+        if [[ "$pass" == "prefer" ]]; then
+          [[ -n "$prefer" && "$name" == "$prefer" ]] || continue
+        else
+          [[ -n "$prefer" && "$name" == "$prefer" ]] && continue
+        fi
+        if is_ipv4 "$name"; then
+          min_d="$CERT_REUSE_MIN_DAYS_IP"
+        else
+          min_d="$CERT_REUSE_MIN_DAYS_DOMAIN"
+        fi
+        tmp=$(mktemp -d)
+        if export_certs_from_volume "$name" "$tmp" "$v" && cert_pair_usable "$tmp" "$min_d"; then
+          mkdir -p "${CERT_HOST_DIR}/${name}"
+          cp "${tmp}/fullchain.pem" "${CERT_HOST_DIR}/${name}/fullchain.pem"
+          cp "${tmp}/privkey.pem" "${CERT_HOST_DIR}/${name}/privkey.pem"
+          rm -rf "$tmp"
+          remember_reuse_candidate "$name" "${CERT_HOST_DIR}/${name}" "volume:${v}" "$min_d" && return 0
+        fi
         rm -rf "$tmp"
-        remember_reuse_candidate "$name" "${CERT_HOST_DIR}/${name}" "volume:${v}" "$min_d" && return 0
-      fi
-      rm -rf "$tmp"
+      done
     done
   done < <(list_certbot_volumes)
 
@@ -1939,6 +1983,10 @@ write_env() {
   if [[ -z "$(grep -E '^SESSION_SECRET=' "$envf" | cut -d= -f2-)" ]] \
     || grep -qE '^SESSION_SECRET=(change-me-in-production)?$' "$envf"; then
     env_set "$envf" SESSION_SECRET "$(gen_random_string 32)"
+  fi
+  # Keep SSL manager / redeploy reuse hint aligned with the cert just installed.
+  if [[ -n "$SSL_HOST" && "$SSL_HOST" != "127.0.0.1" && "$SSL_HOST" != "localhost" ]]; then
+    printf '%s\n' "$SSL_HOST" >"${INSTALL_DIR}/.ssl-panel-host"
   fi
   mkdir -p "$CONF_DIR"
   cat >"${CONF_DIR}/install.conf" <<EOF
