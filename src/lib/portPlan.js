@@ -134,6 +134,43 @@ function collectServices() {
     });
   }
 
+  if (desired('amnezia_naive_desired')) {
+    const pub = parsePort(
+      setting('amnezia_naive_public_port', '') || process.env.NAIVE_PUBLIC_PORT || '443',
+      443,
+    );
+    const listen = 8443;
+    const sni = setting('amnezia_naive_sni', '');
+    services.push({
+      id: 'naive',
+      publicPort: pub,
+      listenPort: listen,
+      sni: sni.toLowerCase(),
+      upstream: `amnezia-naive:${listen}`,
+      alwaysOn: false,
+    });
+  }
+
+  return services;
+}
+
+/**
+ * UDP sidecars with direct host publish (no nginx demux).
+ */
+function collectUdpDirectServices() {
+  const services = [];
+  if (desired('amnezia_hysteria_desired')) {
+    const pub = parsePort(
+      setting('amnezia_hysteria_public_port', '') || process.env.HYSTERIA_PUBLIC_PORT || '443',
+      443,
+    );
+    services.push({
+      id: 'hysteria',
+      publicPort: pub,
+      listenPort: 443,
+      protocol: 'udp',
+    });
+  }
   return services;
 }
 
@@ -253,9 +290,12 @@ function computePlan(servicesInput) {
     }
   }
 
+  const udpDirect = collectUdpDirectServices();
+
   return {
     demuxPorts,
     direct,
+    udpDirect,
     panelExclusive,
     modes,
     demuxPeers,
@@ -379,6 +419,48 @@ function writeComposePortsFile(plan) {
   return composePortsPath();
 }
 
+async function isHostUdpPortInUse(port) {
+  const p = String(port);
+  const ss = await runCmd('ss', ['-lnu'], { timeout: 5_000 });
+  if (ss.ok) {
+    const re = new RegExp(`[:.]${p}\\s`);
+    if (re.test(ss.stdout)) return true;
+  }
+  const nt = await runCmd('netstat', ['-lnu'], { timeout: 5_000 });
+  if (nt.ok) {
+    const re = new RegExp(`[:.]${p}\\s`);
+    if (re.test(nt.stdout)) return true;
+  }
+  return false;
+}
+
+/**
+ * Assert host UDP ports for udpDirect sidecars are free or already ours.
+ * @param {number[]} ports
+ * @param {{ allowSidecar?: boolean }} opts
+ */
+async function assertHostUdpPortsAvailable(ports, opts = {}) {
+  const allowSidecar = opts.allowSidecar !== false;
+  const wgPort = parsePort(process.env.WG_PORT, 51820);
+  for (const port of ports) {
+    if (allowSidecar) {
+      const hy = await runCmd('docker', [
+        'inspect', '-f',
+        '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
+        'amnezia-hysteria',
+      ]);
+      if (hy.ok && new RegExp(`${port}/udp`).test(hy.stdout)) continue;
+    }
+    if (port === wgPort) continue;
+    if (await isHostUdpPortInUse(port)) {
+      const err = new Error(`Host UDP ${port} is in use by another process`);
+      err.status = 409;
+      err.code = 'HOST_UDP_PORT_BUSY';
+      throw err;
+    }
+  }
+}
+
 async function isHostTcpPortInUse(port) {
   const p = String(port);
   const ss = await runCmd('ss', ['-lnt'], { timeout: 5_000 });
@@ -463,6 +545,12 @@ async function assertHostPortsAvailable(ports, opts = {}) {
         'amnezia-xray',
       ]);
       if (xray.ok && new RegExp(`${port}/tcp`).test(xray.stdout)) continue;
+      const naive = await runCmd('docker', [
+        'inspect', '-f',
+        '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
+        'amnezia-naive',
+      ]);
+      if (naive.ok && new RegExp(`${port}/tcp`).test(naive.stdout)) continue;
     }
 
     if (await isHostTcpPortInUse(port)) {
@@ -659,9 +747,15 @@ async function applyPlanUnlocked() {
 
   // Sidecars must drop host -p before nginx can publish demux ports.
   await releaseSidecarsForDemux(plan);
+  await ensureUdpDirectSidecars(plan);
 
   const demuxHostPorts = plan.demuxPorts.map((d) => d.port);
   await assertHostPortsAvailable(demuxHostPorts, { allowNginx: true, allowSidecar: false });
+
+  const udpHostPorts = (plan.udpDirect || []).map((s) => s.publicPort);
+  if (udpHostPorts.length) {
+    await assertHostUdpPortsAvailable(udpHostPorts, { allowSidecar: true });
+  }
 
   const inspect = await runCmd('docker', ['inspect', '-f', '{{.State.Running}}', NGINX_CONTAINER]);
   if (!inspect.ok) {
@@ -749,6 +843,32 @@ async function releaseSidecarsForDemux(plan) {
       console.error('portPlan: ensure xray for demux failed:', err && err.message);
     }
   }
+  if (demuxServices.has('naive')) {
+    try {
+      const naive = require('./amneziaNaive');
+      if (typeof naive.ensureNaiveContainer === 'function') {
+        await naive.ensureNaiveContainer();
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('portPlan: ensure naive for demux failed:', err && err.message);
+    }
+  }
+}
+
+async function ensureUdpDirectSidecars(plan) {
+  const ids = new Set((plan.udpDirect || []).map((s) => s.id));
+  if (ids.has('hysteria')) {
+    try {
+      const hysteria = require('./amneziaHysteria');
+      if (typeof hysteria.ensureHysteriaContainer === 'function') {
+        await hysteria.ensureHysteriaContainer();
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('portPlan: ensure hysteria for udpDirect failed:', err && err.message);
+    }
+  }
 }
 
 /** @deprecated use applyPlan — kept for callers */
@@ -805,6 +925,7 @@ function getStatusSummary() {
       defaultUpstream: d.defaultUpstream,
     })),
     direct: plan.direct,
+    udpDirect: plan.udpDirect || [],
     panelExclusive: plan.panelExclusive,
     modes: plan.modes,
     demuxPeers: plan.demuxPeers,
@@ -823,7 +944,10 @@ module.exports = {
   isDemuxService,
   assertSniConflict,
   assertHostPortsAvailable,
+  assertHostUdpPortsAvailable,
   isHostTcpPortInUse,
+  isHostUdpPortInUse,
+  collectUdpDirectServices,
   resolveNginxNetwork,
   getStatusSummary,
   writeStreamConfigs,

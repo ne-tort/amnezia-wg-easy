@@ -40,6 +40,8 @@ module.exports.SUB_PUBLIC_PREFIX = (() => {
 module.exports.XRAY_PORT = Math.max(1, parseInt(process.env.XRAY_PORT || '24443', 10) || 24443);
 // * Client-facing TCP for Reality via nginx stream demux.
 module.exports.DEMUX_PORT = Math.max(1, parseInt(process.env.DEMUX_PORT || '443', 10) || 443);
+// * Client-facing TCP for NaiveProxy via nginx stream demux (default 443).
+module.exports.NAIVE_PUBLIC_PORT = Math.max(1, parseInt(process.env.NAIVE_PUBLIC_PORT || '443', 10) || 443);
 // * MTU 1280 avoids fragmentation on mobile (large response packets often dropped otherwise). Set WG_MTU=none or empty to omit from client config.
 const _mtu = process.env.WG_MTU;
 module.exports.WG_MTU = (_mtu === '' || _mtu === 'none') ? null : (_mtu || '1280');

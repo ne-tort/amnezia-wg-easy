@@ -329,6 +329,8 @@ const WireGuard = class {
         mtuProfile: c.mtu_profile || undefined,
         createdBy: c.created_by || null,
         xrayUuid: c.xray_uuid || null,
+        hysteriaPassword: c.hysteria_password || null,
+        naivePassword: c.naive_password || null,
       };
     }
     return { server, clients };
@@ -633,6 +635,8 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
       mtu_profile: c.mtuProfile || null,
       created_by: c.createdBy || null,
       xray_uuid: c.xrayUuid || null,
+      hysteria_password: c.hysteriaPassword || null,
+      naive_password: c.naivePassword || null,
     }));
     db.clients.replaceAll(clientRows);
 

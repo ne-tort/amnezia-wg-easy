@@ -176,6 +176,18 @@ if ! docker build -t amnezia-xray ./amnezia-xray; then
   exit 1
 fi
 
+echo "[deploy] Building amnezia-hysteria image (Hysteria2; container not started)..."
+if ! docker build -t amnezia-hysteria ./amnezia-hysteria; then
+  echo "[deploy] ERROR: amnezia-hysteria image build failed (required for Hysteria toggle from the panel)" >&2
+  exit 1
+fi
+
+echo "[deploy] Building amnezia-naive image (Caddy forward_proxy; container not started)..."
+if ! docker build -t amnezia-naive ./amnezia-naive; then
+  echo "[deploy] ERROR: amnezia-naive image build failed (required for Naive toggle from the panel)" >&2
+  exit 1
+fi
+
 if ! docker network inspect amnezia-dns-net >/dev/null 2>&1; then
   echo "[deploy] ERROR: amnezia-dns-net missing after create" >&2
   exit 1
