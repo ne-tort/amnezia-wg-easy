@@ -213,6 +213,20 @@ async function removeLiveCert(domain) {
 /** Minimum remaining lifetime before we treat an existing cert as reusable. */
 const CERT_REUSE_MIN_REMAINING_MS = 2 * 24 * 60 * 60 * 1000;
 
+/** After force renew, accept unchanged notAfter (LE cert reuse) if this much life remains. */
+const CERT_FORCE_RENEW_ACCEPT_REUSE_MS = 14 * 24 * 60 * 60 * 1000;
+const CERT_FORCE_RENEW_ACCEPT_REUSE_IP_MS = 1 * 24 * 60 * 60 * 1000;
+
+function metaRemainingMs(meta) {
+  if (!meta || meta.notAfter == null) return null;
+  return meta.notAfter * 1000 - Date.now();
+}
+
+function metaHealthyForReuse(meta, minRemainingMs) {
+  const left = metaRemainingMs(meta);
+  return left != null && left > Math.max(0, Number(minRemainingMs) || 0);
+}
+
 /**
  * Parse openssl `-enddate` output (`notAfter=Jul 20 15:12:24 2026 GMT`).
  * @returns {number|null} epoch ms
@@ -360,17 +374,16 @@ async function issueLetsEncrypt(domain, email, opts = {}) {
     throw err;
   }
 
-  // Force renew must actually extend lifetime; certbot can exit 0 while leaving the same leaf.
+  // Force renew: LE may reuse an identical leaf (same notAfter). Try --new-key once; if still
+  // unchanged but plenty of lifetime remains, accept and let the caller sync DB metadata.
   if (force && backup && backup.cert) {
     const before = parsePemMeta(backup.cert);
-    const afterPem = await readPemFromVolume(d);
-    const after = parsePemMeta(afterPem);
+    let after = parsePemMeta(await readPemFromVolume(d));
     if (
       before.notAfter != null
       && after.notAfter != null
       && after.notAfter <= before.notAfter
     ) {
-      // Retry once via certonly --force-renewal (renew path may have been a no-op).
       const retry = await runCmd('docker', [
         'run', '--rm',
         '-v', `${vol}:/etc/letsencrypt`,
@@ -383,14 +396,21 @@ async function issueLetsEncrypt(domain, email, opts = {}) {
         '--agree-tos',
         '--non-interactive',
         '--force-renewal',
+        '--new-key',
       ], { timeout: 300_000 });
       if (!retry.ok) {
+        // ACME failed — keep existing live cert if still healthy.
+        if (metaHealthyForReuse(before, CERT_FORCE_RENEW_ACCEPT_REUSE_MS)) {
+          return certPathsForDomain(d);
+        }
         await restoreIfNeeded();
         throw certbotIssueError(retry.stderr || retry.stdout || 'force renew did not extend certificate', d);
       }
-      const afterRetry = parsePemMeta(await readPemFromVolume(d));
-      if (afterRetry.notAfter == null || afterRetry.notAfter <= before.notAfter) {
-        await restoreIfNeeded();
+      after = parsePemMeta(await readPemFromVolume(d));
+      if (after.notAfter == null || after.notAfter <= before.notAfter) {
+        if (metaHealthyForReuse(after.notAfter != null ? after : before, CERT_FORCE_RENEW_ACCEPT_REUSE_MS)) {
+          return certPathsForDomain(d);
+        }
         const err = new Error(
           `Renew completed but certificate expiry did not extend for ${d} (still ${before.notAfter})`,
         );
@@ -531,6 +551,9 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
       && after.notAfter != null
       && after.notAfter <= before.notAfter
     ) {
+      if (metaHealthyForReuse(after, CERT_FORCE_RENEW_ACCEPT_REUSE_IP_MS)) {
+        return certPathsForDomain(d);
+      }
       const err = new Error(
         `IP renew completed but certificate expiry did not extend for ${d}`,
       );

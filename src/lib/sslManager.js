@@ -525,25 +525,40 @@ async function renew(id, opts = {}) {
   const force = opts.force !== false;
   const beforeMeta = await metaFromVolume(domain);
   const portPlan = require('./portPlan');
-  if (portPlan.isIpLiteral(domain)) {
-    await tlsMaterial.issueLetsEncryptIp(domain, email, { force });
-  } else {
-    await tlsMaterial.issueLetsEncrypt(domain, email, { force });
+  // Sync-only when live PEM is healthy and caller did not request force ACME.
+  const liveHealthy = beforeMeta.notAfter != null
+    && beforeMeta.notAfter * 1000 > Date.now() + 14 * 24 * 60 * 60 * 1000;
+  const nearExpiry = !(beforeMeta.notAfter != null
+    && beforeMeta.notAfter * 1000 > Date.now() + 30 * 24 * 60 * 60 * 1000);
+
+  if (force || nearExpiry || !liveHealthy) {
+    if (portPlan.isIpLiteral(domain)) {
+      await tlsMaterial.issueLetsEncryptIp(domain, email, { force: force || nearExpiry });
+    } else {
+      await tlsMaterial.issueLetsEncrypt(domain, email, { force: force || nearExpiry });
+    }
   }
+
   const meta = await metaFromVolume(domain);
   if (meta.notAfter == null) {
     throw httpError(500, 'Renew completed but could not read new certificate metadata', 'SSL_RENEW_META');
   }
+  // LE often returns the same leaf on force renew (certificate reuse). Accept when still healthy.
   if (
     force
     && beforeMeta.notAfter != null
     && meta.notAfter <= beforeMeta.notAfter
   ) {
-    throw httpError(
-      400,
-      'Renew did not extend certificate lifetime',
-      'CERT_RENEW_NO_EXTEND',
-    );
+    const minMs = portPlan.isIpLiteral(domain)
+      ? 1 * 24 * 60 * 60 * 1000
+      : 14 * 24 * 60 * 60 * 1000;
+    if (meta.notAfter * 1000 <= Date.now() + minMs) {
+      throw httpError(
+        400,
+        'Renew did not extend certificate lifetime',
+        'CERT_RENEW_NO_EXTEND',
+      );
+    }
   }
   const updated = updateRow(id, {
     not_after: meta.notAfter,
