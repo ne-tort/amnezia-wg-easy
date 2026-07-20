@@ -2424,13 +2424,13 @@ new Vue({
           this.clientAssignSubmitting = false;
         });
     },
+    ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.methods : {}),
   },
   filters: {
     bytes,
     timeago: (value) => {
       return timeago.format(value, i18n.locale);
     },
-    ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.methods : {}),
   },
   created() {
     if (this.clientDownloadFormat == null || typeof this.clientDownloadFormat !== 'object') {
