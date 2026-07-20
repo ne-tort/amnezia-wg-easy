@@ -128,8 +128,16 @@ const SslManagerPanel = {
       this.sslDetail = null;
       this.sslManagerError = null;
     },
+    openSslAdd() {
+      this.sslManagerCreateType = '';
+      this.sslManagerView = 'create';
+      this.sslSelectedId = null;
+      this.sslDetail = null;
+      this.resetSslForm();
+      this.sslManagerError = null;
+    },
     openSslCreate(type) {
-      this.sslManagerCreateType = type;
+      this.sslManagerCreateType = type || '';
       this.sslManagerView = 'create';
       this.resetSslForm();
       this.sslManagerError = null;
@@ -146,6 +154,7 @@ const SslManagerPanel = {
             res = await this.api.createSslSelfSigned({
               domain: f.domain,
               label: f.label || undefined,
+              days: f.days ? Number(f.days) : undefined,
             });
             break;
           case 'lets_encrypt':

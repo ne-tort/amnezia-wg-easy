@@ -88,9 +88,21 @@ function getRaw(id) {
   return database().prepare('SELECT * FROM ssl_certificates WHERE id = ?').get(id);
 }
 
-function getById(id, { includeSecrets = false } = {}) {
+function getByIdSync(id, { includeSecrets = false } = {}) {
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
+  return rowToPublic(row, { includeSecrets });
+}
+
+async function getById(id, { includeSecrets = false, refreshMeta = true } = {}) {
+  let row = getRaw(id);
+  if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
+  if (refreshMeta && row.type !== 'reality' && row.storage_key) {
+    try {
+      await applyPemMeta(row.id, row.storage_key);
+      row = getRaw(id) || row;
+    } catch { /* keep stale meta */ }
+  }
   return rowToPublic(row, { includeSecrets });
 }
 
@@ -130,7 +142,7 @@ function insertRow(fields) {
     created_at: t,
     updated_at: t,
   });
-  return getById(id, { includeSecrets: true });
+  return getByIdSync(id, { includeSecrets: true });
 }
 
 function updateRow(id, patch) {
@@ -169,7 +181,7 @@ function updateRow(id, patch) {
     notes: next.notes,
     updated_at: next.updated_at,
   });
-  return getById(id, { includeSecrets: true });
+  return getByIdSync(id, { includeSecrets: true });
 }
 
 async function inspectVolumeCert(storageKey) {
@@ -214,13 +226,18 @@ async function applyPemMeta(id, storageKey) {
   });
 }
 
-async function syncPanel() {
+async function syncPanel({ inspect = false } = {}) {
   const domain = tlsMaterial.panelCertDomain();
   if (!domain) return null;
-  const exists = await tlsMaterial.certExistsInVolume(domain);
-  const meta = exists
-    ? await inspectVolumeCert(domain)
-    : { notAfter: null, issuer: '', fingerprintSha256: '' };
+  let meta = { notAfter: null, issuer: '', fingerprintSha256: '' };
+  if (inspect) {
+    try {
+      const exists = await tlsMaterial.certExistsInVolume(domain);
+      if (exists) meta = await inspectVolumeCert(domain);
+    } catch {
+      /* keep empty / stale */
+    }
+  }
   const row = database().prepare(
     "SELECT * FROM ssl_certificates WHERE type = 'panel' LIMIT 1",
   ).get();
@@ -238,34 +255,34 @@ async function syncPanel() {
       managed: 1,
     });
   }
-  return updateRow(row.id, {
+  const patch = {
     domain,
     sni: domain,
     storage_key: domain,
-    not_after: meta.notAfter,
-    issuer: meta.issuer,
-    fingerprint_sha256: meta.fingerprintSha256,
     source: 'synced_panel',
     managed: 1,
-  });
+  };
+  if (inspect) {
+    patch.not_after = meta.notAfter;
+    patch.issuer = meta.issuer;
+    patch.fingerprint_sha256 = meta.fingerprintSha256;
+  }
+  return updateRow(row.id, patch);
 }
 
+/**
+ * Fast inventory list: DB rows only (no docker openssl per cert — that blocked the UI).
+ * Meta refresh happens on get()/renew/create.
+ */
 async function list() {
-  await syncPanel().catch(() => null);
+  await syncPanel({ inspect: false }).catch(() => null);
   const rows = database().prepare(
     'SELECT * FROM ssl_certificates ORDER BY managed DESC, type ASC, domain ASC',
   ).all();
-  const out = [];
-  for (const row of rows) {
-    if (row.type !== 'reality' && row.storage_key) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        await applyPemMeta(row.id, row.storage_key);
-      } catch { /* keep stale meta */ }
-    }
-    out.push(rowToPublic(getRaw(row.id), { includeSecrets: false }));
-  }
-  return { certs: out, certbotEmail: tlsMaterial.getCertbotEmail() || '' };
+  return {
+    certs: rows.map((row) => rowToPublic(row, { includeSecrets: false })),
+    certbotEmail: tlsMaterial.getCertbotEmail() || '',
+  };
 }
 
 async function generateRealityKeypair() {
