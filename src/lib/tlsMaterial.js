@@ -87,6 +87,43 @@ async function certExistsInVolume(domain) {
   return r.ok && r.stdout.trim() === 'ok';
 }
 
+/** Minimum remaining lifetime before we treat an existing cert as reusable. */
+const CERT_REUSE_MIN_REMAINING_MS = 2 * 24 * 60 * 60 * 1000;
+
+/**
+ * Parse openssl `-enddate` output (`notAfter=Jul 20 15:12:24 2026 GMT`).
+ * @returns {number|null} epoch ms
+ */
+function parseOpensslEnddate(line) {
+  const raw = String(line || '').trim();
+  const m = raw.match(/^notAfter=(.+)$/i);
+  if (!m) return null;
+  const ms = Date.parse(m[1].trim());
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/**
+ * True when live/{domain} PEM pair exists and notAfter is far enough in the future.
+ */
+async function certUsableInVolume(domain, { minRemainingMs = CERT_REUSE_MIN_REMAINING_MS } = {}) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!d) return false;
+  if (!(await certExistsInVolume(d))) return false;
+  const vol = await resolveCertbotVolumeName();
+  const paths = certPathsForDomain(d);
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt:ro`,
+    'alpine:3.20',
+    'sh', '-c',
+    `apk add --no-cache openssl >/dev/null 2>&1; openssl x509 -in '${paths.cert}' -noout -enddate`,
+  ], { timeout: 60_000 });
+  if (!r.ok) return false;
+  const endMs = parseOpensslEnddate(r.stdout.trim().split('\n').pop());
+  if (endMs == null) return false;
+  return endMs > Date.now() + Math.max(0, Number(minRemainingMs) || 0);
+}
+
 const CERTBOT_EMAIL_KEY = 'certbot_email';
 
 function getCertbotEmail() {
@@ -315,17 +352,16 @@ async function resolveCertMaterial(opts = {}) {
     }
   }
 
-  if (!(await certExistsInVolume(certDomain))) {
-    if (source === 'issue_le') {
+  // LE: reuse live PEM when still valid; otherwise certbot --keep-until-expiring.
+  if (source === 'issue_le' || opts.issueIfMissing) {
+    if (!(await certUsableInVolume(certDomain))) {
       await issueLetsEncrypt(certDomain, opts.email);
-    } else if (opts.issueIfMissing) {
-      await issueLetsEncrypt(certDomain, opts.email);
-    } else {
-      const err = new Error(`Certificate not found for ${certDomain} in certbot volume`);
-      err.status = 400;
-      err.code = 'CERT_MISSING';
-      throw err;
     }
+  } else if (!(await certExistsInVolume(certDomain))) {
+    const err = new Error(`Certificate not found for ${certDomain} in certbot volume`);
+    err.status = 400;
+    err.code = 'CERT_MISSING';
+    throw err;
   }
   return { ...certPathsForDomain(certDomain), source: source === 'panel' ? 'panel' : source };
 }
@@ -372,6 +408,9 @@ module.exports = {
   resolveCertbotVolumeName,
   resolveCertbotWwwVolumeName,
   certExistsInVolume,
+  certUsableInVolume,
+  parseOpensslEnddate,
+  CERT_REUSE_MIN_REMAINING_MS,
   issueLetsEncrypt,
   injectManualPem,
   ensureSelfSignedCert,

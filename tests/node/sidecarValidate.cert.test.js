@@ -94,6 +94,13 @@ test('validateHysteria issue_le requires FQDN SNI', () => {
   assert.ok(r.fieldErrors.sni);
 });
 
+test('tlsMaterial.parseOpensslEnddate parses notAfter line', () => {
+  const ms = tlsMaterial.parseOpensslEnddate('notAfter=Oct 18 15:12:24 2026 GMT');
+  assert.ok(Number.isFinite(ms));
+  assert.ok(ms > Date.UTC(2026, 9, 18));
+  assert.equal(tlsMaterial.parseOpensslEnddate('garbage'), null);
+});
+
 test('tlsMaterial.normalizeHostname strips scheme path and port', () => {
   assert.equal(tlsMaterial.normalizeHostname('https://Naive.Example.com:8443/path'), 'naive.example.com');
   assert.equal(tlsMaterial.normalizeHostname('http://FOO.BAR/'), 'foo.bar');

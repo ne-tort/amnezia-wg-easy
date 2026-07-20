@@ -170,9 +170,9 @@ window.SidecarPanels = {
         || this.amneziaHysteriaCertSource === 'manual_pem'
         || this.amneziaHysteriaCertSource === 'manual_path';
     },
+    // Hysteria is plain TLS (own FQDN for LE), not Reality — no foreign SNI bank.
     showHysteriaSniFinder() {
-      return this.amneziaHysteriaModalMode !== 'manage'
-        && this.amneziaHysteriaCertSource === 'issue_le';
+      return false;
     },
   },
 
