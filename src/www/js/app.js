@@ -233,6 +233,7 @@ new Vue({
       { value: '', label: '(none)' },
     ],
     ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.initialState() : {}),
+    ...(typeof SslManagerPanel !== 'undefined' ? SslManagerPanel.initialState() : {}),
     sniFinderDefaultSni: null,
     sniFinderTarget: null,
     sniFinderOpen: false,
@@ -2582,6 +2583,7 @@ new Vue({
         });
     },
     ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.methods : {}),
+    ...(typeof SslManagerPanel !== 'undefined' ? SslManagerPanel.methods : {}),
   },
   filters: {
     bytes,
@@ -2680,6 +2682,7 @@ new Vue({
       return this.hasCapability('system.xray');
     },
     ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.computed : {}),
+    ...(typeof SslManagerPanel !== 'undefined' ? SslManagerPanel.computed : {}),
     isValidAmneziaXrayPort() {
       const raw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
       if (raw === '') return true;

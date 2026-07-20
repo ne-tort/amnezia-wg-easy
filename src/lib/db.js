@@ -1204,4 +1204,5 @@ module.exports = {
       deleteByClientId: trafficDeltasDeleteByClientId,
     },
   },
+  getDb,
 };

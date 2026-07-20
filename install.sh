@@ -613,6 +613,36 @@ read_install_conf_val() {
   grep -E "^${key}=" "${CONF_DIR}/install.conf" 2>/dev/null | cut -d= -f2- | tr -d '\r' || true
 }
 
+write_install_conf_val() {
+  local key="$1" val="$2" conf="${CONF_DIR}/install.conf"
+  [[ -f "$conf" ]] || return 0
+  if grep -qE "^${key}=" "$conf"; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$conf"
+  else
+    echo "${key}=${val}" >>"$conf"
+  fi
+}
+
+# Parse JSON boolean field from API body. Key must not be a prefix of another (use desiredSet before desired).
+api_json_bool() {
+  local json="$1" key="$2"
+  printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\\(true\\|false\\).*/\\1/p" | head -1
+}
+
+api_json_str() {
+  local json="$1" key="$2"
+  printf '%s' "$json" | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -1
+}
+
+# Return 0 if status says desired was explicitly set off (skip enable on redeploy).
+api_desired_explicitly_off() {
+  local status="$1"
+  local desired_set desired
+  desired_set=$(api_json_bool "$status" desiredSet)
+  desired=$(api_json_bool "$status" desired)
+  [[ "$desired_set" == "true" && "$desired" == "false" ]]
+}
+
 # True when .env already has a real previous install (redeploy), not a fresh clone of .env.example.
 is_redeploy() {
   [[ -f "${INSTALL_DIR}/.env" ]] || return 1
@@ -2098,9 +2128,20 @@ api_login() {
 
 enable_dns() {
   logi "Включение Amnezia DNS..."
-  local status profile_id="" resp
+  local status profile_id="" resp phase
   status=$(api_curl GET /api/amnezia-dns || true)
-  profile_id=$(printf '%s' "$status" | sed -n 's/.*"profileId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if api_desired_explicitly_off "$status"; then
+    logi "DNS: API desired=0 — skip enable (не поднимаем после disable в UI)"
+    ENABLE_DNS=0
+    write_install_conf_val ENABLE_DNS 0
+    return 0
+  fi
+  phase=$(api_json_str "$status" phase)
+  if [[ "$phase" == "running" ]]; then
+    logi "DNS: уже phase=running — skip enable"
+    return 0
+  fi
+  profile_id=$(api_json_str "$status" profileId)
   if [[ -n "$profile_id" ]]; then
     logi "DNS: оставляю profileId=${profile_id}"
   else
@@ -2174,12 +2215,52 @@ enable_naive() {
 enable_xray() {
   logi "Подготовка Xray..."
   local sni="" address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
-  local cidr pub status sni_stored body resp
+  local cidr pub status sni_stored body resp security phase
   pub=$(grep -E '^XRAY_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
   pub="${pub:-443}"
 
   status=$(api_curl GET /api/amnezia-xray || true)
-  sni_stored=$(printf '%s' "$status" | sed -n 's/.*"sniStored"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  if api_desired_explicitly_off "$status"; then
+    logi "Xray: API desired=0 — skip enable (не поднимаем после disable в UI)"
+    ENABLE_XRAY=0
+    write_install_conf_val ENABLE_XRAY 0
+    return 0
+  fi
+  phase=$(api_json_str "$status" phase)
+  if [[ "$phase" == "running" ]] && echo "$status" | grep -Eq '"healthy"[[:space:]]*:[[:space:]]*true|"available"[[:space:]]*:[[:space:]]*true'; then
+    logi "Xray: уже running+healthy — skip enable"
+    return 0
+  fi
+
+  security=$(api_json_str "$status" security)
+  security="${security:-reality}"
+  # TLS / none: do not run Reality SNI Finder or overwrite sni/fp/flow — keep DB mode.
+  if [[ "$security" == "tls" || "$security" == "none" ]]; then
+    logi "Xray: security=${security} — enable без Reality SNI Finder"
+    body=$(printf '{"publicPort":%s,"address":"%s"}' "$pub" "$address")
+    wait_api_service_idle /api/amnezia-xray 60 || true
+    resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
+    logi "Xray enable: ${resp:0:300}"
+    if ! api_enable_ok "$resp"; then
+      wait_api_service_idle /api/amnezia-xray 180 || true
+      sleep 2
+      resp=$(api_curl POST /api/amnezia-xray/enable "$body" || true)
+      logi "Xray enable retry: ${resp:0:300}"
+    fi
+    wait_api_service_idle /api/amnezia-xray 180 || true
+    if ! api_enable_ok "$resp"; then
+      status=$(api_curl GET /api/amnezia-xray || true)
+      if echo "$status" | grep -Eq '"phase"[[:space:]]*:[[:space:]]*"(running|degraded)"'; then
+        logi "Xray в итоге running/degraded"
+        return 0
+      fi
+      loge "Xray enable не удался"
+      return 1
+    fi
+    return 0
+  fi
+
+  sni_stored=$(api_json_str "$status" sniStored)
   sni_stored=$(normalize_sni_host "$sni_stored")
   if [[ -n "$sni_stored" ]]; then
     if sni_is_blocked_tld "$sni_stored"; then

@@ -986,6 +986,115 @@ module.exports = class Server {
         await WireGuard.updateClientDns({ clientId, useServerDns });
         return { success: true };
       }))
+      .get('/api/ssl/certs', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          return await sslManager.list();
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'SSL list failed');
+        }
+      }))
+      .get('/api/ssl/certs/:id', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const id = getRouterParam(event, 'id');
+          return await sslManager.get(id, { includeSecrets: true });
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'SSL get failed');
+        }
+      }))
+      .post('/api/ssl/certs/self-signed', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return { success: true, cert: await sslManager.createSelfSigned(body || {}) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Self-signed issue failed');
+        }
+      }))
+      .post('/api/ssl/certs/lets-encrypt', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return { success: true, cert: await sslManager.createLetsEncrypt(body || {}) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Let\'s Encrypt issue failed');
+        }
+      }))
+      .post('/api/ssl/certs/reality', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return { success: true, cert: await sslManager.createReality(body || {}) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Reality keys generation failed');
+        }
+      }))
+      .post('/api/ssl/certs/import-pem', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return { success: true, cert: await sslManager.importPem(body || {}) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'PEM import failed');
+        }
+      }))
+      .post('/api/ssl/certs/import-path', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return { success: true, cert: await sslManager.importPath(body || {}) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Path import failed');
+        }
+      }))
+      .post('/api/ssl/certs/:id/renew', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const id = getRouterParam(event, 'id');
+          return { success: true, cert: await sslManager.renew(id) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Renew failed');
+        }
+      }))
+      .delete('/api/ssl/certs/:id', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const id = getRouterParam(event, 'id');
+          return await sslManager.remove(id);
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Delete failed');
+        }
+      }))
+      .post('/api/ssl/sync-panel', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const cert = await sslManager.syncPanel();
+          return { success: true, cert };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Panel cert sync failed');
+        }
+      }))
       .get('/api/amnezia-dns', defineEventHandler((event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_DNS);
         return amneziaDns.getStatus();

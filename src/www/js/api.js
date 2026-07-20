@@ -432,6 +432,46 @@ class API {
     return this.call({ method: 'post', path: '/amnezia-dns/force-cleanup' });
   }
 
+  async listSslCerts() {
+    return this.call({ method: 'get', path: '/ssl/certs' });
+  }
+
+  async getSslCert(id) {
+    return this.call({ method: 'get', path: `/ssl/certs/${encodeURIComponent(id)}` });
+  }
+
+  async createSslSelfSigned(body = {}) {
+    return this.call({ method: 'post', path: '/ssl/certs/self-signed', body });
+  }
+
+  async createSslLetsEncrypt(body = {}) {
+    return this.call({ method: 'post', path: '/ssl/certs/lets-encrypt', body });
+  }
+
+  async createSslReality(body = {}) {
+    return this.call({ method: 'post', path: '/ssl/certs/reality', body });
+  }
+
+  async importSslPem(body = {}) {
+    return this.call({ method: 'post', path: '/ssl/certs/import-pem', body });
+  }
+
+  async importSslPath(body = {}) {
+    return this.call({ method: 'post', path: '/ssl/certs/import-path', body });
+  }
+
+  async renewSslCert(id) {
+    return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/renew` });
+  }
+
+  async deleteSslCert(id) {
+    return this.call({ method: 'delete', path: `/ssl/certs/${encodeURIComponent(id)}` });
+  }
+
+  async syncSslPanel() {
+    return this.call({ method: 'post', path: '/ssl/sync-panel' });
+  }
+
   async getAmneziaXrayStatus() {
     return this.call({ method: 'get', path: '/amnezia-xray' });
   }
