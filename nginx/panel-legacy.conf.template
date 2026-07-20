@@ -1,7 +1,7 @@
 # Legacy: entire site is the panel (no WEBUI_PUBLIC_PREFIX).
 server {
-    listen 80;
-    server_name ${PANEL_DOMAIN};
+    listen 80 default_server;
+    server_name _;
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }

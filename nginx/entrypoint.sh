@@ -201,8 +201,8 @@ if [ "$NGINX_CONFIG_PROFILE" = "exit" ]; then
   esac
   cat >"$OUTPUT" <<EOF
 server {
-    listen 80;
-    server_name ${PANEL_DOMAIN};
+    listen 80 default_server;
+    server_name _;
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }

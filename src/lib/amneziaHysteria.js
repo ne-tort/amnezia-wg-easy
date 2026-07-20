@@ -409,7 +409,10 @@ function buildServerYamlObject({
     },
   };
   const mType = masqueradeType || getMasqueradeType();
-  if (mType === 'file') {
+  if (!masqueradeUrl && mType === 'proxy') {
+    // No camouflage URL — minimal string response for unauthenticated probes
+    obj.masquerade = { type: 'string', string: { content: 'ok', headers: {} } };
+  } else if (mType === 'file') {
     obj.masquerade = { type: 'file', file: { dir: '/var/www/html' } };
   } else if (mType === 'string') {
     obj.masquerade = { type: 'string', string: { content: masqueradeUrl || 'ok', headers: {} } };
@@ -869,10 +872,13 @@ async function enableInternal(opts = {}) {
     }
 
     const masqueradeRaw = opts.masqueradeUrl != null ? String(opts.masqueradeUrl).trim() : '';
-    const masqueradeUrl = masqueradeRaw || getMasqueradeUrlStored() || pickDefaultMasqueradeUrl();
+    // Empty string from UI = intentionally no masquerade; only fall back when field omitted
+    const masqueradeUrl = opts.masqueradeUrl != null
+      ? masqueradeRaw
+      : (getMasqueradeUrlStored() || pickDefaultMasqueradeUrl());
     const masqueradeType = opts.masqueradeType != null
       ? String(opts.masqueradeType).trim().toLowerCase()
-      : getMasqueradeType();
+      : (masqueradeUrl ? getMasqueradeType() : 'string');
     const obfsType = opts.obfsType != null ? String(opts.obfsType).trim().toLowerCase() : getObfsType();
     const obfsPassword = opts.obfsPassword != null ? String(opts.obfsPassword).trim() : getObfsPassword();
     const bandwidthUp = opts.bandwidthUp != null ? String(opts.bandwidthUp).trim() : getBandwidthUp();

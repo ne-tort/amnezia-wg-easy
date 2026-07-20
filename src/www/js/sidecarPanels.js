@@ -220,7 +220,8 @@ window.SidecarPanels = {
       return body;
     },
     sniPreflightRequiredForHysteria() {
-      return this.amneziaHysteriaCertSource === 'issue_le';
+      // Reality-style SNI Finder preflight is for camouflage hosts, not own LE domains.
+      return false;
     },
     normalizeHostnameInput(raw) {
       let s = String(raw || '').trim().toLowerCase();
@@ -324,7 +325,7 @@ window.SidecarPanels = {
         keyPath: this.amneziaHysteriaKeyPath,
       });
       const masq = String(this.amneziaHysteriaMasqueradeUrl || '').trim();
-      if (masq) body.masqueradeUrl = masq;
+      body.masqueradeUrl = masq;
       const obfsType = String(this.amneziaHysteriaObfsType || '').trim();
       if (obfsType) {
         body.obfsType = obfsType;
@@ -594,14 +595,7 @@ window.SidecarPanels = {
         if (!String(this.amneziaHysteriaAddress || '').trim()) {
           this.amneziaHysteriaAddress = sidecarDefaultAddress();
         }
-        if (!String(this.amneziaHysteriaSni || '').trim()
-          && this.amneziaHysteriaCertSource === 'issue_le'
-          && this.sniFinderDefaultSni) {
-          this.amneziaHysteriaSni = this.sniFinderDefaultSni;
-        }
-        if (!String(this.amneziaHysteriaMasqueradeUrl || '').trim() && this.sniFinderDefaultSni) {
-          this.amneziaHysteriaMasqueradeUrl = `https://${this.sniFinderDefaultSni}/`;
-        }
+        // Masquerade is optional and unrelated to LE SNI — do not auto-fill from SNI bank
         this.onHysteriaCertSourceChange();
         this.amneziaHysteriaInstallOpen = true;
       });
@@ -620,12 +614,21 @@ window.SidecarPanels = {
         }
         const masq = String(body.masqueradeUrl || '').trim();
         if (masq) {
-          const mp = await this.api.preflightMasqueradeUrl({ url: masq });
-          if (!mp || mp.ok === false) {
-            throw new Error(
-              this.$t('hysteriaMasqueradePreflightFailed', { url: masq })
-              || `Masquerade URL failed check: ${masq}`,
-            );
+          try {
+            const mp = await this.api.preflightMasqueradeUrl({ url: masq });
+            if (!mp || mp.ok === false) {
+              throw new Error(
+                this.$t('hysteriaMasqueradePreflightFailed', { url: masq })
+                || `Masquerade URL failed check: ${masq}`,
+              );
+            }
+          } catch (err) {
+            // Old panel without route → serveStatic 405; do not block install
+            if (err && (err.status === 404 || err.status === 405)) {
+              /* continue */
+            } else {
+              throw err;
+            }
           }
         }
         await this.withAmneziaDnsTimeout(this.api.enableAmneziaHysteria(body), 180000);
@@ -775,7 +778,6 @@ window.SidecarPanels = {
       this.amneziaNaiveBusy = true;
       this.ensureAmneziaNaivePoll();
       try {
-        await this.preflightSniForInstall(body.sni);
         await this.withAmneziaDnsTimeout(this.api.enableAmneziaNaive(body), 180000);
         await this.refreshAmneziaNaiveStatus();
         await this.refresh();

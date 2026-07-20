@@ -1,7 +1,7 @@
 # S2 exit node: TLS + root reverse proxy only (no panel). __ROOT_BLOCK__ = mirror | local | placeholder.
 server {
-    listen 80;
-    server_name ${PANEL_DOMAIN};
+    listen 80 default_server;
+    server_name _;
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }

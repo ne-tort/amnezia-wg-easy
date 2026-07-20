@@ -1,7 +1,7 @@
 # WEBUI_PUBLIC_PREFIX set (e.g. /panel): UI+API under prefix; SUB_PUBLIC_PREFIX (e.g. /sub) for subscriptions; root = __ROOT_BLOCK__.
 server {
-    listen 80;
-    server_name ${PANEL_DOMAIN};
+    listen 80 default_server;
+    server_name _;
     location /.well-known/acme-challenge/ {
         root /var/www/certbot;
     }
@@ -19,6 +19,10 @@ server {
     # listen is :8443 inside the container; never leak that port in redirects
     port_in_redirect off;
     absolute_redirect off;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
 
     location = ${WEBUI_PUBLIC_PREFIX} {
         return 302 https://${PANEL_HTTPS_REDIRECT_HOST}${WEBUI_PUBLIC_PREFIX}/;

@@ -55,15 +55,24 @@ function certPathsForDomain(domain) {
   };
 }
 
-async function resolveCertbotVolumeName() {
+async function resolveNginxVolume(destination, fallbackSuffix) {
+  const dest = String(destination || '').trim();
   const r = await runCmd('docker', [
     'inspect', '-f',
-    '{{range .Mounts}}{{if eq .Destination "/etc/letsencrypt"}}{{.Name}}{{end}}{{end}}',
+    `{{range .Mounts}}{{if eq .Destination "${dest}"}}{{.Name}}{{end}}{{end}}`,
     NGINX_CONTAINER,
   ]);
   const name = (r.ok ? r.stdout : '').trim();
   if (name) return name;
-  return `${process.env.COMPOSE_PROJECT_NAME || 'amnezia-wg-easy'}_certbot_conf`;
+  return `${process.env.COMPOSE_PROJECT_NAME || 'amnezia-wg-easy'}_${fallbackSuffix}`;
+}
+
+async function resolveCertbotVolumeName() {
+  return resolveNginxVolume('/etc/letsencrypt', 'certbot_conf');
+}
+
+async function resolveCertbotWwwVolumeName() {
+  return resolveNginxVolume('/var/www/certbot', 'certbot_www');
 }
 
 async function certExistsInVolume(domain) {
@@ -120,10 +129,11 @@ async function issueLetsEncrypt(domain, email) {
   setCertbotEmail(em);
 
   const vol = await resolveCertbotVolumeName();
+  const wwwVol = await resolveCertbotWwwVolumeName();
   const r = await runCmd('docker', [
     'run', '--rm',
     '-v', `${vol}:/etc/letsencrypt`,
-    '-v', `${process.env.COMPOSE_PROJECT_NAME || 'amnezia-wg-easy'}_certbot_www:/var/www/certbot`,
+    '-v', `${wwwVol}:/var/www/certbot`,
     'certbot/certbot',
     'certonly', '--webroot', '-w', '/var/www/certbot',
     '-d', d,
@@ -134,7 +144,18 @@ async function issueLetsEncrypt(domain, email) {
   ], { timeout: 300_000 });
 
   if (!r.ok) {
-    const err = new Error((r.stderr || r.stdout || 'certbot failed').trim().slice(0, 400));
+    let detail = (r.stderr || r.stdout || 'certbot failed').trim().replace(/\s+/g, ' ').slice(0, 400);
+    if (/405|Method Not Allowed/i.test(detail)) {
+      detail = `Let's Encrypt HTTP-01 got Method Not Allowed for ${d}. `
+        + 'Ensure domain A record points to this server, port 80 is open to nginx, '
+        + 'and /.well-known/acme-challenge/ is reachable over HTTP (not blocked by CDN). '
+        + detail.slice(0, 220);
+    } else if (/404|NXDOMAIN|Timeout|Connection refused/i.test(detail)) {
+      detail = `Let's Encrypt could not validate ${d} via HTTP-01 on port 80. `
+        + 'Check A-record → panel IP and that host port 80 publishes nginx. '
+        + detail.slice(0, 220);
+    }
+    const err = new Error(detail);
     err.status = 400;
     err.code = 'CERT_ISSUE_FAILED';
     throw err;
@@ -349,6 +370,7 @@ module.exports = {
   panelCertDomain,
   certPathsForDomain,
   resolveCertbotVolumeName,
+  resolveCertbotWwwVolumeName,
   certExistsInVolume,
   issueLetsEncrypt,
   injectManualPem,

@@ -1025,10 +1025,7 @@ new Vue({
       this.amneziaXrayBusy = true;
       this.ensureAmneziaXrayPoll();
       try {
-        const needSniPreflight = body.sni && (
-          this.amneziaXraySecurity === 'reality'
-          || (this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'issue_le')
-        );
+        const needSniPreflight = body.sni && this.amneziaXraySecurity === 'reality';
         if (needSniPreflight) {
           await this.preflightSniForInstall(body.sni);
         }

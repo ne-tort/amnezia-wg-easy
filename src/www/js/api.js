@@ -61,7 +61,11 @@ class API {
         || json.statusMessage
         || res.statusText
         || `HTTP ${res.status}`;
-      const err = new Error(msg);
+      const err = new Error(
+        res.status === 405
+          ? `${msg} (API route missing or wrong method — redeploy panel image)`
+          : msg,
+      );
       err.status = res.status;
       err.code = json.code || (json.data && json.data.code);
       throw err;
