@@ -356,6 +356,12 @@
     width: min(100vw - 1rem, 40rem);
     max-width: min(100vw - 1rem, 40rem);
   }
+  .qrcode-modal-panel.qrcode-modal-mieru,
+  .qrcode-modal-panel.qrcode-modal-hysteria,
+  .qrcode-modal-panel.qrcode-modal-naive {
+    width: min(100vw - 1rem, 40rem);
+    max-width: min(100vw - 1rem, 40rem);
+  }
   .qrcode-xray-stack {
     width: 100%;
     max-width: 560px;
@@ -1604,6 +1610,19 @@
                   </button>
                 </div>
                 <input v-model.trim="amneziaXraySni" type="text" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p v-if="amneziaXrayFieldErrors.sni" class="field-error">{{ sidecarFieldError(amneziaXrayFieldErrors, 'sni') }}</p>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xraySecurity') }}</label>
+                <select v-model="amneziaXraySecurity" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="sec in amneziaXraySecurities" :key="sec" :value="sec">{{ sec }}</option>
+                </select>
+              </div>
+              <div v-if="amneziaXraySecurity === 'tls'">
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayCertSource') }}</label>
+                <select v-model="amneziaXrayCertSource" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="src in amneziaXrayCertSources" :key="src" :value="src">{{ src }}</option>
+                </select>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayFingerprint') }}</label>
@@ -1621,15 +1640,15 @@
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPublicPort') }}</label>
                 <input v-model="amneziaXrayPublicPort" type="number" min="1" max="65535" inputmode="numeric" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
-                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('xrayPublicPortHint') }}</p>
+                <p v-if="amneziaXrayFieldErrors.publicPort" class="field-error">{{ sidecarFieldError(amneziaXrayFieldErrors, 'publicPort') }}</p>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPort') }}</label>
                 <input v-model="amneziaXrayPort" type="text" inputmode="numeric" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
                   placeholder="auto" />
-                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('xrayPortHint') }}</p>
               </div>
+              <p v-if="amneziaXrayFieldErrors._form" class="field-error">{{ amneziaXrayFieldErrors._form }}</p>
             </div>
             <div class="modal-footer flex-wrap">
               <button v-if="amneziaXrayModalMode === 'manage'" type="button" @click="confirmAmneziaXrayDisable"
@@ -1638,7 +1657,7 @@
                 {{ $t('xrayUninstall') }}
               </button>
               <button v-else type="button" @click="confirmAmneziaXrayInstall"
-                :disabled="!amneziaXraySni || !amneziaXrayAddress || amneziaXrayBusy || !isValidAmneziaXrayPort || !isValidAmneziaXrayPublicPort"
+                :disabled="!amneziaXrayAddress || amneziaXrayBusy || !isValidAmneziaXrayPort || !isValidAmneziaXrayPublicPort || (amneziaXraySecurity !== 'none' && !amneziaXraySni)"
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
                 {{ $t('xrayInstallConfirm') }}
               </button>
@@ -1662,24 +1681,60 @@
                 <input v-model.trim="amneziaMieruAddress" type="text" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
               </div>
-              <div>
-                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruProtocol') }}</label>
-                <select v-model="amneziaMieruProtocol" :disabled="amneziaMieruModalMode === 'manage'"
-                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
-                  <option v-for="p in amneziaMieruProtocols" :key="p" :value="p">{{ p }}</option>
-                </select>
+              <div class="flex flex-wrap gap-4">
+                <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-neutral-200">
+                  <input v-model="amneziaMieruEnableTcp" type="checkbox" :disabled="amneziaMieruModalMode === 'manage'" />
+                  {{ $t('mieruEnableTcp') }}
+                </label>
+                <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-neutral-200">
+                  <input v-model="amneziaMieruEnableUdp" type="checkbox" :disabled="amneziaMieruModalMode === 'manage'" />
+                  {{ $t('mieruEnableUdp') }}
+                </label>
               </div>
-              <div>
-                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruPublicPort') }}</label>
-                <input v-model="amneziaMieruPublicPort" type="number" min="1" max="65535" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
+              <p v-if="amneziaMieruFieldErrors.protocol" class="field-error">{{ sidecarFieldError(amneziaMieruFieldErrors, 'protocol') }}</p>
+              <div v-if="amneziaMieruEnableTcp">
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruPublicTcpPort') }}</label>
+                <input v-model="amneziaMieruTcpPublicPort" type="number" min="1" max="65535" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p v-if="amneziaMieruFieldErrors.tcpPublicPort" class="field-error">{{ sidecarFieldError(amneziaMieruFieldErrors, 'tcpPublicPort') }}</p>
               </div>
+              <div v-if="amneziaMieruEnableUdp">
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruPublicUdpPort') }}</label>
+                <input v-model="amneziaMieruUdpPublicPort" type="number" min="1" max="65535" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p v-if="amneziaMieruFieldErrors.udpPublicPort" class="field-error">{{ sidecarFieldError(amneziaMieruFieldErrors, 'udpPublicPort') }}</p>
+              </div>
+              <div>
+                <button type="button" class="text-sm text-red-800 dark:text-red-400 hover:underline" @click="amneziaMieruAdvancedOpen = !amneziaMieruAdvancedOpen">
+                  {{ $t('mieruAdvanced') }}
+                </button>
+              </div>
+              <div v-if="amneziaMieruAdvancedOpen" class="flex flex-col gap-3">
+                <div>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruInternalPort') }}</label>
+                  <input v-model="amneziaMieruPort" type="text" inputmode="numeric" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="auto" />
+                </div>
+                <div>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruLoggingLevel') }}</label>
+                  <select v-model="amneziaMieruLoggingLevel" :disabled="amneziaMieruModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                    <option v-for="lvl in amneziaMieruLoggingLevels" :key="lvl" :value="lvl">{{ lvl }}</option>
+                  </select>
+                </div>
+                <div v-if="amneziaMieruEnableUdp">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruMtu') }}</label>
+                  <input v-model="amneziaMieruMtu" type="number" min="576" max="9000" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="optional" />
+                </div>
+              </div>
+              <p v-if="amneziaMieruFieldErrors._form" class="field-error">{{ amneziaMieruFieldErrors._form }}</p>
             </div>
             <div class="modal-footer flex-wrap">
               <button v-if="amneziaMieruModalMode === 'manage'" type="button" @click="confirmAmneziaMieruDisable" :disabled="amneziaMieruBusy"
                 class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('mieruUninstall') }}</button>
               <button v-else type="button" @click="confirmAmneziaMieruInstall"
-                :disabled="!amneziaMieruAddress || amneziaMieruBusy || !isValidAmneziaMieruPublicPort"
+                :disabled="!canConfirmAmneziaMieruInstall || amneziaMieruBusy"
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white py-2 px-4 rounded transition">{{ $t('mieruInstallConfirm') }}</button>
               <button type="button" @click="closeAmneziaMieruInstall"
                 class="bg-gray-200 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('dnsInstallCancel') }}</button>
@@ -1702,13 +1757,57 @@
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaSni') }}</label>
                 <input v-model.trim="amneziaHysteriaSni" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p v-if="amneziaHysteriaFieldErrors.sni" class="field-error">{{ sidecarFieldError(amneziaHysteriaFieldErrors, 'sni') }}</p>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaPublicPort') }}</label>
                 <input v-model="amneziaHysteriaPublicPort" type="number" min="1" max="65535" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
-                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('hysteriaPublicPortHint') }}</p>
+                <p v-if="amneziaHysteriaFieldErrors.publicPort" class="field-error">{{ sidecarFieldError(amneziaHysteriaFieldErrors, 'publicPort') }}</p>
               </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaMasqueradeUrl') }}</label>
+                <input v-model.trim="amneziaHysteriaMasqueradeUrl" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="https://..." />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaCertSource') }}</label>
+                <select v-model="amneziaHysteriaCertSource" :disabled="amneziaHysteriaModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="src in amneziaHysteriaCertSources" :key="src" :value="src">{{ src }}</option>
+                </select>
+              </div>
+              <div>
+                <button type="button" class="text-sm text-red-800 dark:text-red-400 hover:underline" @click="amneziaHysteriaAdvancedOpen = !amneziaHysteriaAdvancedOpen">
+                  {{ $t('hysteriaAdvanced') }}
+                </button>
+              </div>
+              <div v-if="amneziaHysteriaAdvancedOpen" class="flex flex-col gap-3">
+                <div>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaObfsType') }}</label>
+                  <select v-model="amneziaHysteriaObfsType" :disabled="amneziaHysteriaModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                    <option value="">{{ $t('hysteriaObfsOff') }}</option>
+                    <option v-for="t in amneziaHysteriaObfsTypes.filter(Boolean)" :key="t" :value="t">{{ t }}</option>
+                  </select>
+                </div>
+                <div v-if="amneziaHysteriaObfsType">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaObfsPassword') }}</label>
+                  <input v-model="amneziaHysteriaObfsPassword" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                </div>
+                <div>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaBandwidthUp') }}</label>
+                  <input v-model="amneziaHysteriaBandwidthUp" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="100 Mbps" />
+                </div>
+                <div>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaBandwidthDown') }}</label>
+                  <input v-model="amneziaHysteriaBandwidthDown" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="100 Mbps" />
+                </div>
+              </div>
+              <p v-if="amneziaHysteriaFieldErrors._form" class="field-error">{{ amneziaHysteriaFieldErrors._form }}</p>
             </div>
             <div class="modal-footer flex-wrap">
               <button v-if="amneziaHysteriaModalMode === 'manage'" type="button" @click="confirmAmneziaHysteriaDisable" :disabled="amneziaHysteriaBusy"
@@ -1737,18 +1836,21 @@
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naiveSni') }}</label>
                 <input v-model.trim="amneziaNaiveSni" type="text" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
-                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('naiveSniHint') }}</p>
+                <p v-if="amneziaNaiveFieldErrors.sni" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'sni') }}</p>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naivePublicPort') }}</label>
                 <input v-model="amneziaNaivePublicPort" type="number" min="1" max="65535" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p v-if="amneziaNaiveFieldErrors.publicPort" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'publicPort') }}</p>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naiveProbeDomain') }}</label>
                 <input v-model.trim="amneziaNaiveProbeDomain" type="text" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="optional" />
+                <p v-if="amneziaNaiveFieldErrors.probeResistanceDomain" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'probeResistanceDomain') }}</p>
               </div>
+              <p v-if="amneziaNaiveFieldErrors._form" class="field-error">{{ amneziaNaiveFieldErrors._form }}</p>
             </div>
             <div class="modal-footer flex-wrap">
               <button v-if="amneziaNaiveModalMode === 'manage'" type="button" @click="confirmAmneziaNaiveDisable" :disabled="amneziaNaiveBusy"
@@ -1962,6 +2064,9 @@
                 'qrcode-modal-amnezia': qrcodeTab === 'amnezia',
                 'qrcode-modal-text': qrcodeTab === 'text',
                 'qrcode-modal-xray': qrcodeTab === 'xray',
+                'qrcode-modal-mieru': qrcodeTab === 'mieru',
+                'qrcode-modal-hysteria': qrcodeTab === 'hysteria',
+                'qrcode-modal-naive': qrcodeTab === 'naive',
               }"
               :style="qrcodeTab === 'amnezia' ? amneziaQrModalStyle : null">
               <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-neutral-600 shrink-0">
@@ -1978,6 +2083,15 @@
                   <button v-if="amneziaXrayAvailable" type="button" @click="qrcodeTab = 'xray'"
                     :class="qrcodeTab === 'xray' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
                     class="pb-1 px-2 transition">{{ $t('qrTabXray') }}</button>
+                  <button v-if="amneziaMieruAvailable" type="button" @click="qrcodeTab = 'mieru'"
+                    :class="qrcodeTab === 'mieru' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabMieru') }}</button>
+                  <button v-if="amneziaHysteriaAvailable" type="button" @click="qrcodeTab = 'hysteria'"
+                    :class="qrcodeTab === 'hysteria' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabHysteria') }}</button>
+                  <button v-if="amneziaNaiveAvailable" type="button" @click="qrcodeTab = 'naive'"
+                    :class="qrcodeTab === 'naive' ? 'border-b-2 border-red-800 dark:border-red-600 text-gray-900 dark:text-neutral-100 font-medium' : 'text-gray-500 dark:text-neutral-400 hover:text-gray-700 dark:hover:text-neutral-300'"
+                    class="pb-1 px-2 transition">{{ $t('qrTabNaive') }}</button>
                 </div>
                 <button type="button" @click="closeQR()"
                   class="text-gray-600 dark:text-neutral-500 hover:text-gray-800 dark:hover:text-neutral-200 p-1">
@@ -2039,6 +2153,43 @@
                   </button>
                   <button type="button" class="qrcode-copy-field" @click="copyQrXraySub">{{ qrcodeXraySubUrl || '—' }}</button>
                   <button type="button" class="qrcode-copy-field" @click="copyQrXrayVless">{{ qrcodeXrayVlessUrl || '—' }}</button>
+                </div>
+                <div v-else-if="qrcodeTab === 'mieru'" class="qrcode-xray-stack">
+                  <button v-if="qrcodeMieruSvg" type="button"
+                    class="block p-0 m-0 border-0 bg-transparent cursor-pointer w-full"
+                    @click="copyQrMieruLink()">
+                    <img :src="qrcodeMieruSvg" alt="Mieru QR" class="qrcode-text-img pointer-events-none" />
+                  </button>
+                  <template v-if="qrcodeMieruLinks && qrcodeMieruLinks.length">
+                    <button v-for="(entry, idx) in qrcodeMieruLinks" :key="idx" type="button"
+                      class="qrcode-copy-field" @click="copyQrMieruLink(entry.url || entry.mieruUrl)">
+                      {{ (entry.protocol ? entry.protocol + ': ' : '') + (entry.url || entry.mieruUrl || '—') }}
+                    </button>
+                  </template>
+                  <button v-else type="button" class="qrcode-copy-field" @click="copyQrMieruLink()">{{ qrcodeMieruLink || '—' }}</button>
+                </div>
+                <div v-else-if="qrcodeTab === 'hysteria'" class="qrcode-xray-stack">
+                  <button v-if="qrcodeHysteriaSvg" type="button"
+                    class="block p-0 m-0 border-0 bg-transparent cursor-pointer w-full"
+                    @click="copyQrHysteriaLink">
+                    <img :src="qrcodeHysteriaSvg" alt="Hysteria QR" class="qrcode-text-img pointer-events-none" />
+                  </button>
+                  <button type="button" class="qrcode-copy-field" @click="copyQrHysteriaLink">{{ qrcodeHysteriaLink || '—' }}</button>
+                </div>
+                <div v-else-if="qrcodeTab === 'naive'" class="qrcode-xray-stack">
+                  <button v-if="qrcodeNaiveSvg" type="button"
+                    class="block p-0 m-0 border-0 bg-transparent cursor-pointer w-full"
+                    @click="copyQrNaiveLink">
+                    <img :src="qrcodeNaiveSvg" alt="Naive QR" class="qrcode-text-img pointer-events-none" />
+                  </button>
+                  <button type="button" class="qrcode-copy-field" @click="copyQrNaiveLink">{{ qrcodeNaiveLink || '—' }}</button>
+                  <textarea v-if="qrcodeNaiveJson" readonly :value="qrcodeNaiveJson"
+                    class="qrcode-preview-text thin-scroll p-3 font-mono text-sm bg-gray-100 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 rounded border border-gray-200 dark:border-neutral-500 resize-none block"
+                    rows="8"></textarea>
+                  <button v-if="qrcodeNaiveJson" type="button" @click="copyQrNaiveJson"
+                    class="self-start bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
+                    {{ $t('copyXrayJson') }}
+                  </button>
                 </div>
               </div>
             </div>
@@ -2481,10 +2632,10 @@
   <script src="./js/vendor/vue-apexcharts.min.js"></script>
   <script src="./js/vendor/sha256.min.js"></script>
   <script src="./js/vendor/timeago.full.min.js"></script>
-  <script src="./js/api.js?v=8"></script>
-  <script src="./js/i18n.js?v=9"></script>
-  <script src="./js/sidecarPanels.js?v=1"></script>
-  <script src="./js/app.js?v=9"></script>
+  <script src="./js/api.js?v=9"></script>
+  <script src="./js/i18n.js?v=10"></script>
+  <script src="./js/sidecarPanels.js?v=2"></script>
+  <script src="./js/app.js?v=10"></script>
 </body>
 
 </html>

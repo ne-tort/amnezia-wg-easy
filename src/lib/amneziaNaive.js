@@ -28,6 +28,8 @@ const SNI_KEY = 'amnezia_naive_sni';
 const PUBLIC_PORT_KEY = 'amnezia_naive_public_port';
 const ADDRESS_KEY = 'amnezia_naive_address';
 const PROBE_KEY = 'amnezia_naive_probe_resistance_domain';
+const CERT_SOURCE_KEY = 'amnezia_naive_cert_source';
+const CERT_DOMAIN_KEY = 'amnezia_naive_cert_domain';
 
 const ENABLE_TIMEOUT_MS = 180_000;
 const RECONCILE_INTERVAL_MS = 30_000;
@@ -100,6 +102,20 @@ function getSniStored() {
 
 function getProbeResistanceDomain() {
   return getSetting(PROBE_KEY, '').trim();
+}
+
+function getCertSource() {
+  const tlsMaterial = require('./tlsMaterial');
+  const s = getSetting(CERT_SOURCE_KEY, 'issue_le').trim().toLowerCase();
+  return tlsMaterial.CERT_SOURCES.includes(s) ? s : 'issue_le';
+}
+
+function resolveCertDomain() {
+  const override = getSetting(CERT_DOMAIN_KEY, '').trim().toLowerCase();
+  if (override) return override;
+  const sni = getSni();
+  if (sni) return sni;
+  return require('./tlsMaterial').panelCertDomain() || '';
 }
 
 function isFqdn(host) {
@@ -565,6 +581,8 @@ function getStatus() {
     sni: getSni() || null,
     sniStored: getSniStored(),
     probeResistanceDomain: getProbeResistanceDomain() || null,
+    certSource: getCertSource(),
+    certDomain: resolveCertDomain() || null,
     port: getPort(),
     publicPort: getClientFacingPort(),
     mode: plan.modes.naive || null,
@@ -595,6 +613,17 @@ async function enableInternal(opts = {}) {
   setDesired(true);
   const deadline = Date.now() + ENABLE_TIMEOUT_MS;
   try {
+    const sidecarValidate = require('./sidecarValidate');
+    const validation = sidecarValidate.validateNaive(opts);
+    if (!validation.ok) {
+      const msg = Object.values(validation.fieldErrors || {}).join('; ') || 'Invalid Naive settings';
+      throw Object.assign(new Error(msg), {
+        status: 400,
+        code: validation.code || 'NAIVE_VALIDATION',
+        fieldErrors: validation.fieldErrors,
+      });
+    }
+
     const sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni();
     if (!sni || !isFqdn(sni)) {
       throw Object.assign(new Error('Naive SNI must be a valid FQDN'), {
@@ -620,6 +649,34 @@ async function enableInternal(opts = {}) {
       : getProbeResistanceDomain();
     if (probeDomain) {
       setSetting(PROBE_KEY, probeDomain);
+    }
+
+    const certSource = opts.certSource != null
+      ? String(opts.certSource).trim().toLowerCase()
+      : getCertSource();
+    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+    setSetting(CERT_SOURCE_KEY, certSource);
+    setSetting(CERT_DOMAIN_KEY, certDomainOverride);
+
+    const tlsMaterial = require('./tlsMaterial');
+    const certDomain = certDomainOverride || sni;
+    if (certSource === 'panel') {
+      tlsMaterial.assertPanelCertReuseAllowed('naive', publicPort);
+    }
+    await tlsMaterial.resolveCertMaterial({
+      certSource,
+      domain: certDomain,
+      certPem: opts.certPem,
+      keyPem: opts.keyPem,
+      certPath: opts.certPath,
+      keyPath: opts.keyPath,
+      issueIfMissing: certSource === 'issue_le',
+    });
+    if (!(await tlsMaterial.certExistsInVolume(sni))) {
+      throw Object.assign(
+        new Error(`Certificate not found for Naive SNI ${sni}`),
+        { status: 400, code: 'NAIVE_CERT_MISSING' },
+      );
     }
 
     const portPlan = require('./portPlan');

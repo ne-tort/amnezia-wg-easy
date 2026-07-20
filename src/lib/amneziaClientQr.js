@@ -103,7 +103,7 @@ function generateChunkPayloads(compressed) {
  * Mirror ImportController::extractWireGuardConfig for AmneziaWG .ini text.
  * @param {string} iniText
  * @param {string} description
- * @param {{ includeAmneziaDns?: boolean, includeAmneziaXray?: boolean, xrayClient?: object|null }} [options]
+ * @param {{ includeAmneziaDns?: boolean, includeAmneziaXray?: boolean, xrayClient?: object|null, includeAmneziaHysteria?: boolean, hysteriaClient?: object|null, includeAmneziaNaive?: boolean, naiveClient?: object|null, includeAmneziaMieru?: boolean, mieruClient?: object|null }} [options]
  * @returns {Record<string, unknown>}
  */
 function buildAmneziaRoot(iniText, description, options = {}) {
@@ -193,6 +193,15 @@ function buildAmneziaRoot(iniText, description, options = {}) {
     try {
       const { buildAmneziaNaiveContainer } = require('./amneziaNaive');
       const el = buildAmneziaNaiveContainer(options.naiveClient);
+      if (el) containers.push(el);
+    } catch {
+      /* optional */
+    }
+  }
+  if (options.includeAmneziaMieru && options.mieruClient) {
+    try {
+      const { buildAmneziaMieruContainer } = require('./amneziaMieru');
+      const el = buildAmneziaMieruContainer(options.mieruClient);
       if (el) containers.push(el);
     } catch {
       /* optional */

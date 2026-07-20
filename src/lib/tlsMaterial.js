@@ -1,0 +1,254 @@
+'use strict';
+
+/**
+ * TLS certificate material: panel reuse, manual PEM/paths, Let's Encrypt issue.
+ * Certs live in the nginx certbot volume at /etc/letsencrypt/live/{domain}/.
+ */
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
+const config = require('../config');
+
+const execFileAsync = promisify(execFile);
+const NGINX_CONTAINER = 'nginx';
+
+const CERT_SOURCES = Object.freeze(['panel', 'manual_pem', 'manual_path', 'issue_le']);
+
+function runCmd(bin, args, { timeout = 60_000 } = {}) {
+  return execFileAsync(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024 })
+    .then(({ stdout, stderr }) => ({
+      ok: true,
+      stdout: String(stdout || ''),
+      stderr: String(stderr || ''),
+    }))
+    .catch((err) => ({
+      ok: false,
+      stdout: String((err && err.stdout) || ''),
+      stderr: String((err && err.stderr) || err.message || ''),
+      error: err,
+    }));
+}
+
+function isFqdn(host) {
+  const s = String(host || '').trim().toLowerCase();
+  if (!s || s === 'localhost') return false;
+  const portPlan = require('./portPlan');
+  if (portPlan.isIpLiteral(s)) return false;
+  return s.includes('.');
+}
+
+function panelCertDomain() {
+  const d = (config.PANEL_DOMAIN || '').trim();
+  if (d && d !== 'localhost' && isFqdn(d)) return d;
+  return '';
+}
+
+function certPathsForDomain(domain) {
+  const d = String(domain || '').trim().toLowerCase();
+  const base = `/etc/letsencrypt/live/${d}`;
+  return {
+    cert: `${base}/fullchain.pem`,
+    key: `${base}/privkey.pem`,
+    domain: d,
+  };
+}
+
+async function resolveCertbotVolumeName() {
+  const r = await runCmd('docker', [
+    'inspect', '-f',
+    '{{range .Mounts}}{{if eq .Destination "/etc/letsencrypt"}}{{.Name}}{{end}}{{end}}',
+    NGINX_CONTAINER,
+  ]);
+  const name = (r.ok ? r.stdout : '').trim();
+  if (name) return name;
+  return `${process.env.COMPOSE_PROJECT_NAME || 'amnezia-wg-easy'}_certbot_conf`;
+}
+
+async function certExistsInVolume(domain) {
+  const vol = await resolveCertbotVolumeName();
+  const paths = certPathsForDomain(domain);
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt:ro`,
+    'alpine:3.20',
+    'sh', '-c', `test -f '${paths.cert}' && test -f '${paths.key}' && echo ok`,
+  ]);
+  return r.ok && r.stdout.trim() === 'ok';
+}
+
+function getCertbotEmail() {
+  const fromEnv = String(process.env.CERTBOT_EMAIL || '').trim();
+  if (fromEnv && fromEnv.includes('@')) return fromEnv;
+  return '';
+}
+
+/**
+ * Issue or renew LE cert for domain via certbot webroot (nginx must serve /.well-known).
+ */
+async function issueLetsEncrypt(domain, email) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!isFqdn(d)) {
+    const err = new Error(`Invalid certificate domain: ${d}`);
+    err.status = 400;
+    err.code = 'CERT_BAD_DOMAIN';
+    throw err;
+  }
+  const em = String(email || getCertbotEmail() || '').trim();
+  if (!em || !em.includes('@')) {
+    const err = new Error('CERTBOT_EMAIL is required to issue Let\'s Encrypt certificates');
+    err.status = 400;
+    err.code = 'CERT_NO_EMAIL';
+    throw err;
+  }
+
+  const vol = await resolveCertbotVolumeName();
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt`,
+    '-v', `${process.env.COMPOSE_PROJECT_NAME || 'amnezia-wg-easy'}_certbot_www:/var/www/certbot`,
+    'certbot/certbot',
+    'certonly', '--webroot', '-w', '/var/www/certbot',
+    '-d', d,
+    '--email', em,
+    '--agree-tos',
+    '--non-interactive',
+    '--keep-until-expiring',
+  ], { timeout: 300_000 });
+
+  if (!r.ok) {
+    const err = new Error((r.stderr || r.stdout || 'certbot failed').trim().slice(0, 400));
+    err.status = 400;
+    err.code = 'CERT_ISSUE_FAILED';
+    throw err;
+  }
+  if (!(await certExistsInVolume(d))) {
+    const err = new Error(`Certificate files missing after issue for ${d}`);
+    err.status = 400;
+    err.code = 'CERT_ISSUE_FAILED';
+    throw err;
+  }
+  return certPathsForDomain(d);
+}
+
+/**
+ * Write manual PEM into certbot volume live/{domain}/.
+ */
+async function injectManualPem(domain, certPem, keyPem) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!certPem || !keyPem) {
+    const err = new Error('Certificate and private key PEM are required');
+    err.status = 400;
+    err.code = 'CERT_PEM_MISSING';
+    throw err;
+  }
+  const vol = await resolveCertbotVolumeName();
+  const tmpDir = path.join(config.WG_PATH || '/tmp', '_tls_inject');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const certFile = path.join(tmpDir, 'fullchain.pem');
+  const keyFile = path.join(tmpDir, 'privkey.pem');
+  fs.writeFileSync(certFile, certPem.endsWith('\n') ? certPem : `${certPem}\n`, { mode: 0o644 });
+  fs.writeFileSync(keyFile, keyPem.endsWith('\n') ? keyPem : `${keyPem}\n`, { mode: 0o600 });
+
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt`,
+    '-v', `${tmpDir}:/src:ro`,
+    'alpine:3.20',
+    'sh', '-c', `
+      mkdir -p '/etc/letsencrypt/live/${d}'
+      cp /src/fullchain.pem '/etc/letsencrypt/live/${d}/fullchain.pem'
+      cp /src/privkey.pem '/etc/letsencrypt/live/${d}/privkey.pem'
+      chmod 644 '/etc/letsencrypt/live/${d}/fullchain.pem'
+      chmod 600 '/etc/letsencrypt/live/${d}/privkey.pem'
+    `,
+  ], { timeout: 30_000 });
+
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch { /* ignore */ }
+
+  if (!r.ok) {
+    const err = new Error((r.stderr || 'inject cert failed').trim().slice(0, 300));
+    err.status = 400;
+    err.code = 'CERT_INJECT_FAILED';
+    throw err;
+  }
+  return certPathsForDomain(d);
+}
+
+/**
+ * Resolve cert paths for a service enable request.
+ * @param {{ certSource?: string, domain: string, certPem?: string, keyPem?: string, certPath?: string, keyPath?: string, issueIfMissing?: boolean }} opts
+ */
+async function resolveCertMaterial(opts = {}) {
+  const source = String(opts.certSource || 'panel').trim().toLowerCase();
+  const domain = String(opts.domain || '').trim().toLowerCase();
+
+  if (source === 'manual_path') {
+    const cert = String(opts.certPath || '').trim();
+    const key = String(opts.keyPath || '').trim();
+    if (!cert || !key) {
+      const err = new Error('Certificate and key file paths are required');
+      err.status = 400;
+      err.code = 'CERT_PATH_MISSING';
+      throw err;
+    }
+    return { cert, key, domain, source };
+  }
+
+  if (source === 'manual_pem') {
+    return injectManualPem(domain, opts.certPem, opts.keyPem).then((p) => ({ ...p, source }));
+  }
+
+  let certDomain = domain;
+  if (source === 'panel') {
+    certDomain = panelCertDomain() || domain;
+    if (!certDomain) {
+      const err = new Error('Panel certificate domain (PANEL_DOMAIN FQDN) is not configured');
+      err.status = 400;
+      err.code = 'CERT_PANEL_DOMAIN_MISSING';
+      throw err;
+    }
+  }
+
+  if (!(await certExistsInVolume(certDomain))) {
+    if (source === 'issue_le' || opts.issueIfMissing) {
+      await issueLetsEncrypt(certDomain);
+    } else {
+      const err = new Error(`Certificate not found for ${certDomain} in certbot volume`);
+      err.status = 400;
+      err.code = 'CERT_MISSING';
+      throw err;
+    }
+  }
+  return { ...certPathsForDomain(certDomain), source: source === 'panel' ? 'panel' : source };
+}
+
+function assertPanelCertReuseAllowed(serviceId, publicPort) {
+  const panelPort = parseInt(String(config.PANEL_HTTPS_PORT || '443'), 10);
+  const pub = parseInt(String(publicPort), 10);
+  if (Number.isFinite(panelPort) && pub === panelPort) {
+    const err = new Error(`${serviceId} cannot reuse panel certificate on the same public port (${pub})`);
+    err.status = 400;
+    err.code = 'CERT_PORT_CONFLICT';
+    err.field = 'publicPort';
+    throw err;
+  }
+}
+
+module.exports = {
+  CERT_SOURCES,
+  NGINX_CONTAINER,
+  isFqdn,
+  panelCertDomain,
+  certPathsForDomain,
+  resolveCertbotVolumeName,
+  certExistsInVolume,
+  issueLetsEncrypt,
+  injectManualPem,
+  resolveCertMaterial,
+  assertPanelCertReuseAllowed,
+  getCertbotEmail,
+};

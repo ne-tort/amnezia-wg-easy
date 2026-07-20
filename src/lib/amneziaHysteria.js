@@ -30,6 +30,15 @@ const SNI_KEY = 'amnezia_hysteria_sni';
 const PUBLIC_PORT_KEY = 'amnezia_hysteria_public_port';
 const ADDRESS_KEY = 'amnezia_hysteria_address';
 const MASQUERADE_KEY = 'amnezia_hysteria_masquerade_url';
+const MASQUERADE_TYPE_KEY = 'amnezia_hysteria_masquerade_type';
+const OBFS_TYPE_KEY = 'amnezia_hysteria_obfs_type';
+const OBFS_PASSWORD_KEY = 'amnezia_hysteria_obfs_password';
+const BANDWIDTH_UP_KEY = 'amnezia_hysteria_bandwidth_up';
+const BANDWIDTH_DOWN_KEY = 'amnezia_hysteria_bandwidth_down';
+const IGNORE_CLIENT_BW_KEY = 'amnezia_hysteria_ignore_client_bandwidth';
+const CERT_SOURCE_KEY = 'amnezia_hysteria_cert_source';
+const CERT_DOMAIN_KEY = 'amnezia_hysteria_cert_domain';
+const TLS_INSECURE_CLIENT_KEY = 'amnezia_hysteria_tls_insecure_client';
 
 const DEFAULT_SNI = 'www.sbb.ch';
 const DEFAULT_MASQUERADE = 'https://www.sbb.ch/';
@@ -150,17 +159,67 @@ function getMasqueradeUrlStored() {
   return getSetting(MASQUERADE_KEY, '').trim() || null;
 }
 
+function getMasqueradeType() {
+  const t = getSetting(MASQUERADE_TYPE_KEY, 'proxy').trim().toLowerCase();
+  return t === 'file' || t === 'string' ? t : 'proxy';
+}
+
+function getObfsType() {
+  return getSetting(OBFS_TYPE_KEY, '').trim().toLowerCase();
+}
+
+function getObfsPassword() {
+  return getSetting(OBFS_PASSWORD_KEY, '').trim();
+}
+
+function getBandwidthUp() {
+  return getSetting(BANDWIDTH_UP_KEY, '').trim();
+}
+
+function getBandwidthDown() {
+  return getSetting(BANDWIDTH_DOWN_KEY, '').trim();
+}
+
+function getIgnoreClientBandwidth() {
+  const raw = getSetting(IGNORE_CLIENT_BW_KEY, '');
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function getCertSource() {
+  const tlsMaterial = require('./tlsMaterial');
+  const s = getSetting(CERT_SOURCE_KEY, 'issue_le').trim().toLowerCase();
+  return tlsMaterial.CERT_SOURCES.includes(s) ? s : 'issue_le';
+}
+
+function getCertDomainStored() {
+  return getSetting(CERT_DOMAIN_KEY, '').trim().toLowerCase() || null;
+}
+
+function getTlsInsecureClient() {
+  const raw = getSetting(TLS_INSECURE_CLIENT_KEY, '');
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
 /**
- * TLS cert live dir: PANEL_DOMAIN when FQDN, else configured SNI.
+ * TLS cert live dir: override → panel (when cert_source=panel) → SNI for issue_le / SNI cert.
  */
 function resolveCertDomain() {
-  const panelDomain = (config.PANEL_DOMAIN || '').trim();
+  const override = getCertDomainStored();
+  if (override) return override;
+  const source = getCertSource();
   const sni = getSni();
+  if (source === 'panel') {
+    const panel = require('./tlsMaterial').panelCertDomain();
+    if (panel) return panel;
+  }
+  if (source === 'issue_le' || source !== 'panel') {
+    if (sni) return sni;
+  }
+  const panelDomain = (config.PANEL_DOMAIN || '').trim();
   if (panelDomain && panelDomain !== 'localhost' && !isIpLiteral(panelDomain)) {
     return panelDomain;
   }
-  if (sni) return sni;
-  return panelDomain || 'localhost';
+  return sni || panelDomain || 'localhost';
 }
 
 function certPathsForDomain(domain) {
@@ -343,9 +402,13 @@ function buildUserpassMap(clients) {
   return map;
 }
 
-function buildServerYamlObject({ userpass, masqueradeUrl, certDomain, sni }) {
+function buildServerYamlObject({
+  userpass, masqueradeUrl, masqueradeType, certDomain, sni,
+  obfsType, obfsPassword, bandwidthUp, bandwidthDown, ignoreClientBandwidth,
+}) {
   const paths = certPathsForDomain(certDomain);
-  return {
+  /** @type {Record<string, unknown>} */
+  const obj = {
     listen: `:${LISTEN_PORT}`,
     tls: {
       cert: paths.cert,
@@ -356,14 +419,36 @@ function buildServerYamlObject({ userpass, masqueradeUrl, certDomain, sni }) {
       type: 'userpass',
       userpass,
     },
-    masquerade: {
+  };
+  const mType = masqueradeType || getMasqueradeType();
+  if (mType === 'file') {
+    obj.masquerade = { type: 'file', file: { dir: '/var/www/html' } };
+  } else if (mType === 'string') {
+    obj.masquerade = { type: 'string', string: { content: masqueradeUrl || 'ok', headers: {} } };
+  } else {
+    obj.masquerade = {
       type: 'proxy',
       proxy: {
         url: masqueradeUrl,
         rewriteHost: true,
       },
-    },
-  };
+    };
+  }
+  const oType = obfsType != null ? obfsType : getObfsType();
+  const oPass = obfsPassword != null ? obfsPassword : getObfsPassword();
+  if (oType && oPass) {
+    obj.obfs = { type: oType, [oType]: { password: oPass } };
+  }
+  const up = bandwidthUp != null ? bandwidthUp : getBandwidthUp();
+  const down = bandwidthDown != null ? bandwidthDown : getBandwidthDown();
+  if (up || down) {
+    obj.bandwidth = {};
+    if (up) obj.bandwidth.up = up;
+    if (down) obj.bandwidth.down = down;
+  }
+  const ignoreBw = ignoreClientBandwidth != null ? ignoreClientBandwidth : getIgnoreClientBandwidth();
+  if (ignoreBw) obj.ignoreClientBandwidth = true;
+  return obj;
 }
 
 function renderServerYaml(obj) {
@@ -381,10 +466,35 @@ function renderServerYaml(obj) {
   for (const [user, pass] of Object.entries(obj.auth.userpass || {})) {
     lines.push(`    ${yamlQuote(user)}: ${yamlQuote(pass)}`);
   }
-  if (obj.masquerade && obj.masquerade.type === 'proxy') {
-    lines.push('', 'masquerade:', '  type: proxy', '  proxy:');
-    lines.push(`    url: ${yamlQuote(obj.masquerade.proxy.url)}`);
-    lines.push('    rewriteHost: true');
+  if (obj.masquerade) {
+    lines.push('', 'masquerade:', `  type: ${obj.masquerade.type}`);
+    if (obj.masquerade.type === 'proxy' && obj.masquerade.proxy) {
+      lines.push('  proxy:');
+      lines.push(`    url: ${yamlQuote(obj.masquerade.proxy.url)}`);
+      lines.push('    rewriteHost: true');
+    } else if (obj.masquerade.type === 'file' && obj.masquerade.file) {
+      lines.push('  file:');
+      lines.push(`    dir: ${yamlQuote(obj.masquerade.file.dir)}`);
+    } else if (obj.masquerade.type === 'string' && obj.masquerade.string) {
+      lines.push('  string:');
+      lines.push(`    content: ${yamlQuote(obj.masquerade.string.content)}`);
+    }
+  }
+  if (obj.obfs && obj.obfs.type) {
+    lines.push('', 'obfs:', `  type: ${yamlQuote(obj.obfs.type)}`);
+    const inner = obj.obfs[obj.obfs.type];
+    if (inner && inner.password) {
+      lines.push(`  ${obj.obfs.type}:`);
+      lines.push(`    password: ${yamlQuote(inner.password)}`);
+    }
+  }
+  if (obj.bandwidth && (obj.bandwidth.up || obj.bandwidth.down)) {
+    lines.push('', 'bandwidth:');
+    if (obj.bandwidth.up) lines.push(`  up: ${yamlQuote(obj.bandwidth.up)}`);
+    if (obj.bandwidth.down) lines.push(`  down: ${yamlQuote(obj.bandwidth.down)}`);
+  }
+  if (obj.ignoreClientBandwidth) {
+    lines.push('', 'ignoreClientBandwidth: true');
   }
   return `${lines.join('\n')}\n`;
 }
@@ -401,12 +511,19 @@ function writeServerYaml(obj) {
  */
 function buildHy2Url({
   username, password, host, port, sni, remark,
+  obfsType, obfsPassword, insecure,
 }) {
   const user = encodeURIComponent(username);
   const pass = encodeURIComponent(password);
   const params = new URLSearchParams();
   if (sni) params.set('sni', sni);
-  params.set('insecure', '0');
+  params.set('insecure', insecure ? '1' : '0');
+  const oType = obfsType || getObfsType();
+  const oPass = obfsPassword || getObfsPassword();
+  if (oType && oPass) {
+    params.set('obfs', oType);
+    params.set('obfs-password', oPass);
+  }
   let url = `hy2://${user}:${pass}@${host}:${Number(port)}/?${params.toString()}`;
   if (remark) url += `#${encodeURIComponent(remark)}`;
   return url;
@@ -441,6 +558,7 @@ function getClientHysteriaPayload(client, opts = {}) {
     port,
     sni,
     remark: client.name,
+    insecure: getTlsInsecureClient(),
   });
 
   const base = (opts.baseUrl || '').replace(/\/+$/, '');
@@ -460,7 +578,10 @@ function getClientHysteriaPayload(client, opts = {}) {
     sni,
     host,
     masqueradeUrl: getMasqueradeUrl(),
+    masqueradeType: getMasqueradeType(),
     certDomain: resolveCertDomain(),
+    obfsType: getObfsType() || null,
+    tlsInsecure: getTlsInsecureClient(),
   };
 }
 
@@ -502,20 +623,30 @@ async function runSmoke() {
   const containerUp = await dockerContainerRunning();
   let versionOk = false;
   let versionOut = '';
+  let configTest = { ok: false, via: 'skip', out: 'container down' };
   let dial = { ok: false, via: 'skip', out: 'container down' };
   const port = LISTEN_PORT;
   if (containerUp) {
     const ver = await runCmd('docker', ['exec', CONTAINER_NAME, 'hysteria', 'version'], { timeout: 10_000 });
     versionOk = ver.ok;
     versionOut = (ver.stdout || ver.stderr || '').trim().slice(0, 120);
+    const test = await runCmd('docker', [
+      'exec', CONTAINER_NAME, 'hysteria', 'server', '-c', '/opt/amnezia/awg/hysteria/server.yaml', '--test',
+    ], { timeout: 15_000 });
+    configTest = {
+      ok: test.ok,
+      via: 'hysteria-test',
+      out: (test.stderr || test.stdout || (test.ok ? 'ok' : 'failed')).trim().slice(0, 160),
+    };
     dial = await probeListenInsideContainer(port);
   }
-  const ok = containerUp && versionOk && dial.ok;
+  const ok = containerUp && versionOk && configTest.ok && dial.ok;
   lastSmoke = {
     ok,
     containerUp,
     versionOk,
     versionOut,
+    configTest,
     dial,
     port,
     at: Date.now(),
@@ -652,7 +783,15 @@ function getStatus() {
     sniStored: getSniStored(),
     masqueradeUrl: getMasqueradeUrl(),
     masqueradeUrlStored: getMasqueradeUrlStored(),
+    masqueradeType: getMasqueradeType(),
+    obfsType: getObfsType() || null,
+    bandwidthUp: getBandwidthUp() || null,
+    bandwidthDown: getBandwidthDown() || null,
+    ignoreClientBandwidth: getIgnoreClientBandwidth(),
+    certSource: getCertSource(),
     certDomain: resolveCertDomain(),
+    certDomainStored: getCertDomainStored(),
+    tlsInsecureClient: getTlsInsecureClient(),
     publicPort: getClientFacingPort(),
     listenPort: LISTEN_PORT,
     mode: 'udpDirect',
@@ -715,10 +854,60 @@ async function enableInternal(opts = {}) {
 
     const masqueradeRaw = opts.masqueradeUrl != null ? String(opts.masqueradeUrl).trim() : '';
     const masqueradeUrl = masqueradeRaw || getMasqueradeUrlStored() || pickDefaultMasqueradeUrl();
+    const masqueradeType = opts.masqueradeType != null
+      ? String(opts.masqueradeType).trim().toLowerCase()
+      : getMasqueradeType();
+    const obfsType = opts.obfsType != null ? String(opts.obfsType).trim().toLowerCase() : getObfsType();
+    const obfsPassword = opts.obfsPassword != null ? String(opts.obfsPassword).trim() : getObfsPassword();
+    const bandwidthUp = opts.bandwidthUp != null ? String(opts.bandwidthUp).trim() : getBandwidthUp();
+    const bandwidthDown = opts.bandwidthDown != null ? String(opts.bandwidthDown).trim() : getBandwidthDown();
+    const ignoreClientBw = opts.ignoreClientBandwidth != null
+      ? (opts.ignoreClientBandwidth === true || opts.ignoreClientBandwidth === '1'
+        || opts.ignoreClientBandwidth === 'true')
+      : getIgnoreClientBandwidth();
+    const certSource = opts.certSource != null
+      ? String(opts.certSource).trim().toLowerCase()
+      : getCertSource();
+    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+    const tlsInsecure = opts.tlsInsecureClient != null
+      ? (opts.tlsInsecureClient === true || opts.tlsInsecureClient === '1'
+        || opts.tlsInsecureClient === 'true')
+      : getTlsInsecureClient();
 
     setSetting(SNI_KEY, sni);
     setSetting(ADDRESS_KEY, address);
     setSetting(MASQUERADE_KEY, masqueradeUrl);
+    setSetting(MASQUERADE_TYPE_KEY, masqueradeType === 'file' || masqueradeType === 'string' ? masqueradeType : 'proxy');
+    setSetting(OBFS_TYPE_KEY, obfsType);
+    setSetting(OBFS_PASSWORD_KEY, obfsPassword);
+    setSetting(BANDWIDTH_UP_KEY, bandwidthUp);
+    setSetting(BANDWIDTH_DOWN_KEY, bandwidthDown);
+    setSetting(IGNORE_CLIENT_BW_KEY, ignoreClientBw ? '1' : '0');
+    setSetting(CERT_SOURCE_KEY, certSource);
+    setSetting(CERT_DOMAIN_KEY, certDomainOverride);
+    setSetting(TLS_INSECURE_CLIENT_KEY, tlsInsecure ? '1' : '0');
+
+    const tlsMaterial = require('./tlsMaterial');
+    if (certSource === 'panel') {
+      tlsMaterial.assertPanelCertReuseAllowed('hysteria', publicPort);
+    }
+    const certDomainForIssue = certDomainOverride
+      || ((certSource === 'issue_le' || certSource !== 'panel') ? sni : (tlsMaterial.panelCertDomain() || sni));
+    await tlsMaterial.resolveCertMaterial({
+      certSource,
+      domain: certDomainForIssue,
+      certPem: opts.certPem,
+      keyPem: opts.keyPem,
+      certPath: opts.certPath,
+      keyPath: opts.keyPath,
+      issueIfMissing: certSource === 'issue_le',
+    });
+    if (!(await tlsMaterial.certExistsInVolume(resolveCertDomain()))) {
+      throw Object.assign(
+        new Error(`Certificate not found for ${resolveCertDomain()}`),
+        { status: 400, code: 'HYSTERIA_CERT_MISSING' },
+      );
+    }
 
     const portPlan = require('./portPlan');
     await portPlan.assertHostUdpPortsAvailable([publicPort], { allowSidecar: true });
@@ -764,7 +953,7 @@ async function enableInternal(opts = {}) {
       const smoke = await runSmoke();
       throw Object.assign(
         new Error(
-          `Hysteria did not become ready in time (listen=${smoke.dial && smoke.dial.out}; versionOk=${smoke.versionOk})`,
+          `Hysteria did not become ready in time (listen=${smoke.dial && smoke.dial.out}; configTest=${smoke.configTest && smoke.configTest.out}; versionOk=${smoke.versionOk})`,
         ),
         { code: 'HYSTERIA_TIMEOUT', status: 504 },
       );

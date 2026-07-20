@@ -15,6 +15,11 @@ function sidecarBusyFromPhase(phase, busy) {
   return busy === true || phase === 'installing' || phase === 'removing';
 }
 
+function sidecarValidPort(n) {
+  const p = Number(n);
+  return Number.isInteger(p) && p >= 1 && p <= 65535;
+}
+
 window.SidecarPanels = {
   initialState() {
     return {
@@ -30,10 +35,16 @@ window.SidecarPanels = {
       amneziaMieruModalMode: 'install',
       amneziaMieruInstallOpen: false,
       amneziaMieruAddress: '',
-      amneziaMieruPublicPort: 3080,
+      amneziaMieruEnableTcp: true,
+      amneziaMieruEnableUdp: false,
+      amneziaMieruTcpPublicPort: 3080,
+      amneziaMieruUdpPublicPort: 3080,
       amneziaMieruPort: '',
-      amneziaMieruProtocol: 'TCP',
-      amneziaMieruProtocols: ['TCP', 'UDP'],
+      amneziaMieruMtu: '',
+      amneziaMieruLoggingLevel: 'INFO',
+      amneziaMieruLoggingLevels: ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'],
+      amneziaMieruAdvancedOpen: false,
+      amneziaMieruFieldErrors: {},
       amneziaMieruClockWarning: null,
 
       amneziaHysteriaAvailable: false,
@@ -47,6 +58,16 @@ window.SidecarPanels = {
       amneziaHysteriaAddress: '',
       amneziaHysteriaSni: '',
       amneziaHysteriaPublicPort: 443,
+      amneziaHysteriaMasqueradeUrl: '',
+      amneziaHysteriaObfsType: '',
+      amneziaHysteriaObfsTypes: ['', 'salamander'],
+      amneziaHysteriaObfsPassword: '',
+      amneziaHysteriaBandwidthUp: '',
+      amneziaHysteriaBandwidthDown: '',
+      amneziaHysteriaCertSource: 'panel',
+      amneziaHysteriaCertSources: ['panel', 'manual_pem', 'manual_path', 'issue_le'],
+      amneziaHysteriaAdvancedOpen: false,
+      amneziaHysteriaFieldErrors: {},
 
       amneziaNaiveAvailable: false,
       amneziaNaiveHealthy: false,
@@ -60,8 +81,10 @@ window.SidecarPanels = {
       amneziaNaiveSni: '',
       amneziaNaivePublicPort: 443,
       amneziaNaiveProbeDomain: '',
+      amneziaNaiveFieldErrors: {},
 
       qrcodeMieruLink: '',
+      qrcodeMieruLinks: [],
       qrcodeMieruSvg: null,
       qrcodeHysteriaLink: '',
       qrcodeHysteriaSvg: null,
@@ -81,21 +104,107 @@ window.SidecarPanels = {
     canManageNaive() {
       return this.hasCapability('system.naive');
     },
-    isValidAmneziaMieruPublicPort() {
-      const n = Number(this.amneziaMieruPublicPort);
-      return Number.isInteger(n) && n >= 1 && n <= 65535;
+    canConfirmAmneziaMieruInstall() {
+      if (!String(this.amneziaMieruAddress || '').trim()) return false;
+      if (!this.amneziaMieruEnableTcp && !this.amneziaMieruEnableUdp) return false;
+      if (this.amneziaMieruEnableTcp && !sidecarValidPort(this.amneziaMieruTcpPublicPort)) return false;
+      if (this.amneziaMieruEnableUdp && !sidecarValidPort(this.amneziaMieruUdpPublicPort)) return false;
+      return true;
     },
     isValidAmneziaHysteriaPublicPort() {
-      const n = Number(this.amneziaHysteriaPublicPort);
-      return Number.isInteger(n) && n >= 1 && n <= 65535;
+      return sidecarValidPort(this.amneziaHysteriaPublicPort);
     },
     isValidAmneziaNaivePublicPort() {
-      const n = Number(this.amneziaNaivePublicPort);
-      return Number.isInteger(n) && n >= 1 && n <= 65535;
+      return sidecarValidPort(this.amneziaNaivePublicPort);
     },
   },
 
   methods: {
+    sidecarFieldError(fieldErrors, field) {
+      if (!fieldErrors || !fieldErrors[field]) return '';
+      const raw = String(fieldErrors[field]);
+      const key = `fieldError_${field}`;
+      const translated = this.$t(key);
+      return translated !== key ? translated : raw;
+    },
+    clearSidecarFieldErrors(service) {
+      if (service === 'mieru') this.amneziaMieruFieldErrors = {};
+      else if (service === 'hysteria') this.amneziaHysteriaFieldErrors = {};
+      else if (service === 'naive') this.amneziaNaiveFieldErrors = {};
+    },
+    async runPortPlanValidate(service, body) {
+      const map = {
+        mieru: 'amneziaMieruFieldErrors',
+        hysteria: 'amneziaHysteriaFieldErrors',
+        naive: 'amneziaNaiveFieldErrors',
+      };
+      const stateKey = map[service];
+      if (!stateKey) return false;
+      try {
+        const res = await this.api.validatePortPlan({ service, ...(body || {}) });
+        if (!res || res.ok === false) {
+          this[stateKey] = (res && res.fieldErrors) || { _form: this.$t('portPlanValidateFailed') };
+          return false;
+        }
+        this[stateKey] = {};
+        return true;
+      } catch (err) {
+        this[stateKey] = { _form: (err && err.message) || this.$t('portPlanValidateFailed') };
+        return false;
+      }
+    },
+    buildMieruInstallBody() {
+      const body = {
+        address: String(this.amneziaMieruAddress).trim(),
+        enableTcp: this.amneziaMieruEnableTcp,
+        enableUdp: this.amneziaMieruEnableUdp,
+        tcpPublicPort: Number(this.amneziaMieruTcpPublicPort) || 3080,
+        udpPublicPort: Number(this.amneziaMieruUdpPublicPort) || 3080,
+        loggingLevel: this.amneziaMieruLoggingLevel || 'INFO',
+      };
+      const mtuRaw = String(this.amneziaMieruMtu == null ? '' : this.amneziaMieruMtu).trim();
+      if (mtuRaw !== '') body.mtu = Number(mtuRaw);
+      const portRaw = String(this.amneziaMieruPort == null ? '' : this.amneziaMieruPort).trim();
+      if (portRaw !== '') body.port = Number(portRaw);
+      if (this.amneziaMieruEnableTcp && !this.amneziaMieruEnableUdp) {
+        body.protocol = 'TCP';
+        body.publicPort = body.tcpPublicPort;
+      } else if (this.amneziaMieruEnableUdp && !this.amneziaMieruEnableTcp) {
+        body.protocol = 'UDP';
+        body.publicPort = body.udpPublicPort;
+      }
+      return body;
+    },
+    buildHysteriaInstallBody() {
+      const body = {
+        address: String(this.amneziaHysteriaAddress).trim(),
+        sni: String(this.amneziaHysteriaSni).trim(),
+        publicPort: Number(this.amneziaHysteriaPublicPort) || 443,
+        certSource: this.amneziaHysteriaCertSource,
+      };
+      const masq = String(this.amneziaHysteriaMasqueradeUrl || '').trim();
+      if (masq) body.masqueradeUrl = masq;
+      const obfsType = String(this.amneziaHysteriaObfsType || '').trim();
+      if (obfsType) {
+        body.obfsType = obfsType;
+        body.obfsPassword = String(this.amneziaHysteriaObfsPassword || '').trim();
+      }
+      const up = String(this.amneziaHysteriaBandwidthUp || '').trim();
+      const down = String(this.amneziaHysteriaBandwidthDown || '').trim();
+      if (up) body.bandwidthUp = up;
+      if (down) body.bandwidthDown = down;
+      return body;
+    },
+    buildNaiveInstallBody() {
+      const body = {
+        address: String(this.amneziaNaiveAddress).trim(),
+        sni: String(this.amneziaNaiveSni).trim(),
+        publicPort: Number(this.amneziaNaivePublicPort) || 443,
+      };
+      const probe = String(this.amneziaNaiveProbeDomain || '').trim();
+      if (probe) body.probeResistanceDomain = probe;
+      return body;
+    },
     applySidecarCapabilities(caps) {
       const c = caps || {};
       this.applyAmneziaMieruCapability(c);
@@ -116,9 +225,19 @@ window.SidecarPanels = {
       if (!this.amneziaMieruInstallOpen) {
         if (st.addressStored) this.amneziaMieruAddress = st.addressStored;
         else if (st.address && !this.amneziaMieruAddress) this.amneziaMieruAddress = st.address;
-        if (st.protocol) this.amneziaMieruProtocol = st.protocol;
+        if (st.tcpEnabled != null) this.amneziaMieruEnableTcp = st.tcpEnabled === true;
+        else if (st.protocol) this.amneziaMieruEnableTcp = String(st.protocol).toUpperCase() === 'TCP';
+        if (st.udpEnabled != null) this.amneziaMieruEnableUdp = st.udpEnabled === true;
+        else if (st.protocol) this.amneziaMieruEnableUdp = String(st.protocol).toUpperCase() === 'UDP';
+        if (st.tcpPublicPort) this.amneziaMieruTcpPublicPort = st.tcpPublicPort;
+        if (st.udpPublicPort) this.amneziaMieruUdpPublicPort = st.udpPublicPort;
+        if (st.publicPort && !st.tcpPublicPort && !st.udpPublicPort) {
+          this.amneziaMieruTcpPublicPort = st.publicPort;
+          this.amneziaMieruUdpPublicPort = st.publicPort;
+        }
         if (st.port) this.amneziaMieruPort = st.port;
-        if (st.publicPort) this.amneziaMieruPublicPort = st.publicPort;
+        if (st.mtu != null && st.mtu !== '') this.amneziaMieruMtu = st.mtu;
+        if (st.loggingLevel) this.amneziaMieruLoggingLevel = st.loggingLevel;
       }
       if (this.amneziaMieruBusy) this.ensureAmneziaMieruPoll();
       else this.stopAmneziaMieruPoll();
@@ -164,9 +283,11 @@ window.SidecarPanels = {
     closeAmneziaMieruInstall() {
       this.amneziaMieruInstallOpen = false;
       this.amneziaMieruModalMode = 'install';
+      this.clearSidecarFieldErrors('mieru');
     },
     openAmneziaMieruInstall({ mode = 'install' } = {}) {
       this.amneziaMieruModalMode = mode;
+      this.clearSidecarFieldErrors('mieru');
       this.refreshAmneziaMieruStatus().finally(() => {
         if (!String(this.amneziaMieruAddress || '').trim()) {
           this.amneziaMieruAddress = sidecarDefaultAddress();
@@ -175,18 +296,14 @@ window.SidecarPanels = {
       });
     },
     async confirmAmneziaMieruInstall() {
-      if (this.amneziaMieruBusy || !String(this.amneziaMieruAddress || '').trim() || !this.isValidAmneziaMieruPublicPort) return;
+      if (this.amneziaMieruBusy || !this.canConfirmAmneziaMieruInstall) return;
+      const body = this.buildMieruInstallBody();
+      const valid = await this.runPortPlanValidate('mieru', body);
+      if (!valid) return;
       this.closeAmneziaMieruInstall();
       this.amneziaMieruBusy = true;
       this.ensureAmneziaMieruPoll();
       try {
-        const body = {
-          address: String(this.amneziaMieruAddress).trim(),
-          publicPort: Number(this.amneziaMieruPublicPort) || 3080,
-          protocol: this.amneziaMieruProtocol,
-        };
-        const portRaw = String(this.amneziaMieruPort == null ? '' : this.amneziaMieruPort).trim();
-        if (portRaw !== '') body.port = Number(portRaw);
         await this.withAmneziaDnsTimeout(this.api.enableAmneziaMieru(body), 180000);
         await this.refreshAmneziaMieruStatus();
         await this.refresh();
@@ -261,6 +378,14 @@ window.SidecarPanels = {
         if (st.sniStored) this.amneziaHysteriaSni = st.sniStored;
         else if (st.sni && !this.amneziaHysteriaSni) this.amneziaHysteriaSni = st.sni;
         if (st.publicPort) this.amneziaHysteriaPublicPort = st.publicPort;
+        if (st.masqueradeUrlStored) this.amneziaHysteriaMasqueradeUrl = st.masqueradeUrlStored;
+        else if (st.masqueradeUrl && !this.amneziaHysteriaMasqueradeUrl) {
+          this.amneziaHysteriaMasqueradeUrl = st.masqueradeUrl;
+        }
+        if (st.obfsType) this.amneziaHysteriaObfsType = st.obfsType;
+        if (st.bandwidthUp) this.amneziaHysteriaBandwidthUp = st.bandwidthUp;
+        if (st.bandwidthDown) this.amneziaHysteriaBandwidthDown = st.bandwidthDown;
+        if (st.certSource) this.amneziaHysteriaCertSource = st.certSource;
       }
       if (this.amneziaHysteriaBusy) this.ensureAmneziaHysteriaPoll();
       else this.stopAmneziaHysteriaPoll();
@@ -306,9 +431,11 @@ window.SidecarPanels = {
     closeAmneziaHysteriaInstall() {
       this.amneziaHysteriaInstallOpen = false;
       this.amneziaHysteriaModalMode = 'install';
+      this.clearSidecarFieldErrors('hysteria');
     },
     openAmneziaHysteriaInstall({ mode = 'install' } = {}) {
       this.amneziaHysteriaModalMode = mode;
+      this.clearSidecarFieldErrors('hysteria');
       Promise.all([
         this.refreshAmneziaHysteriaStatus(),
         this.refreshSniCache({ ensureBg: true }),
@@ -329,16 +456,15 @@ window.SidecarPanels = {
         || !String(this.amneziaHysteriaAddress || '').trim()
         || !this.isValidAmneziaHysteriaPublicPort
       ) return;
+      const body = this.buildHysteriaInstallBody();
+      const valid = await this.runPortPlanValidate('hysteria', body);
+      if (!valid) return;
       this.closeAmneziaHysteriaInstall();
       this.amneziaHysteriaBusy = true;
       this.ensureAmneziaHysteriaPoll();
       try {
         await this.preflightSniForInstall(this.amneziaHysteriaSni);
-        await this.withAmneziaDnsTimeout(this.api.enableAmneziaHysteria({
-          address: String(this.amneziaHysteriaAddress).trim(),
-          sni: String(this.amneziaHysteriaSni).trim(),
-          publicPort: Number(this.amneziaHysteriaPublicPort) || 443,
-        }), 180000);
+        await this.withAmneziaDnsTimeout(this.api.enableAmneziaHysteria(body), 180000);
         await this.refreshAmneziaHysteriaStatus();
         await this.refresh();
       } catch (err) {
@@ -460,9 +586,11 @@ window.SidecarPanels = {
     closeAmneziaNaiveInstall() {
       this.amneziaNaiveInstallOpen = false;
       this.amneziaNaiveModalMode = 'install';
+      this.clearSidecarFieldErrors('naive');
     },
     openAmneziaNaiveInstall({ mode = 'install' } = {}) {
       this.amneziaNaiveModalMode = mode;
+      this.clearSidecarFieldErrors('naive');
       Promise.all([
         this.refreshAmneziaNaiveStatus(),
         this.refreshSniCache({ ensureBg: true }),
@@ -480,18 +608,14 @@ window.SidecarPanels = {
         || !String(this.amneziaNaiveAddress || '').trim()
         || !this.isValidAmneziaNaivePublicPort
       ) return;
+      const body = this.buildNaiveInstallBody();
+      const valid = await this.runPortPlanValidate('naive', body);
+      if (!valid) return;
       this.closeAmneziaNaiveInstall();
       this.amneziaNaiveBusy = true;
       this.ensureAmneziaNaivePoll();
       try {
         await this.preflightSniForInstall(this.amneziaNaiveSni);
-        const body = {
-          address: String(this.amneziaNaiveAddress).trim(),
-          sni: String(this.amneziaNaiveSni).trim(),
-          publicPort: Number(this.amneziaNaivePublicPort) || 443,
-        };
-        const probe = String(this.amneziaNaiveProbeDomain || '').trim();
-        if (probe) body.probeResistanceDomain = probe;
         await this.withAmneziaDnsTimeout(this.api.enableAmneziaNaive(body), 180000);
         await this.refreshAmneziaNaiveStatus();
         await this.refresh();

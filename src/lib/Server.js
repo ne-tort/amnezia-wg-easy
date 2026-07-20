@@ -1970,7 +1970,13 @@ module.exports = class Server {
         }
       }
 
-      if (count === 0) throw httpError(404, 'Not Found');
+      if (count === 0) {
+        const xrayClient = amneziaXray.findEnabledClientByName(name);
+        if (xrayClient && !amneziaXray.isAmneziaXrayAvailable()) {
+          throw httpError(503, 'Xray is not available');
+        }
+        throw httpError(404, 'Not Found');
+      }
       if (count === 1 && bundle.xray && bundle.xray.clientJson) {
         return { single: true, body: bundle.xray.clientJson };
       }

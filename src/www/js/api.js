@@ -529,6 +529,22 @@ class API {
     return this.call({ method: 'post', path: '/amnezia-xray/sni-recheck', body });
   }
 
+  async preflightDomain({ domain } = {}) {
+    return this.call({
+      method: 'post',
+      path: '/tls/preflight-domain',
+      body: { domain },
+    });
+  }
+
+  async validatePortPlan({ service, ...fields } = {}) {
+    return this.call({
+      method: 'post',
+      path: '/port-plan/validate',
+      body: { service, ...fields },
+    });
+  }
+
   async getClientXray(clientId) {
     return this.call({ method: 'get', path: `/wireguard/client/${clientId}/xray` });
   }

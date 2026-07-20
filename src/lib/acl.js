@@ -110,6 +110,16 @@ function requireCapability(event, cap) {
   return actor;
 }
 
+/** Require at least one of the given capabilities. */
+function requireAnyCapability(event, caps) {
+  const actor = requireActor(event);
+  const list = Array.isArray(caps) ? caps : [caps];
+  for (const cap of list) {
+    if (hasCapability(actor.role, cap)) return actor;
+  }
+  throw createError({ status: 403, message: 'Forbidden' });
+}
+
 function canAccessClient(actor, clientId) {
   if (!actor || !clientId) return false;
   if (hasCapability(actor.role, CAP.CLIENTS_READ_ALL)) return true;
@@ -220,6 +230,7 @@ module.exports = {
   getActor,
   requireActor,
   requireCapability,
+  requireAnyCapability,
   canAccessClient,
   assertClientAccess,
   filterClientsForActor,

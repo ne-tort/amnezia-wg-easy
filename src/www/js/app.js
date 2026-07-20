@@ -213,6 +213,11 @@ new Vue({
     amneziaXrayFlow: 'xtls-rprx-vision',
     amneziaXrayPort: '',
     amneziaXrayPublicPort: 443,
+    amneziaXraySecurity: 'reality',
+    amneziaXrayCertSource: 'panel',
+    amneziaXraySecurities: ['reality', 'tls', 'none'],
+    amneziaXrayCertSources: ['panel', 'manual_pem', 'manual_path', 'issue_le'],
+    amneziaXrayFieldErrors: {},
     amneziaXrayMode: null,
     amneziaXrayDemuxPeers: [],
     amneziaXrayInstallOpen: false,
@@ -945,9 +950,11 @@ new Vue({
     closeAmneziaXrayInstall() {
       this.amneziaXrayInstallOpen = false;
       this.amneziaXrayModalMode = 'install';
+      this.amneziaXrayFieldErrors = {};
     },
     openAmneziaXrayInstall({ mode = 'install' } = {}) {
       this.amneziaXrayModalMode = mode;
+      this.amneziaXrayFieldErrors = {};
       // Prefill from persisted status; address defaults to how the panel was opened.
       Promise.all([
         this.refreshAmneziaXrayStatus(),
@@ -967,25 +974,40 @@ new Vue({
     async confirmAmneziaXrayInstall() {
       if (
         this.amneziaXrayBusy
-        || !String(this.amneziaXraySni || '').trim()
         || !String(this.amneziaXrayAddress || '').trim()
         || !this.isValidAmneziaXrayPort
         || !this.isValidAmneziaXrayPublicPort
+        || (this.amneziaXraySecurity !== 'none' && !String(this.amneziaXraySni || '').trim())
       ) return;
+      const body = {
+        address: String(this.amneziaXrayAddress).trim(),
+        sni: String(this.amneziaXraySni || '').trim(),
+        fingerprint: this.amneziaXrayFingerprint,
+        flow: this.amneziaXrayFlow,
+        publicPort: Number(this.amneziaXrayPublicPort) || 443,
+        security: this.amneziaXraySecurity,
+        certSource: this.amneziaXrayCertSource,
+      };
+      const portRaw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
+      if (portRaw !== '') body.port = Number(portRaw);
+      try {
+        const res = await this.api.validatePortPlan({ service: 'xray', ...body });
+        if (!res || res.ok === false) {
+          this.amneziaXrayFieldErrors = (res && res.fieldErrors) || { _form: this.$t('portPlanValidateFailed') };
+          return;
+        }
+        this.amneziaXrayFieldErrors = {};
+      } catch (err) {
+        this.amneziaXrayFieldErrors = { _form: (err && err.message) || this.$t('portPlanValidateFailed') };
+        return;
+      }
       this.closeAmneziaXrayInstall();
       this.amneziaXrayBusy = true;
       this.ensureAmneziaXrayPoll();
       try {
-        await this.preflightSniForInstall(this.amneziaXraySni);
-        const body = {
-          address: String(this.amneziaXrayAddress).trim(),
-          sni: String(this.amneziaXraySni).trim(),
-          fingerprint: this.amneziaXrayFingerprint,
-          flow: this.amneziaXrayFlow,
-          publicPort: Number(this.amneziaXrayPublicPort) || 443,
-        };
-        const portRaw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
-        if (portRaw !== '') body.port = Number(portRaw);
+        if (this.amneziaXraySecurity !== 'none' && body.sni) {
+          await this.preflightSniForInstall(body.sni);
+        }
         await this.withAmneziaDnsTimeout(
           this.api.enableAmneziaXray(body),
           180000,
@@ -1135,7 +1157,7 @@ new Vue({
       if (!domain) {
         throw new Error(this.$t('sniPreflightEmpty') || 'SNI is required');
       }
-      const updated = await this.api.recheckXraySni({ domain });
+      const updated = await this.api.preflightDomain({ domain });
       if (!updated || updated.alive === false) {
         throw new Error(
           this.$t('sniPreflightDead', { domain })
@@ -1294,11 +1316,23 @@ new Vue({
         const xrayPromise = this.amneziaXrayAvailable
           ? this.api.getClientXray(client.id)
           : Promise.reject(new Error('xray off'));
-        const [textRes, amneziaRes, previewRes, xrayRes] = await Promise.allSettled([
+        const mieruPromise = this.amneziaMieruAvailable
+          ? this.api.getClientMieru(client.id)
+          : Promise.reject(new Error('mieru off'));
+        const hysteriaPromise = this.amneziaHysteriaAvailable
+          ? this.api.getClientHysteria(client.id)
+          : Promise.reject(new Error('hysteria off'));
+        const naivePromise = this.amneziaNaiveAvailable
+          ? this.api.getClientNaive(client.id)
+          : Promise.reject(new Error('naive off'));
+        const [textRes, amneziaRes, previewRes, xrayRes, mieruRes, hysteriaRes, naiveRes] = await Promise.allSettled([
           this.api.getClientQRCodeSVG(client.id, level, profile, 'text'),
           this.api.getClientQRCodeSVG(client.id, level, profile, 'amnezia'),
           this.api.getConfiguration(client.id, level, profile),
           xrayPromise,
+          mieruPromise,
+          hysteriaPromise,
+          naivePromise,
         ]);
 
         this.qrcodeText = null;
@@ -1313,6 +1347,14 @@ new Vue({
         this.qrcodeXrayVlessUrl = '';
         this.qrcodeXrayJson = '';
         this.qrcodeXrayClientId = client.id;
+        this.qrcodeMieruLink = '';
+        this.qrcodeMieruLinks = [];
+        this.qrcodeMieruSvg = null;
+        this.qrcodeHysteriaLink = '';
+        this.qrcodeHysteriaSvg = null;
+        this.qrcodeNaiveLink = '';
+        this.qrcodeNaiveJson = '';
+        this.qrcodeNaiveSvg = null;
 
         if (textRes.status === 'fulfilled' && textRes.value && textRes.value.svg) {
           this.qrcodeText = 'data:image/svg+xml,' + encodeURIComponent(textRes.value.svg);
@@ -1340,12 +1382,47 @@ new Vue({
             this.qrcodeXraySvg = 'data:image/svg+xml,' + encodeURIComponent(x.subQrSvg);
           }
         }
+        if (mieruRes.status === 'fulfilled' && mieruRes.value) {
+          const m = mieruRes.value;
+          this.qrcodeMieruLink = m.mieruUrl || '';
+          if (Array.isArray(m.mieruUrls) && m.mieruUrls.length) {
+            this.qrcodeMieruLinks = m.mieruUrls;
+          } else if (m.mieruUrl) {
+            this.qrcodeMieruLinks = [{ protocol: m.protocol || 'TCP', url: m.mieruUrl }];
+          }
+          if (m.linkQrSvg) {
+            this.qrcodeMieruSvg = 'data:image/svg+xml,' + encodeURIComponent(m.linkQrSvg);
+          }
+        }
+        if (hysteriaRes.status === 'fulfilled' && hysteriaRes.value) {
+          const h = hysteriaRes.value;
+          this.qrcodeHysteriaLink = h.hy2Url || '';
+          if (h.linkQrSvg) {
+            this.qrcodeHysteriaSvg = 'data:image/svg+xml,' + encodeURIComponent(h.linkQrSvg);
+          }
+        }
+        if (naiveRes.status === 'fulfilled' && naiveRes.value) {
+          const n = naiveRes.value;
+          this.qrcodeNaiveLink = n.shareUrl || '';
+          this.qrcodeNaiveJson = n.clientJson
+            ? JSON.stringify(n.clientJson, null, 2)
+            : '';
+          if (n.linkQrSvg) {
+            this.qrcodeNaiveSvg = 'data:image/svg+xml,' + encodeURIComponent(n.linkQrSvg);
+          }
+        }
 
         const hasAny = this.qrcodeText
           || (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length)
           || this.qrcodePreviewText
           || this.qrcodeXraySvg
-          || this.qrcodeXraySubUrl;
+          || this.qrcodeXraySubUrl
+          || this.qrcodeMieruSvg
+          || this.qrcodeMieruLink
+          || this.qrcodeHysteriaSvg
+          || this.qrcodeHysteriaLink
+          || this.qrcodeNaiveSvg
+          || this.qrcodeNaiveLink;
         if (!hasAny) {
           const err = (textRes.status === 'rejected' && textRes.reason)
             || (amneziaRes.status === 'rejected' && amneziaRes.reason)
@@ -1356,6 +1433,9 @@ new Vue({
         if (this.qrcodeAmneziaSvgs && this.qrcodeAmneziaSvgs.length) this.qrcodeTab = 'amnezia';
         else if (this.qrcodeText) this.qrcodeTab = 'text';
         else if (this.qrcodeXraySvg || this.qrcodeXraySubUrl) this.qrcodeTab = 'xray';
+        else if (this.qrcodeMieruSvg || this.qrcodeMieruLink) this.qrcodeTab = 'mieru';
+        else if (this.qrcodeHysteriaSvg || this.qrcodeHysteriaLink) this.qrcodeTab = 'hysteria';
+        else if (this.qrcodeNaiveSvg || this.qrcodeNaiveLink) this.qrcodeTab = 'naive';
         else this.qrcodeTab = 'preview';
 
         if (!this.qrcodeText && textRes.status === 'rejected') {
@@ -1378,7 +1458,43 @@ new Vue({
       this.qrcodeXrayVlessUrl = '';
       this.qrcodeXrayJson = '';
       this.qrcodeXrayClientId = null;
+      this.qrcodeMieruLink = '';
+      this.qrcodeMieruLinks = [];
+      this.qrcodeMieruSvg = null;
+      this.qrcodeHysteriaLink = '';
+      this.qrcodeHysteriaSvg = null;
+      this.qrcodeNaiveLink = '';
+      this.qrcodeNaiveJson = '';
+      this.qrcodeNaiveSvg = null;
       this.qrcodeTab = 'amnezia';
+    },
+    async copyQrMieruLink(link) {
+      try {
+        await this.copyTextToClipboard(link || this.qrcodeMieruLink || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async copyQrHysteriaLink() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeHysteriaLink || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async copyQrNaiveLink() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeNaiveLink || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
+    },
+    async copyQrNaiveJson() {
+      try {
+        await this.copyTextToClipboard(this.qrcodeNaiveJson || '');
+      } catch (err) {
+        alert(err.message || 'Copy failed');
+      }
     },
     async copyQrXraySub() {
       try {
@@ -2600,7 +2716,13 @@ new Vue({
         || (Array.isArray(this.qrcodeAmneziaSvgs) && this.qrcodeAmneziaSvgs.length > 0)
         || !!this.qrcodePreviewText
         || !!this.qrcodeXraySvg
-        || !!this.qrcodeXraySubUrl;
+        || !!this.qrcodeXraySubUrl
+        || !!this.qrcodeMieruSvg
+        || !!this.qrcodeMieruLink
+        || !!this.qrcodeHysteriaSvg
+        || !!this.qrcodeHysteriaLink
+        || !!this.qrcodeNaiveSvg
+        || !!this.qrcodeNaiveLink;
     },
     /** Safe for Vue 2 template (avoids ReferenceError if stale cached app.js lacks data key). */
     amneziaQrImages() {

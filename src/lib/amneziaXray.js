@@ -33,6 +33,18 @@ const ADDRESS_KEY = 'amnezia_xray_address';
 const PRIV_KEY = 'amnezia_xray_private_key';
 const PUB_KEY = 'amnezia_xray_public_key';
 const SHORT_ID_KEY = 'amnezia_xray_short_id';
+const SECURITY_KEY = 'amnezia_xray_security';
+const NETWORK_KEY = 'amnezia_xray_network';
+const CERT_SOURCE_KEY = 'amnezia_xray_cert_source';
+const CERT_DOMAIN_KEY = 'amnezia_xray_cert_domain';
+const WS_PATH_KEY = 'amnezia_xray_ws_path';
+const WS_HOST_KEY = 'amnezia_xray_ws_host';
+const GRPC_SERVICE_KEY = 'amnezia_xray_grpc_service_name';
+const GRPC_MULTI_KEY = 'amnezia_xray_grpc_multi_mode';
+const ALPN_KEY = 'amnezia_xray_tls_alpn';
+const ALLOW_INSECURE_KEY = 'amnezia_xray_allow_insecure';
+
+const xrayVlessConfig = require('./xrayVlessConfig');
 
 const DEFAULT_SNI = 'www.sbb.ch';
 const DEFAULT_FP = 'chrome';
@@ -171,6 +183,75 @@ function getFlow() {
   return DEFAULT_FLOW;
 }
 
+function getSecurity() {
+  return xrayVlessConfig.normalizeSecurity(getSetting(SECURITY_KEY, 'reality'));
+}
+
+function getNetwork() {
+  return xrayVlessConfig.normalizeNetwork(getSetting(NETWORK_KEY, 'tcp'));
+}
+
+function getCertSource() {
+  const tlsMaterial = require('./tlsMaterial');
+  const s = getSetting(CERT_SOURCE_KEY, 'issue_le').trim().toLowerCase();
+  return tlsMaterial.CERT_SOURCES.includes(s) ? s : 'issue_le';
+}
+
+function resolveCertDomain() {
+  const override = getSetting(CERT_DOMAIN_KEY, '').trim().toLowerCase();
+  if (override) return override;
+  const sni = getSni();
+  const source = getCertSource();
+  if (source === 'panel') {
+    const panel = require('./tlsMaterial').panelCertDomain();
+    if (panel) return panel;
+  }
+  return sni;
+}
+
+function getWsPath() {
+  return getSetting(WS_PATH_KEY, '/').trim() || '/';
+}
+
+function getWsHost() {
+  return getSetting(WS_HOST_KEY, '').trim();
+}
+
+function getGrpcServiceName() {
+  return getSetting(GRPC_SERVICE_KEY, '').trim();
+}
+
+function getGrpcMultiMode() {
+  const raw = getSetting(GRPC_MULTI_KEY, '');
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function getTlsAlpn() {
+  const raw = getSetting(ALPN_KEY, '').trim();
+  return raw ? raw.split(',').map((s) => s.trim()).filter(Boolean) : [];
+}
+
+function getAllowInsecure() {
+  const raw = getSetting(ALLOW_INSECURE_KEY, '');
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function clientStreamOpts() {
+  return {
+    security: getSecurity(),
+    network: getNetwork(),
+    sni: getSni(),
+    fingerprint: getFingerprint(),
+    flow: getFlow(),
+    wsPath: getWsPath(),
+    wsHost: getWsHost() || getSni(),
+    grpcServiceName: getGrpcServiceName(),
+    grpcMultiMode: getGrpcMultiMode(),
+    alpn: getTlsAlpn(),
+    allowInsecure: getAllowInsecure(),
+  };
+}
+
 function setPhase(next, err = null) {
   phase = next;
   if (err != null) lastError = String(err.message || err);
@@ -203,6 +284,17 @@ function serverJsonPath() {
 
 function ensureXrayDir() {
   fs.mkdirSync(xrayHostDir(), { recursive: true });
+}
+
+async function resolveCertbotVolumeName() {
+  const r = await runCmd('docker', [
+    'inspect', '-f',
+    '{{range .Mounts}}{{if eq .Destination "/etc/letsencrypt"}}{{.Name}}{{end}}{{end}}',
+    'nginx',
+  ]);
+  const name = (r.ok ? r.stdout : '').trim();
+  if (name) return name;
+  return `${process.env.COMPOSE_PROJECT_NAME || 'amnezia-wg-easy'}_certbot_conf`;
 }
 
 async function dockerContainerRunning() {
@@ -358,7 +450,42 @@ function buildInboundClients(flow) {
   });
 }
 
-function buildServerConfigObject({ port, sni, privateKey, shortId, flow }) {
+function buildServerConfigObject(opts = {}) {
+  const security = xrayVlessConfig.normalizeSecurity(opts.security != null ? opts.security : getSecurity());
+  const network = xrayVlessConfig.normalizeNetwork(opts.network != null ? opts.network : getNetwork());
+  const port = opts.port;
+  const sni = opts.sni || getSni();
+  const flow = opts.flow != null ? opts.flow : getFlow();
+  const clients = ensureClientUuids();
+
+  /** @type {Record<string, unknown>} */
+  const inboundOpts = {
+    port,
+    sni,
+    security,
+    network,
+    flow,
+    clients,
+    fingerprint: opts.fingerprint != null ? opts.fingerprint : getFingerprint(),
+    wsPath: opts.wsPath != null ? opts.wsPath : getWsPath(),
+    wsHost: opts.wsHost != null ? opts.wsHost : (getWsHost() || sni),
+    grpcServiceName: opts.grpcServiceName != null ? opts.grpcServiceName : getGrpcServiceName(),
+    grpcMultiMode: opts.grpcMultiMode != null ? opts.grpcMultiMode : getGrpcMultiMode(),
+    alpn: opts.alpn != null ? opts.alpn : getTlsAlpn(),
+  };
+
+  if (security === 'reality') {
+    inboundOpts.privateKey = opts.privateKey;
+    inboundOpts.shortId = opts.shortId;
+  } else if (security === 'tls') {
+    const certDomain = opts.certDomain || resolveCertDomain();
+    const paths = require('./tlsMaterial').certPathsForDomain(certDomain);
+    inboundOpts.tlsCert = paths.cert;
+    inboundOpts.tlsKey = paths.key;
+  }
+
+  const vlessInbound = xrayVlessConfig.buildServerInbound(inboundOpts);
+
   return {
     log: { loglevel: 'error' },
     stats: {},
@@ -371,7 +498,6 @@ function buildServerConfigObject({ port, sni, privateKey, shortId, flow }) {
         '0': {
           statsUserUplink: true,
           statsUserDownlink: true,
-          // Presence for panel online indicator (idle VLESS sessions).
           statsUserOnline: true,
         },
       },
@@ -381,26 +507,7 @@ function buildServerConfigObject({ port, sni, privateKey, shortId, flow }) {
       },
     },
     inbounds: [
-      {
-        tag: 'vless-reality',
-        listen: '0.0.0.0',
-        port,
-        protocol: 'vless',
-        settings: {
-          clients: buildInboundClients(flow),
-          decryption: 'none',
-        },
-        streamSettings: {
-          network: 'tcp',
-          security: 'reality',
-          realitySettings: {
-            dest: `${sni}:443`,
-            serverNames: [sni],
-            privateKey,
-            shortIds: [shortId],
-          },
-        },
-      },
+      vlessInbound,
       {
         tag: 'api',
         listen: '127.0.0.1',
@@ -436,73 +543,12 @@ function writeServerJson(obj) {
  * Amnezia XrayProtocol starts this JSON as-is, then tun2socks → socks5://127.0.0.1:10808.
  * spiderX left empty (Xray default "/"); omit spiderX from vless://.
  */
-function buildClientJson({ uuid, host, port, sni, publicKey, shortId, fingerprint, flow, remark }) {
-  // Field order matches amnezia-client server_scripts/xray/template.json
-  /** @type {Record<string, unknown>} */
-  const user = { id: uuid };
-  if (flow) user.flow = flow;
-  user.encryption = 'none';
-
-  /** @type {Record<string, unknown>} */
-  const outbound = {
-    protocol: 'vless',
-    settings: {
-      vnext: [
-        {
-          address: host,
-          port,
-          users: [user],
-        },
-      ],
-    },
-    streamSettings: {
-      network: 'tcp',
-      security: 'reality',
-      realitySettings: {
-        fingerprint,
-        serverName: sni,
-        publicKey,
-        shortId,
-        spiderX: '',
-      },
-    },
-  };
-  // Amnezia template has no outbound tag; keep optional remark only for non-Amnezia preview.
-  if (remark) outbound.tag = remark;
-
-  return {
-    log: { loglevel: 'error' },
-    inbounds: [
-      {
-        listen: '127.0.0.1',
-        port: 10808,
-        protocol: 'socks',
-        settings: { udp: true },
-      },
-    ],
-    outbounds: [outbound],
-  };
+function buildClientJson(opts) {
+  return xrayVlessConfig.buildClientJson(opts);
 }
 
-/**
- * Build vless:// share link (Amnezia / Qv2ray style).
- */
-function buildVlessUrl({
-  uuid, host, port, sni, publicKey, shortId, fingerprint, flow, remark,
-}) {
-  const params = new URLSearchParams();
-  params.set('encryption', 'none');
-  params.set('security', 'reality');
-  params.set('type', 'tcp');
-  if (flow) params.set('flow', flow);
-  if (sni) params.set('sni', sni);
-  if (fingerprint) params.set('fp', fingerprint);
-  if (publicKey) params.set('pbk', publicKey);
-  if (shortId) params.set('sid', shortId);
-  // Intentionally omit spiderX (empty = Xray default "/"; Amnezia Serialize skips empty).
-  let url = `vless://${uuid}@${host}:${Number(port)}?${params.toString()}`;
-  if (remark) url += `#${encodeURIComponent(remark)}`;
-  return url;
+function buildVlessUrl(opts) {
+  return xrayVlessConfig.buildVlessUrl(opts);
 }
 
 /**
@@ -530,35 +576,23 @@ function getClientXrayPayload(client, opts = {}) {
   if (!client || !client.xray_uuid) return null;
   const host = getPublicHost();
   const port = getClientFacingPort();
-  const sni = getSni();
-  const fingerprint = getFingerprint();
-  const flow = getFlow();
+  const stream = clientStreamOpts();
   const publicKey = getSetting(PUB_KEY, '');
   const shortId = getSetting(SHORT_ID_KEY, '');
-  if (!publicKey || !shortId) return null;
+  if (stream.security === 'reality' && (!publicKey || !shortId)) return null;
 
-  const clientJson = buildClientJson({
+  const baseOpts = {
     uuid: client.xray_uuid,
     host,
     port,
-    sni,
+    remark: client.name,
     publicKey,
     shortId,
-    fingerprint,
-    flow,
-    remark: client.name,
-  });
-  const vlessUrl = buildVlessUrl({
-    uuid: client.xray_uuid,
-    host,
-    port,
-    sni,
-    publicKey,
-    shortId,
-    fingerprint,
-    flow,
-    remark: client.name,
-  });
+    ...stream,
+  };
+
+  const clientJson = buildClientJson(baseOpts);
+  const vlessUrl = buildVlessUrl(baseOpts);
 
   const base = (opts.baseUrl || '').replace(/\/+$/, '');
   const subPrefix = String(
@@ -574,11 +608,13 @@ function getClientXrayPayload(client, opts = {}) {
     subPath,
     clientJson,
     port,
-    sni,
-    fingerprint,
-    flow,
-    publicKey,
-    shortId,
+    sni: stream.sni,
+    fingerprint: stream.fingerprint,
+    flow: stream.flow,
+    security: stream.security,
+    network: stream.network,
+    publicKey: stream.security === 'reality' ? publicKey : null,
+    shortId: stream.security === 'reality' ? shortId : null,
     host,
   };
 }
@@ -886,6 +922,10 @@ async function ensureXrayContainer() {
     '-e', `XRAY_SERVER_PORT=${port}`,
     '-v', `${volume}:/opt/amnezia/awg:rw`,
   ];
+  if (getSecurity() === 'tls') {
+    const certVolume = await resolveCertbotVolumeName();
+    runArgs.push('-v', `${certVolume}:/etc/letsencrypt:ro`);
+  }
   if (mode === 'demux') {
     runArgs.push('--network', network);
   } else {
@@ -915,15 +955,15 @@ async function syncClientsFromDb() {
   if (getDesired() !== true && phase !== 'running' && phase !== 'degraded') {
     return { skipped: true };
   }
-  const keys = await generateRealityKeysIfMissing();
+  const keys = getSecurity() === 'reality' ? await generateRealityKeysIfMissing() : null;
   const port = getPort();
   const sni = getSni();
   const flow = getFlow();
   const obj = buildServerConfigObject({
     port,
     sni,
-    privateKey: keys.privateKey,
-    shortId: keys.shortId,
+    privateKey: keys && keys.privateKey,
+    shortId: keys && keys.shortId,
     flow,
   });
   writeServerJson(obj);
@@ -937,7 +977,11 @@ async function syncClientsFromDb() {
     }
     await reloadXrayConfig();
   }
-  return { ok: true, clients: obj.inbounds[0].settings.clients.length };
+  const inbound = obj.inbounds.find((i) => i.protocol === 'vless');
+  const clientCount = inbound && inbound.settings && inbound.settings.clients
+    ? inbound.settings.clients.length
+    : 0;
+  return { ok: true, clients: clientCount };
 }
 
 function isAmneziaXrayAvailable() {
@@ -965,6 +1009,16 @@ function getStatus() {
     sniStored: getSniStored(),
     fingerprint: getFingerprint(),
     flow: getFlow(),
+    security: getSecurity(),
+    network: getNetwork(),
+    certSource: getCertSource(),
+    certDomain: resolveCertDomain(),
+    wsPath: getWsPath(),
+    wsHost: getWsHost() || null,
+    grpcServiceName: getGrpcServiceName() || null,
+    grpcMultiMode: getGrpcMultiMode(),
+    tlsAlpn: getTlsAlpn(),
+    allowInsecure: getAllowInsecure(),
     port: getPort(),
     publicPort: getClientFacingPort(),
     mode: plan.modes.xray || null,
@@ -1003,6 +1057,23 @@ async function enableInternal(opts = {}) {
   setDesired(true);
   const deadline = Date.now() + ENABLE_TIMEOUT_MS;
   try {
+    const sidecarValidate = require('./sidecarValidate');
+    const validation = sidecarValidate.validateXray(opts);
+    if (!validation.ok) {
+      const msg = Object.values(validation.fieldErrors || {}).join('; ') || 'Invalid Xray settings';
+      throw Object.assign(new Error(msg), {
+        status: 400,
+        code: validation.code || 'XRAY_VALIDATION',
+        fieldErrors: validation.fieldErrors,
+      });
+    }
+
+    const security = xrayVlessConfig.normalizeSecurity(
+      opts.security != null ? opts.security : getSecurity(),
+    );
+    const network = xrayVlessConfig.normalizeNetwork(
+      opts.network != null ? opts.network : getNetwork(),
+    );
     const sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni() || DEFAULT_SNI;
     let fingerprint = opts.fingerprint != null ? String(opts.fingerprint).trim() : getFingerprint();
     if (!FINGERPRINTS.includes(fingerprint)) fingerprint = DEFAULT_FP;
@@ -1020,9 +1091,9 @@ async function enableInternal(opts = {}) {
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
     assertSniDemux(sni, publicPort);
-    {
+
+    if (security === 'reality') {
       const { domainHasPublicDns } = require('./sniFinder');
-      // eslint-disable-next-line no-await-in-loop
       if (!(await domainHasPublicDns(sni))) {
         throw Object.assign(
           new Error(
@@ -1031,6 +1102,45 @@ async function enableInternal(opts = {}) {
           { status: 400, code: 'XRAY_SNI_NO_DNS' },
         );
       }
+    }
+
+    const certSource = opts.certSource != null
+      ? String(opts.certSource).trim().toLowerCase()
+      : getCertSource();
+    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+    setSetting(SECURITY_KEY, security);
+    setSetting(NETWORK_KEY, network);
+    setSetting(CERT_SOURCE_KEY, certSource);
+    setSetting(CERT_DOMAIN_KEY, certDomainOverride);
+    if (opts.wsPath != null) setSetting(WS_PATH_KEY, String(opts.wsPath).trim() || '/');
+    if (opts.wsHost != null) setSetting(WS_HOST_KEY, String(opts.wsHost).trim());
+    if (opts.grpcServiceName != null) setSetting(GRPC_SERVICE_KEY, String(opts.grpcServiceName).trim());
+    if (opts.grpcMultiMode != null) {
+      setSetting(GRPC_MULTI_KEY, (opts.grpcMultiMode === true || opts.grpcMultiMode === '1') ? '1' : '0');
+    }
+    if (opts.alpn != null) {
+      const alpnVal = Array.isArray(opts.alpn) ? opts.alpn.join(',') : String(opts.alpn).trim();
+      setSetting(ALPN_KEY, alpnVal);
+    }
+    if (opts.allowInsecure != null) {
+      setSetting(ALLOW_INSECURE_KEY, (opts.allowInsecure === true || opts.allowInsecure === '1') ? '1' : '0');
+    }
+
+    if (security === 'tls') {
+      const tlsMaterial = require('./tlsMaterial');
+      if (certSource === 'panel') {
+        tlsMaterial.assertPanelCertReuseAllowed('xray', publicPort);
+      }
+      const certDomain = certDomainOverride || (certSource === 'issue_le' ? sni : resolveCertDomain());
+      await tlsMaterial.resolveCertMaterial({
+        certSource,
+        domain: certDomain,
+        certPem: opts.certPem,
+        keyPem: opts.keyPem,
+        certPath: opts.certPath,
+        keyPath: opts.keyPath,
+        issueIfMissing: certSource === 'issue_le',
+      });
     }
 
     if (opts.port != null && String(opts.port).trim() !== '') {
@@ -1071,14 +1181,16 @@ async function enableInternal(opts = {}) {
       await portPlan.assertHostPortsAvailable([publicPort], { allowNginx: true });
     }
 
-    const keys = await generateRealityKeysIfMissing();
+    const keys = security === 'reality' ? await generateRealityKeysIfMissing() : null;
     ensureClientUuids();
     const obj = buildServerConfigObject({
       port,
       sni,
-      privateKey: keys.privateKey,
-      shortId: keys.shortId,
+      privateKey: keys && keys.privateKey,
+      shortId: keys && keys.shortId,
       flow,
+      security,
+      network,
     });
     writeServerJson(obj);
 
@@ -1205,7 +1317,6 @@ async function resetCredentialsInternal() {
   if (getDesired() === true || phase === 'running' || phase === 'degraded') {
     await syncClientsFromDb();
   } else {
-    // Still rewrite server.json for next enable
     const obj = buildServerConfigObject({
       port: getPort(),
       sni: getSni(),
