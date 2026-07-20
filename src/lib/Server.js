@@ -1075,6 +1075,41 @@ module.exports = class Server {
           throw httpError(500, err.message || 'Renew failed');
         }
       }))
+      .post('/api/ssl/certs/:id/recheck', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const id = getRouterParam(event, 'id');
+          return { success: true, cert: await sslManager.recheckReality(id) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Recheck failed');
+        }
+      }))
+      .post('/api/ssl/certs/:id/regenerate', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const id = getRouterParam(event, 'id');
+          return { success: true, cert: await sslManager.regenerateReality(id) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Regenerate failed');
+        }
+      }))
+      .post('/api/ssl/certs/:id/auto-renew', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const id = getRouterParam(event, 'id');
+          const body = await readBody(event).catch(() => ({}));
+          const enabled = !!(body && (body.autoRenew === true || body.auto_renew === true || body.enabled === true));
+          return { success: true, cert: sslManager.setAutoRenew(id, enabled) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Auto-renew update failed');
+        }
+      }))
       .post('/api/ssl/certs/:id/assign-panel', defineEventHandler(async (event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
         const sslManager = require('./sslManager');

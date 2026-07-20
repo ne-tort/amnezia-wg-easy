@@ -83,6 +83,23 @@ async function main() {
     // eslint-disable-next-line no-console
     console.error('Amnezia Naive boot:', err && err.message ? err.message : err);
   });
+
+  // SSL auto-renew: LE domain/IP + self-signed (every 6h).
+  const SSL_AUTO_RENEW_MS = 6 * 60 * 60 * 1000;
+  const runSslAutoRenew = () => {
+    try {
+      const sslManager = require('./lib/sslManager');
+      sslManager.tickAutoRenew().catch((err) => {
+        // eslint-disable-next-line no-console
+        console.error('SSL auto-renew:', err && err.message ? err.message : err);
+      });
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('SSL auto-renew:', err && err.message ? err.message : err);
+    }
+  };
+  setTimeout(runSslAutoRenew, 60_000);
+  setInterval(runSslAutoRenew, SSL_AUTO_RENEW_MS);
 }
 
 main().catch((err) => {

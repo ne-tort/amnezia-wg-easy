@@ -38,6 +38,7 @@ const BANDWIDTH_DOWN_KEY = 'amnezia_hysteria_bandwidth_down';
 const IGNORE_CLIENT_BW_KEY = 'amnezia_hysteria_ignore_client_bandwidth';
 const CERT_SOURCE_KEY = 'amnezia_hysteria_cert_source';
 const CERT_DOMAIN_KEY = 'amnezia_hysteria_cert_domain';
+const SSL_CERT_ID_KEY = 'amnezia_hysteria_ssl_cert_id';
 const TLS_INSECURE_CLIENT_KEY = 'amnezia_hysteria_tls_insecure_client';
 
 const DEFAULT_SNI = 'www.sbb.ch';
@@ -782,6 +783,7 @@ function getStatus() {
     certSource: getCertSource(),
     certDomain: resolveCertDomain(),
     certDomainStored: getCertDomainStored(),
+    sslCertId: getSetting(SSL_CERT_ID_KEY, '') || null,
     tlsInsecureClient: getTlsInsecureClient(),
     publicPort: getClientFacingPort(),
     listenPort: LISTEN_PORT,
@@ -835,25 +837,38 @@ async function enableInternal(opts = {}) {
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
 
-    const certSource = opts.certSource != null
+    const sslManager = require('./sslManager');
+    const sslCertId = String(opts.sslCertId || opts.ssl_cert_id || '').trim()
+      || getSetting(SSL_CERT_ID_KEY, '');
+    let inventoryCert = null;
+    if (sslCertId) {
+      inventoryCert = sslManager.requireSidecarCert(sslCertId, 'hysteria');
+    }
+
+    let certSource = opts.certSource != null
       ? String(opts.certSource).trim().toLowerCase()
       : getCertSource();
-    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+    let certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
     const tlsMaterial = require('./tlsMaterial');
     const emailOpt = opts.email != null ? opts.email : (opts.certbotEmail != null ? opts.certbotEmail : null);
     if (emailOpt) tlsMaterial.setCertbotEmail(emailOpt);
 
     let sni = tlsMaterial.normalizeHostname(opts.sni != null ? String(opts.sni) : '');
-    if (certSource === 'issue_le') {
+    if (inventoryCert) {
+      sni = tlsMaterial.normalizeHostname(inventoryCert.sni || inventoryCert.domain || '') || '';
+      if (inventoryCert.type === 'self_signed') certSource = 'self_signed';
+      else if (inventoryCert.type === 'lets_encrypt' || inventoryCert.type === 'lets_encrypt_ip') certSource = 'issue_le';
+      else if (inventoryCert.type === 'manual') certSource = 'manual_path';
+      certDomainOverride = inventoryCert.storage_key || inventoryCert.domain || certDomainOverride;
+    } else if (certSource === 'issue_le') {
       sni = sni || tlsMaterial.normalizeHostname(getSniStored() || getSni() || '');
     } else if (certSource === 'self_signed' || certSource === 'panel') {
-      // empty SNI OK (bare IP / no client SNI)
       sni = sni || '';
     } else {
       sni = sni || tlsMaterial.normalizeHostname(getSniStored() || '') || '';
     }
 
-    if (certSource === 'issue_le' && sni) {
+    if (!inventoryCert && certSource === 'issue_le' && sni) {
       const { domainHasPublicDns } = require('./sniFinder');
       if (!(await domainHasPublicDns(sni))) {
         throw Object.assign(
@@ -908,28 +923,42 @@ async function enableInternal(opts = {}) {
     setSetting(CERT_SOURCE_KEY, certSource);
     setSetting(CERT_DOMAIN_KEY, certDomainOverride);
     setSetting(TLS_INSECURE_CLIENT_KEY, tlsInsecure ? '1' : '0');
+    if (inventoryCert) {
+      setSetting(SSL_CERT_ID_KEY, inventoryCert.id);
+    }
 
     // Hysteria is UDP — panel cert on same port as panel HTTPS is allowed
-    let certDomainForIssue = certDomainOverride;
-    if (!certDomainForIssue) {
-      if (certSource === 'panel') {
-        certDomainForIssue = tlsMaterial.panelCertDomain() || 'localhost';
-      } else if (certSource === 'issue_le') {
-        certDomainForIssue = sni;
-      } else {
-        certDomainForIssue = sni || 'hysteria.local';
+    if (inventoryCert) {
+      const key = inventoryCert.storage_key || inventoryCert.domain;
+      if (!(await tlsMaterial.certExistsInVolume(key))) {
+        throw Object.assign(new Error(`Certificate files missing for ${key}`), {
+          status: 400,
+          code: 'HYSTERIA_CERT_MISSING',
+        });
       }
+      setSetting(CERT_DOMAIN_KEY, key);
+    } else {
+      let certDomainForIssue = certDomainOverride;
+      if (!certDomainForIssue) {
+        if (certSource === 'panel') {
+          certDomainForIssue = tlsMaterial.panelCertDomain() || 'localhost';
+        } else if (certSource === 'issue_le') {
+          certDomainForIssue = sni;
+        } else {
+          certDomainForIssue = sni || 'hysteria.local';
+        }
+      }
+      await tlsMaterial.resolveCertMaterial({
+        certSource,
+        domain: certDomainForIssue,
+        certPem: opts.certPem,
+        keyPem: opts.keyPem,
+        certPath: opts.certPath,
+        keyPath: opts.keyPath,
+        email: emailOpt || tlsMaterial.getCertbotEmail(),
+        issueIfMissing: certSource === 'issue_le',
+      });
     }
-    await tlsMaterial.resolveCertMaterial({
-      certSource,
-      domain: certDomainForIssue,
-      certPem: opts.certPem,
-      keyPem: opts.keyPem,
-      certPath: opts.certPath,
-      keyPath: opts.keyPath,
-      email: emailOpt || tlsMaterial.getCertbotEmail(),
-      issueIfMissing: certSource === 'issue_le',
-    });
     if (!(await tlsMaterial.certExistsInVolume(resolveCertDomain()))) {
       throw Object.assign(
         new Error(`Certificate not found for ${resolveCertDomain()}`),

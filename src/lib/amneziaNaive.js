@@ -30,6 +30,7 @@ const ADDRESS_KEY = 'amnezia_naive_address';
 const PROBE_KEY = 'amnezia_naive_probe_resistance_domain';
 const CERT_SOURCE_KEY = 'amnezia_naive_cert_source';
 const CERT_DOMAIN_KEY = 'amnezia_naive_cert_domain';
+const SSL_CERT_ID_KEY = 'amnezia_naive_ssl_cert_id';
 
 const ENABLE_TIMEOUT_MS = 180_000;
 const RECONCILE_INTERVAL_MS = 30_000;
@@ -583,6 +584,7 @@ function getStatus() {
     probeResistanceDomain: getProbeResistanceDomain() || null,
     certSource: getCertSource(),
     certDomain: resolveCertDomain() || null,
+    sslCertId: getSetting(SSL_CERT_ID_KEY, '') || null,
     port: getPort(),
     publicPort: getClientFacingPort(),
     mode: plan.modes.naive || null,
@@ -625,11 +627,13 @@ async function enableInternal(opts = {}) {
     }
 
     const tlsMaterial = require('./tlsMaterial');
-    const sni = tlsMaterial.normalizeHostname(
-      (opts.sni != null ? String(opts.sni) : '') || getSni() || '',
-    );
+    const sslManager = require('./sslManager');
+    const sslCertId = String(opts.sslCertId || opts.ssl_cert_id || '').trim()
+      || getSetting(SSL_CERT_ID_KEY, '');
+    const inventoryCert = sslManager.requireSidecarCert(sslCertId, 'naive');
+    const sni = tlsMaterial.normalizeHostname(inventoryCert.sni || inventoryCert.domain || '');
     if (!sni || !tlsMaterial.isFqdn(sni)) {
-      throw Object.assign(new Error('Naive requires a real domain (FQDN)'), {
+      throw Object.assign(new Error('Naive requires a real domain (FQDN) certificate'), {
         status: 400,
         code: 'NAIVE_BAD_SNI',
       });
@@ -654,26 +658,18 @@ async function enableInternal(opts = {}) {
       setSetting(PROBE_KEY, probeDomain);
     }
 
-    const emailOpt = opts.email != null ? opts.email : (opts.certbotEmail != null ? opts.certbotEmail : null);
-    if (emailOpt) tlsMaterial.setCertbotEmail(emailOpt);
-
-    // Naive always uses Let's Encrypt on the modal SNI
-    const certSource = 'issue_le';
-    setSetting(CERT_SOURCE_KEY, certSource);
-    setSetting(CERT_DOMAIN_KEY, sni);
-
-    await tlsMaterial.resolveCertMaterial({
-      certSource,
-      domain: sni,
-      email: emailOpt || tlsMaterial.getCertbotEmail(),
-      issueIfMissing: true,
-    });
-    if (!(await tlsMaterial.certExistsInVolume(sni))) {
+    const storageKey = inventoryCert.storage_key || inventoryCert.domain || sni;
+    if (!(await tlsMaterial.certExistsInVolume(storageKey))) {
       throw Object.assign(
-        new Error(`Certificate not found for Naive SNI ${sni}`),
+        new Error(`Certificate not found for Naive SNI ${storageKey}`),
         { status: 400, code: 'NAIVE_CERT_MISSING' },
       );
     }
+
+    const certSource = 'issue_le';
+    setSetting(CERT_SOURCE_KEY, certSource);
+    setSetting(CERT_DOMAIN_KEY, storageKey);
+    setSetting(SSL_CERT_ID_KEY, inventoryCert.id);
 
     const portPlan = require('./portPlan');
     const tentativeMode = (() => {

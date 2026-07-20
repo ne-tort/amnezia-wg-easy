@@ -15,8 +15,17 @@ const tlsMaterial = require('./tlsMaterial');
 
 const execFileAsync = promisify(execFile);
 
-const TYPES = Object.freeze(['self_signed', 'lets_encrypt', 'reality', 'manual']);
+const TYPES = Object.freeze(['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'reality', 'manual']);
+const LE_TYPES = Object.freeze(['lets_encrypt', 'lets_encrypt_ip']);
 const XRAY_IMAGE = 'amnezia-xray';
+const REALITY_CHECK_TTL_SEC = 24 * 60 * 60;
+
+const SIDECAR_CERT_FILTERS = Object.freeze({
+  naive: ['lets_encrypt'],
+  hysteria: ['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'manual'],
+  xray_reality: ['reality'],
+  xray_tls: ['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'manual'],
+});
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
@@ -80,6 +89,10 @@ function rowToPublic(row, { includeSecrets = false } = {}) {
     realityDest: row.reality_dest || '',
     realityPublicKey: row.reality_public_key || '',
     realityShortId: row.reality_short_id || '',
+    realityStatus: row.reality_status || null,
+    realityCheckedAt: row.reality_checked_at || null,
+    realityCheckDetail: row.reality_check_detail || null,
+    autoRenew: !!(row.auto_renew),
     source: row.source || '',
     isPanel,
     managed: isPanel,
@@ -177,17 +190,22 @@ function insertRow(fields) {
   const t = nowSec();
   const id = fields.id || newId();
   const isPanel = fields.is_panel ? 1 : 0;
+  const autoRenew = fields.auto_renew != null
+    ? (fields.auto_renew ? 1 : 0)
+    : (LE_TYPES.includes(fields.type) ? 1 : 0);
   database().prepare(`
     INSERT INTO ssl_certificates (
       id, type, label, domain, sni, email, storage_key,
       not_after, issuer, fingerprint_sha256,
       reality_private_key, reality_public_key, reality_short_id, reality_dest,
-      source, managed, is_panel, notes, created_at, updated_at
+      reality_status, reality_checked_at, reality_check_detail,
+      source, managed, is_panel, auto_renew, notes, created_at, updated_at
     ) VALUES (
       @id, @type, @label, @domain, @sni, @email, @storage_key,
       @not_after, @issuer, @fingerprint_sha256,
       @reality_private_key, @reality_public_key, @reality_short_id, @reality_dest,
-      @source, @managed, @is_panel, @notes, @created_at, @updated_at
+      @reality_status, @reality_checked_at, @reality_check_detail,
+      @source, @managed, @is_panel, @auto_renew, @notes, @created_at, @updated_at
     )
   `).run({
     id,
@@ -204,9 +222,13 @@ function insertRow(fields) {
     reality_public_key: fields.reality_public_key || null,
     reality_short_id: fields.reality_short_id || null,
     reality_dest: fields.reality_dest || null,
+    reality_status: fields.reality_status || null,
+    reality_checked_at: fields.reality_checked_at != null ? fields.reality_checked_at : null,
+    reality_check_detail: fields.reality_check_detail || null,
     source: fields.source || null,
     managed: isPanel || fields.managed ? 1 : 0,
     is_panel: isPanel,
+    auto_renew: autoRenew,
     notes: fields.notes || null,
     created_at: t,
     updated_at: t,
@@ -225,6 +247,9 @@ function updateRow(id, patch) {
     next.is_panel = patch.is_panel ? 1 : 0;
     next.managed = next.is_panel ? 1 : (patch.managed !== undefined ? (patch.managed ? 1 : 0) : next.managed);
   }
+  if (patch.auto_renew !== undefined) {
+    next.auto_renew = patch.auto_renew ? 1 : 0;
+  }
   next.updated_at = nowSec();
   database().prepare(`
     UPDATE ssl_certificates SET
@@ -232,7 +257,10 @@ function updateRow(id, patch) {
       not_after=@not_after, issuer=@issuer, fingerprint_sha256=@fingerprint_sha256,
       reality_private_key=@reality_private_key, reality_public_key=@reality_public_key,
       reality_short_id=@reality_short_id, reality_dest=@reality_dest,
-      source=@source, managed=@managed, is_panel=@is_panel, notes=@notes, updated_at=@updated_at
+      reality_status=@reality_status, reality_checked_at=@reality_checked_at,
+      reality_check_detail=@reality_check_detail,
+      source=@source, managed=@managed, is_panel=@is_panel, auto_renew=@auto_renew,
+      notes=@notes, updated_at=@updated_at
     WHERE id=@id
   `).run({
     id,
@@ -249,9 +277,13 @@ function updateRow(id, patch) {
     reality_public_key: next.reality_public_key,
     reality_short_id: next.reality_short_id,
     reality_dest: next.reality_dest,
+    reality_status: next.reality_status || null,
+    reality_checked_at: next.reality_checked_at != null ? next.reality_checked_at : null,
+    reality_check_detail: next.reality_check_detail || null,
     source: next.source,
     managed: next.is_panel ? 1 : (next.managed ? 1 : 0),
     is_panel: next.is_panel ? 1 : 0,
+    auto_renew: next.auto_renew ? 1 : 0,
     notes: next.notes,
     updated_at: next.updated_at,
   });
@@ -340,9 +372,14 @@ async function list() {
     if (row.type === 'reality' || !row.storage_key) continue;
     await refreshRowMetaFromVolume(row).catch(() => null);
   }
-  rows = database().prepare(
-    'SELECT * FROM ssl_certificates ORDER BY is_panel DESC, type ASC, domain ASC',
-  ).all();
+  // Lazy Reality recheck for stale TTL — do not block list response.
+  const now = nowSec();
+  for (const row of rows) {
+    if (row.type !== 'reality') continue;
+    const checked = row.reality_checked_at || 0;
+    if (checked && (now - checked) < REALITY_CHECK_TTL_SEC) continue;
+    recheckReality(row.id).catch(() => null);
+  }
   let publicIp = '';
   try {
     const wgHost = String(require('../config').WG_HOST || '').trim();
@@ -418,7 +455,8 @@ async function createLetsEncrypt(opts = {}) {
   const email = String(opts.email || tlsMaterial.getCertbotEmail() || '').trim();
   const force = opts.force === true;
   const portPlan = require('./portPlan');
-  if (portPlan.isIpLiteral(host)) {
+  const isIp = portPlan.isIpLiteral(host);
+  if (isIp) {
     await tlsMaterial.issueLetsEncryptIp(host, email, { force });
   } else if (!tlsMaterial.isFqdn(host)) {
     throw httpError(400, 'Let\'s Encrypt requires a valid FQDN or IP', 'SSL_BAD_DOMAIN');
@@ -430,7 +468,7 @@ async function createLetsEncrypt(opts = {}) {
     'SELECT id FROM ssl_certificates WHERE storage_key = ?',
   ).get(host);
   const patch = {
-    type: 'lets_encrypt',
+    type: isIp ? 'lets_encrypt_ip' : 'lets_encrypt',
     label: opts.label != null ? String(opts.label).trim() : host,
     domain: host,
     sni: host,
@@ -440,6 +478,7 @@ async function createLetsEncrypt(opts = {}) {
     issuer: meta.issuer,
     fingerprint_sha256: meta.fingerprintSha256,
     source: 'issued',
+    auto_renew: opts.auto_renew != null ? (opts.auto_renew ? 1 : 0) : 1,
   };
   if (existing) {
     return updateRow(existing.id, patch);
@@ -447,8 +486,54 @@ async function createLetsEncrypt(opts = {}) {
   return insertRow(patch);
 }
 
+async function applyRealityCheck(sni) {
+  // Contract/unit tests and offline CI: skip live TLS probe.
+  if (process.env.NODE_ENV === 'test' || process.env.AWG_SSL_SKIP_REALITY_CHECK === '1') {
+    return {
+      reality_status: 'ok',
+      reality_checked_at: nowSec(),
+      reality_check_detail: 'test-skip',
+      alive: true,
+      entry: { domain: sni, alive: true },
+    };
+  }
+  const sniFinder = require('./sniFinder');
+  const entry = await sniFinder.recheckDomain(sni);
+  const ok = !!(entry && entry.alive);
+  return {
+    reality_status: ok ? 'ok' : 'fail',
+    reality_checked_at: nowSec(),
+    reality_check_detail: ok
+      ? `alive ip=${entry.ip || ''} alpn=${entry.alpn || ''}`
+      : (entry && entry.ip ? `dead ip=${entry.ip}` : 'no public DNS / TLS check failed'),
+    alive: ok,
+    entry,
+  };
+}
+
 async function createReality(opts = {}) {
   const sni = normalizeDomainInput(opts.sni || opts.domain);
+  if (!tlsMaterial.isFqdn(sni)) {
+    throw httpError(400, 'Reality requires a valid FQDN SNI', 'SSL_BAD_DOMAIN');
+  }
+  const existing = database().prepare(
+    'SELECT * FROM ssl_certificates WHERE type = ? AND (sni = ? OR domain = ?) LIMIT 1',
+  ).get('reality', sni, sni);
+  if (existing && opts.reuse !== false) {
+    const check = await applyRealityCheck(sni);
+    if (!check.alive) {
+      throw httpError(400, `Reality SNI «${sni}» failed health check: ${check.reality_check_detail}`, 'SSL_REALITY_INVALID');
+    }
+    return updateRow(existing.id, {
+      reality_status: check.reality_status,
+      reality_checked_at: check.reality_checked_at,
+      reality_check_detail: check.reality_check_detail,
+    });
+  }
+  const check = await applyRealityCheck(sni);
+  if (!check.alive) {
+    throw httpError(400, `Reality SNI «${sni}» failed health check: ${check.reality_check_detail}`, 'SSL_REALITY_INVALID');
+  }
   let dest = String(opts.dest || opts.realityDest || '').trim();
   if (!dest) dest = `${sni}:443`;
   const keys = await generateRealityKeypair();
@@ -462,8 +547,64 @@ async function createReality(opts = {}) {
     reality_public_key: keys.publicKey,
     reality_short_id: shortId,
     reality_dest: dest,
+    reality_status: check.reality_status,
+    reality_checked_at: check.reality_checked_at,
+    reality_check_detail: check.reality_check_detail,
     source: 'generated',
   });
+}
+
+async function recheckReality(id) {
+  const row = getRaw(id);
+  if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
+  if (row.type !== 'reality') {
+    throw httpError(400, 'Only Reality certificates can be rechecked', 'SSL_RECHECK_TYPE');
+  }
+  const sni = row.sni || row.domain;
+  const check = await applyRealityCheck(sni);
+  return updateRow(id, {
+    reality_status: check.reality_status,
+    reality_checked_at: check.reality_checked_at,
+    reality_check_detail: check.reality_check_detail,
+  });
+}
+
+async function regenerateReality(id) {
+  const row = getRaw(id);
+  if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
+  if (row.type !== 'reality') {
+    throw httpError(400, 'Only Reality certificates can be regenerated', 'SSL_REGENERATE_TYPE');
+  }
+  const sni = row.sni || row.domain;
+  const check = await applyRealityCheck(sni);
+  if (!check.alive) {
+    throw httpError(400, `Reality SNI «${sni}» failed health check: ${check.reality_check_detail}`, 'SSL_REALITY_INVALID');
+  }
+  const keys = await generateRealityKeypair();
+  const shortId = crypto.randomBytes(8).toString('hex');
+  const dest = row.reality_dest || `${sni}:443`;
+  return updateRow(id, {
+    reality_private_key: keys.privateKey,
+    reality_public_key: keys.publicKey,
+    reality_short_id: shortId,
+    reality_dest: dest,
+    reality_status: check.reality_status,
+    reality_checked_at: check.reality_checked_at,
+    reality_check_detail: check.reality_check_detail,
+    source: 'regenerated',
+  });
+}
+
+function setAutoRenew(id, enabled) {
+  const row = getRaw(id);
+  if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
+  if (row.type === 'reality') {
+    throw httpError(400, 'Reality certificates do not support auto-renew', 'SSL_AUTO_RENEW_TYPE');
+  }
+  if (!LE_TYPES.includes(row.type) && row.type !== 'self_signed') {
+    throw httpError(400, 'Auto-renew is only for Let\'s Encrypt and self-signed', 'SSL_AUTO_RENEW_TYPE');
+  }
+  return updateRow(id, { auto_renew: enabled ? 1 : 0 });
 }
 
 async function importPem(opts = {}) {
@@ -517,22 +658,34 @@ async function importPath(opts = {}) {
 async function renew(id, opts = {}) {
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
-  if (row.type !== 'lets_encrypt') {
-    throw httpError(400, 'Only Let\'s Encrypt certificates can be renewed', 'SSL_RENEW_TYPE');
+  if (!LE_TYPES.includes(row.type) && row.type !== 'self_signed') {
+    throw httpError(400, 'Only Let\'s Encrypt or self-signed certificates can be renewed', 'SSL_RENEW_TYPE');
   }
   const domain = row.storage_key || row.domain;
-  const email = row.email || tlsMaterial.getCertbotEmail();
   const force = opts.force !== false;
+
+  if (row.type === 'self_signed') {
+    await tlsMaterial.ensureSelfSignedCert(domain, { force: true });
+    const meta = await metaFromVolume(domain);
+    return updateRow(id, {
+      not_after: meta.notAfter,
+      issuer: meta.issuer,
+      fingerprint_sha256: meta.fingerprintSha256,
+      source: 'generated',
+    });
+  }
+
+  const email = row.email || tlsMaterial.getCertbotEmail();
   const beforeMeta = await metaFromVolume(domain);
   const portPlan = require('./portPlan');
-  // Sync-only when live PEM is healthy and caller did not request force ACME.
+  const isIp = row.type === 'lets_encrypt_ip' || portPlan.isIpLiteral(domain);
   const liveHealthy = beforeMeta.notAfter != null
-    && beforeMeta.notAfter * 1000 > Date.now() + 14 * 24 * 60 * 60 * 1000;
+    && beforeMeta.notAfter * 1000 > Date.now() + (isIp ? 1 : 14) * 24 * 60 * 60 * 1000;
   const nearExpiry = !(beforeMeta.notAfter != null
-    && beforeMeta.notAfter * 1000 > Date.now() + 30 * 24 * 60 * 60 * 1000);
+    && beforeMeta.notAfter * 1000 > Date.now() + (isIp ? 2 : 30) * 24 * 60 * 60 * 1000);
 
   if (force || nearExpiry || !liveHealthy) {
-    if (portPlan.isIpLiteral(domain)) {
+    if (isIp) {
       await tlsMaterial.issueLetsEncryptIp(domain, email, { force: force || nearExpiry });
     } else {
       await tlsMaterial.issueLetsEncrypt(domain, email, { force: force || nearExpiry });
@@ -543,15 +696,12 @@ async function renew(id, opts = {}) {
   if (meta.notAfter == null) {
     throw httpError(500, 'Renew completed but could not read new certificate metadata', 'SSL_RENEW_META');
   }
-  // LE often returns the same leaf on force renew (certificate reuse). Accept when still healthy.
   if (
     force
     && beforeMeta.notAfter != null
     && meta.notAfter <= beforeMeta.notAfter
   ) {
-    const minMs = portPlan.isIpLiteral(domain)
-      ? 1 * 24 * 60 * 60 * 1000
-      : 14 * 24 * 60 * 60 * 1000;
+    const minMs = isIp ? 1 * 24 * 60 * 60 * 1000 : 14 * 24 * 60 * 60 * 1000;
     if (meta.notAfter * 1000 <= Date.now() + minMs) {
       throw httpError(
         400,
@@ -561,6 +711,7 @@ async function renew(id, opts = {}) {
     }
   }
   const updated = updateRow(id, {
+    type: isIp ? 'lets_encrypt_ip' : 'lets_encrypt',
     not_after: meta.notAfter,
     issuer: meta.issuer,
     fingerprint_sha256: meta.fingerprintSha256,
@@ -570,6 +721,55 @@ async function renew(id, opts = {}) {
     persistPanelSslHost(domain);
   }
   return updated;
+}
+
+/**
+ * Auto-renew tick: renew LE/self-signed rows with auto_renew=1 near expiry.
+ */
+async function tickAutoRenew() {
+  const rows = database().prepare(
+    `SELECT * FROM ssl_certificates WHERE auto_renew = 1 AND type IN ('lets_encrypt','lets_encrypt_ip','self_signed')`,
+  ).all();
+  const results = [];
+  for (const row of rows) {
+    const notAfter = row.not_after;
+    const isIp = row.type === 'lets_encrypt_ip';
+    const thresholdDays = row.type === 'self_signed' ? 30 : (isIp ? 2 : 30);
+    const due = notAfter == null
+      || (notAfter * 1000 <= Date.now() + thresholdDays * 24 * 60 * 60 * 1000);
+    if (!due) {
+      results.push({ id: row.id, skipped: true });
+      continue;
+    }
+    try {
+      await renew(row.id, { force: true });
+      results.push({ id: row.id, ok: true });
+    } catch (err) {
+      results.push({ id: row.id, ok: false, error: err.message || String(err) });
+    }
+  }
+  return results;
+}
+
+/**
+ * Resolve inventory cert for sidecar enable. Returns raw row + typed material.
+ */
+function requireSidecarCert(id, filterKey) {
+  const allowed = SIDECAR_CERT_FILTERS[filterKey];
+  if (!allowed) throw httpError(500, `Unknown cert filter ${filterKey}`, 'SSL_FILTER');
+  const cid = String(id || '').trim();
+  if (!cid) throw httpError(400, 'sslCertId is required', 'SSL_CERT_REQUIRED');
+  const row = getRaw(cid);
+  if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
+  if (!allowed.includes(row.type)) {
+    throw httpError(400, `Certificate type «${row.type}» is not allowed here`, 'SSL_CERT_TYPE');
+  }
+  return row;
+}
+
+function peekCert(id) {
+  const row = getRaw(String(id || '').trim());
+  return row ? rowToPublic(row, { includeSecrets: false }) : null;
 }
 
 /**
@@ -629,15 +829,25 @@ async function remove(id) {
 
 module.exports = {
   TYPES,
+  LE_TYPES,
+  SIDECAR_CERT_FILTERS,
+  REALITY_CHECK_TTL_SEC,
   list,
   get: getById,
+  getRaw,
+  peekCert,
+  requireSidecarCert,
   syncPanel,
   createSelfSigned,
   createLetsEncrypt,
   createReality,
+  recheckReality,
+  regenerateReality,
+  setAutoRenew,
   importPem,
   importPath,
   renew,
+  tickAutoRenew,
   remove,
   assignPanel,
   parsePemMeta: tlsMaterial.parsePemMeta,

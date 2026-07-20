@@ -214,13 +214,8 @@ new Vue({
     amneziaXrayPort: '',
     amneziaXrayPublicPort: 443,
     amneziaXraySecurity: 'reality',
-    amneziaXrayCertSource: 'self_signed',
+    amneziaXraySslCertId: '',
     amneziaXraySecurities: ['reality', 'tls', 'none'],
-    amneziaXrayCertSources: ['self_signed', 'issue_le', 'panel', 'manual_pem', 'manual_path'],
-    amneziaXrayCertPem: '',
-    amneziaXrayKeyPem: '',
-    amneziaXrayCertPath: '',
-    amneziaXrayKeyPath: '',
     amneziaXrayFieldErrors: {},
     amneziaXrayMode: null,
     amneziaXrayDemuxPeers: [],
@@ -900,10 +895,7 @@ new Vue({
         if (st.port) this.amneziaXrayPort = st.port;
         if (st.publicPort) this.amneziaXrayPublicPort = st.publicPort;
         if (st.security) this.amneziaXraySecurity = st.security;
-        if (st.certSource) this.amneziaXrayCertSource = st.certSource;
-        if (st.certDomain && this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'panel') {
-          this.amneziaXraySni = st.certDomain;
-        }
+        if (st.sslCertId) this.amneziaXraySslCertId = st.sslCertId;
       }
       if (c.panelHttpsPort != null) this.panelHttpsPort = Number(c.panelHttpsPort) || 443;
       if (c.panelDomain != null) this.panelDomain = String(c.panelDomain || '');
@@ -975,20 +967,24 @@ new Vue({
       Promise.all([
         this.refreshAmneziaXrayStatus(),
         this.refreshSniCache({ ensureBg: true }),
+        this.refreshSslCerts ? this.refreshSslCerts() : Promise.resolve(),
       ]).finally(() => {
         if (!String(this.amneziaXrayAddress || '').trim()) {
           this.amneziaXrayAddress = (typeof window !== 'undefined' && window.location && window.location.hostname)
             ? window.location.hostname
             : '';
         }
-        if (!String(this.amneziaXraySni || '').trim() && this.sniFinderDefaultSni) {
+        if (this.amneziaXraySecurity === 'reality'
+          && !String(this.amneziaXraySni || '').trim()
+          && this.sniFinderDefaultSni
+          && !this.amneziaXraySslCertId) {
           this.amneziaXraySni = this.sniFinderDefaultSni;
         }
+        if (this.amneziaXraySslCertId) this.onXraySslCertChange();
         this.amneziaXrayInstallOpen = true;
       });
     },
-    async confirmAmneziaXrayInstall() {
-      if (this.amneziaXrayBusy || !this.canConfirmAmneziaXrayInstall) return;
+    buildXrayInstallBody() {
       const body = {
         address: String(this.amneziaXrayAddress).trim(),
         sni: String(this.amneziaXraySni || '').trim(),
@@ -996,21 +992,17 @@ new Vue({
         flow: this.amneziaXrayFlow,
         publicPort: Number(this.amneziaXrayPublicPort) || 443,
         security: this.amneziaXraySecurity,
-        certSource: this.amneziaXrayCertSource,
       };
-      if (this.amneziaXraySecurity === 'tls') {
-        this.appendCertFieldsToBody(body, this.amneziaXrayCertSource, {
-          certPem: this.amneziaXrayCertPem,
-          keyPem: this.amneziaXrayKeyPem,
-          certPath: this.amneziaXrayCertPath,
-          keyPath: this.amneziaXrayKeyPath,
-        });
-        if (this.amneziaXrayCertSource === 'issue_le') {
-          body.email = String(this.certbotEmail || '').trim();
-        }
+      if (this.amneziaXraySecurity === 'reality' || this.amneziaXraySecurity === 'tls') {
+        body.sslCertId = String(this.amneziaXraySslCertId || '').trim();
       }
       const portRaw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
       if (portRaw !== '') body.port = Number(portRaw);
+      return body;
+    },
+    async confirmAmneziaXrayInstall() {
+      if (this.amneziaXrayBusy || !this.canConfirmAmneziaXrayInstall) return;
+      const body = this.buildXrayInstallBody();
       try {
         const res = await this.api.validatePortPlan({ service: 'xray', ...body });
         if (!res || res.ok === false) {
@@ -1026,7 +1018,7 @@ new Vue({
       this.amneziaXrayBusy = true;
       this.ensureAmneziaXrayPoll();
       try {
-        const needSniPreflight = body.sni && this.amneziaXraySecurity === 'reality';
+        const needSniPreflight = body.sni && this.amneziaXraySecurity === 'reality' && !body.sslCertId;
         if (needSniPreflight) {
           await this.preflightSniForInstall(body.sni);
         }
@@ -1160,7 +1152,7 @@ new Vue({
       if (!row || row.alive === false) return true;
       return !String(row.domain || '').trim();
     },
-    pickSniDomain(row) {
+    async pickSniDomain(row) {
       if (!row || row.alive === false) return;
       if (this.sniRowBlockedForTarget(row)) return;
       const domain = typeof row === 'string' ? row : row.domain;
@@ -1169,27 +1161,41 @@ new Vue({
       const target = this.sniFinderTarget || 'xray';
       if (target === 'hysteria') {
         this.amneziaHysteriaSni = value;
-      } else {
-        this.amneziaXraySni = '';
-        this.$nextTick(() => {
-          this.amneziaXraySni = value;
-        });
+        this.closeSniFinder();
+        return;
       }
-      this.closeSniFinder();
+      // Xray Reality: create/reuse Reality cert in SSL Manager, then select it.
+      this.sniFinderBusy = true;
+      this.sniFinderError = null;
+      try {
+        const res = await this.api.createSslReality({ sni: value });
+        const cert = res && res.cert;
+        if (!cert || !cert.id) {
+          throw new Error(this.$t('sslCreateRealityFailed') || 'Failed to create Reality certificate');
+        }
+        if (this.refreshSslCerts) await this.refreshSslCerts();
+        this.amneziaXraySslCertId = cert.id;
+        this.amneziaXraySecurity = 'reality';
+        this.amneziaXraySni = value;
+        this.closeSniFinder();
+      } catch (err) {
+        this.sniFinderError = (err && err.message) || this.$t('sslCreateRealityFailed') || 'Failed to create Reality certificate';
+      } finally {
+        this.sniFinderBusy = false;
+      }
     },
     onXraySecurityChange() {
+      this.amneziaXraySslCertId = '';
       if (this.amneziaXraySecurity === 'none') {
-        this.amneziaXraySni = '';
-      } else if (this.amneziaXraySecurity === 'tls'
-        && (this.amneziaXrayCertSource === 'self_signed' || this.amneziaXrayCertSource === 'panel')) {
         this.amneziaXraySni = '';
       }
     },
-    onXrayCertSourceChange() {
-      if (this.amneziaXraySecurity === 'tls'
-        && (this.amneziaXrayCertSource === 'self_signed' || this.amneziaXrayCertSource === 'panel')) {
-        this.amneziaXraySni = '';
-      }
+    onXraySslCertChange() {
+      if (this.amneziaXraySecurity !== 'reality') return;
+      const c = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaXraySslCertId)
+        : (this.sslCerts || []).find((x) => x.id === this.amneziaXraySslCertId);
+      if (c) this.amneziaXraySni = c.sni || c.domain || '';
     },
     /**
      * Recheck SNI (public DNS + TLS/h2) before enable. Reality needs a real hostname.
@@ -2694,17 +2700,32 @@ new Vue({
       return Number.isInteger(n) && n >= 1 && n <= 65535;
     },
     showXraySniField() {
-      if (this.amneziaXraySecurity === 'reality') return true;
-      if (this.amneziaXraySecurity === 'tls') {
-        return this.amneziaXrayCertSource === 'issue_le'
-          || this.amneziaXrayCertSource === 'manual_pem'
-          || this.amneziaXrayCertSource === 'manual_path';
-      }
-      return false;
+      return this.amneziaXraySecurity === 'reality';
     },
     showXraySniFinder() {
       return this.amneziaXrayModalMode !== 'manage'
         && this.amneziaXraySecurity === 'reality';
+    },
+    showXraySslCertSelect() {
+      return this.amneziaXraySecurity === 'reality' || this.amneziaXraySecurity === 'tls';
+    },
+    xraySslCertOptions() {
+      const list = this.sslCerts || [];
+      let filtered;
+      if (this.amneziaXraySecurity === 'reality') {
+        filtered = list.filter((c) => c && c.type === 'reality');
+      } else if (this.amneziaXraySecurity === 'tls') {
+        filtered = list.filter((c) => c && c.type !== 'reality');
+      } else {
+        filtered = [];
+      }
+      const selected = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaXraySslCertId)
+        : list.find((c) => c.id === this.amneziaXraySslCertId);
+      if (selected && !filtered.some((c) => c.id === selected.id)) {
+        return [selected, ...filtered];
+      }
+      return filtered;
     },
     xraySniReadonly() {
       return this.amneziaXrayModalMode === 'manage';
@@ -2712,20 +2733,8 @@ new Vue({
     canConfirmAmneziaXrayInstall() {
       if (!String(this.amneziaXrayAddress || '').trim()) return false;
       if (!this.isValidAmneziaXrayPort || !this.isValidAmneziaXrayPublicPort) return false;
-      if (this.amneziaXraySecurity === 'tls'
-        && this.panelCertConflict('xray', this.amneziaXrayCertSource, this.amneziaXrayPublicPort)) {
-        return false;
-      }
-      if (this.amneziaXraySecurity === 'tls' && !this.certManualFieldsOk(this.amneziaXrayCertSource, {
-        certPem: this.amneziaXrayCertPem,
-        keyPem: this.amneziaXrayKeyPem,
-        certPath: this.amneziaXrayCertPath,
-        keyPath: this.amneziaXrayKeyPath,
-      })) return false;
-      if (this.amneziaXraySecurity === 'reality' && !String(this.amneziaXraySni || '').trim()) return false;
-      if (this.amneziaXraySecurity === 'tls' && this.amneziaXrayCertSource === 'issue_le') {
-        if (!String(this.amneziaXraySni || '').trim()) return false;
-        if (!String(this.certbotEmail || '').trim().includes('@')) return false;
+      if (this.amneziaXraySecurity === 'reality' || this.amneziaXraySecurity === 'tls') {
+        if (!String(this.amneziaXraySslCertId || '').trim()) return false;
       }
       return true;
     },

@@ -122,21 +122,40 @@ function validatePublicPortConflict(ports, { allowNginx = true } = {}) {
   return { ok: true, ports: unique };
 }
 
-function validateNaive(body = {}) {
-  const sni = tlsMaterial.normalizeHostname(body.sni || '');
-  if (!sni || !tlsMaterial.isFqdn(sni)) {
-    return errField('sni', 'Naive requires a real domain (FQDN)', 'NAIVE_BAD_SNI');
+function validateSslCertId(body, filterKey) {
+  const id = String(body.sslCertId || body.ssl_cert_id || '').trim();
+  if (!id) {
+    return errField('sslCertId', 'Certificate is required', 'SSL_CERT_REQUIRED');
   }
+  const sslManager = require('./sslManager');
+  const row = sslManager.getRaw(id);
+  if (!row) {
+    return errField('sslCertId', 'Certificate not found', 'SSL_NOT_FOUND');
+  }
+  const allowed = sslManager.SIDECAR_CERT_FILTERS[filterKey] || [];
+  if (!allowed.includes(row.type)) {
+    return errField('sslCertId', `Certificate type «${row.type}» is not allowed`, 'SSL_CERT_TYPE');
+  }
+  return { ok: true, cert: row };
+}
+
+function validateNaive(body = {}) {
   const publicPort = parseInt(String(body.publicPort != null ? body.publicPort : '443'), 10);
   if (!Number.isFinite(publicPort) || publicPort < 1 || publicPort > 65535) {
     return errField('publicPort', 'Invalid public port (1–65535)', 'NAIVE_BAD_PUBLIC_PORT');
+  }
+  const certCheck = validateSslCertId(body, 'naive');
+  if (!certCheck.ok) return certCheck;
+  const sni = tlsMaterial.normalizeHostname(certCheck.cert.sni || certCheck.cert.domain || body.sni || '');
+  if (!sni || !tlsMaterial.isFqdn(sni)) {
+    return errField('sslCertId', 'Naive requires a Let\'s Encrypt FQDN certificate', 'NAIVE_BAD_SNI');
   }
   const probe = String(body.probeResistanceDomain || body.probe_resistance_domain || '').trim();
   if (probe && probe.toLowerCase() === sni) {
     return errField('probeResistanceDomain', 'Probe resistance domain should differ from Naive SNI', 'NAIVE_PROBE_SNI');
   }
   return mergeErrors(
-    { ok: true },
+    { ok: true, sni, sslCertId: certCheck.cert.id },
     validateSniDemux('naive', sni, publicPort),
     validatePublicPortConflict([publicPort]),
   );
@@ -147,9 +166,18 @@ function validateHysteria(body = {}) {
   if (!Number.isFinite(publicPort) || publicPort < 1 || publicPort > 65535) {
     return errField('publicPort', 'Invalid UDP port (1–65535)', 'HYSTERIA_BAD_PUBLIC_PORT');
   }
+  const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
+  const masq = body.masqueradeUrl != null ? body.masqueradeUrl : body.masquerade_url;
+  if (sslId) {
+    const certCheck = validateSslCertId(body, 'hysteria');
+    if (!certCheck.ok) return certCheck;
+    return mergeErrors(
+      { ok: true, publicPort, sslCertId: certCheck.cert.id },
+      validateMasqueradeUrl(masq),
+    );
+  }
   const certSource = String(body.certSource || body.cert_source || 'self_signed').trim().toLowerCase();
   const sni = tlsMaterial.normalizeHostname(body.sni || '');
-  // SNI required only for Let's Encrypt; self_signed/panel may omit (bare IP)
   if (certSource === 'issue_le') {
     if (!sni || !tlsMaterial.isFqdn(sni)) {
       return errField('sni', 'Let\'s Encrypt requires a valid FQDN in SNI', 'HYSTERIA_BAD_SNI');
@@ -161,8 +189,6 @@ function validateHysteria(body = {}) {
       return errField('certSource', 'Panel certificate domain (PANEL_DOMAIN FQDN) is not configured', 'CERT_PANEL_DOMAIN_MISSING');
     }
   }
-  const masq = body.masqueradeUrl != null ? body.masqueradeUrl : body.masquerade_url;
-  // Hysteria is UDP — panel cert on same port as panel HTTPS is allowed
   return mergeErrors(
     { ok: true, publicPort, certSource },
     validateManualCertFields(certSource, body),
@@ -176,13 +202,46 @@ function validateXray(body = {}) {
   if (!Number.isFinite(publicPort) || publicPort < 1 || publicPort > 65535) {
     return errField('publicPort', 'Invalid public port (1–65535)', 'XRAY_BAD_PUBLIC_PORT');
   }
+  const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
   const sni = tlsMaterial.normalizeHostname(body.sni || '');
-  const certSource = String(body.certSource || body.cert_source || 'self_signed').trim().toLowerCase();
+  const parts = [{ ok: true, security, publicPort }];
 
-  if (security === 'reality' && !sni) {
-    return errField('sni', 'SNI is required for Reality', 'XRAY_SNI_REQUIRED');
+  if (security === 'reality') {
+    if (sslId) {
+      const certCheck = validateSslCertId(body, 'xray_reality');
+      if (!certCheck.ok) return certCheck;
+      const certSni = tlsMaterial.normalizeHostname(certCheck.cert.sni || certCheck.cert.domain || '');
+      if (!certSni) return errField('sslCertId', 'Reality certificate has no SNI', 'XRAY_SNI_REQUIRED');
+      const demuxPort = panelHttpsPort();
+      if (publicPort === demuxPort) {
+        parts.push(validateSniDemux('xray', certSni, publicPort));
+      }
+      return mergeErrors(...parts, { ok: true, sslCertId: certCheck.cert.id, sni: certSni });
+    }
+    if (!sni) return errField('sni', 'SNI is required for Reality', 'XRAY_SNI_REQUIRED');
+    const demuxPort = panelHttpsPort();
+    if (publicPort === demuxPort) {
+      parts.push(validateSniDemux('xray', sni, publicPort));
+    }
+    return mergeErrors(...parts);
   }
+
   if (security === 'tls') {
+    if (sslId) {
+      const certCheck = validateSslCertId(body, 'xray_tls');
+      if (!certCheck.ok) return certCheck;
+      if (certCheck.cert.is_panel) {
+        const conflict = validatePanelCertConflict('panel', publicPort);
+        if (!conflict.ok) return conflict;
+      }
+      const certSni = tlsMaterial.normalizeHostname(certCheck.cert.sni || certCheck.cert.domain || '');
+      const demuxPort = panelHttpsPort();
+      if (publicPort === demuxPort && certSni) {
+        parts.push(validateSniDemux('xray', certSni, publicPort));
+      }
+      return mergeErrors(...parts, { ok: true, sslCertId: certCheck.cert.id });
+    }
+    const certSource = String(body.certSource || body.cert_source || 'self_signed').trim().toLowerCase();
     if (certSource === 'issue_le') {
       if (!sni || !tlsMaterial.isFqdn(sni)) {
         return errField('sni', 'Let\'s Encrypt requires a valid FQDN in SNI', 'XRAY_BAD_SNI');
@@ -194,15 +253,8 @@ function validateXray(body = {}) {
         return errField('certSource', 'Panel certificate domain (PANEL_DOMAIN FQDN) is not configured', 'CERT_PANEL_DOMAIN_MISSING');
       }
     }
-  }
-
-  const parts = [
-    { ok: true, security, publicPort },
-    security === 'tls' ? validatePanelCertConflict(certSource, publicPort) : { ok: true },
-    security === 'tls' ? validateManualCertFields(certSource, body) : { ok: true },
-  ];
-
-  if (security === 'reality' || (security === 'tls' && sni)) {
+    parts.push(validatePanelCertConflict(certSource, publicPort));
+    parts.push(validateManualCertFields(certSource, body));
     const demuxPort = panelHttpsPort();
     if (publicPort === demuxPort && sni) {
       parts.push(validateSniDemux('xray', sni, publicPort));
@@ -238,6 +290,7 @@ module.exports = {
   validatePanelCertConflict,
   validateManualCertFields,
   validateMasqueradeUrl,
+  validateSslCertId,
   mergeErrors,
   PANEL_CERT_CONFLICT_MSG,
 };

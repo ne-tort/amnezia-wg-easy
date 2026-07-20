@@ -37,6 +37,7 @@ const SECURITY_KEY = 'amnezia_xray_security';
 const NETWORK_KEY = 'amnezia_xray_network';
 const CERT_SOURCE_KEY = 'amnezia_xray_cert_source';
 const CERT_DOMAIN_KEY = 'amnezia_xray_cert_domain';
+const SSL_CERT_ID_KEY = 'amnezia_xray_ssl_cert_id';
 const WS_PATH_KEY = 'amnezia_xray_ws_path';
 const WS_HOST_KEY = 'amnezia_xray_ws_host';
 const GRPC_SERVICE_KEY = 'amnezia_xray_grpc_service_name';
@@ -1016,6 +1017,7 @@ function getStatus() {
     network: getNetwork(),
     certSource: getCertSource(),
     certDomain: resolveCertDomain(),
+    sslCertId: getSetting(SSL_CERT_ID_KEY, '') || null,
     wsPath: getWsPath(),
     wsHost: getWsHost() || null,
     grpcServiceName: getGrpcServiceName() || null,
@@ -1077,10 +1079,21 @@ async function enableInternal(opts = {}) {
     const network = xrayVlessConfig.normalizeNetwork(
       opts.network != null ? opts.network : getNetwork(),
     );
-    const certSource = opts.certSource != null
+    const sslManager = require('./sslManager');
+    const sslCertId = String(opts.sslCertId || opts.ssl_cert_id || '').trim()
+      || getSetting(SSL_CERT_ID_KEY, '');
+    let inventoryCert = null;
+    if (sslCertId && (security === 'reality' || security === 'tls')) {
+      inventoryCert = sslManager.requireSidecarCert(
+        sslCertId,
+        security === 'reality' ? 'xray_reality' : 'xray_tls',
+      );
+    }
+
+    let certSource = opts.certSource != null
       ? String(opts.certSource).trim().toLowerCase()
       : getCertSource();
-    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+    let certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
     const tlsMaterial = require('./tlsMaterial');
     const emailOpt = opts.email != null ? opts.email : (opts.certbotEmail != null ? opts.certbotEmail : null);
     if (emailOpt) tlsMaterial.setCertbotEmail(emailOpt);
@@ -1088,6 +1101,14 @@ async function enableInternal(opts = {}) {
     let sni = tlsMaterial.normalizeHostname(
       opts.sni != null ? String(opts.sni) : (getSniStored() || ''),
     );
+    if (inventoryCert) {
+      sni = tlsMaterial.normalizeHostname(inventoryCert.sni || inventoryCert.domain || sni);
+      if (inventoryCert.type === 'self_signed') certSource = 'self_signed';
+      else if (inventoryCert.type === 'lets_encrypt' || inventoryCert.type === 'lets_encrypt_ip') certSource = 'issue_le';
+      else if (inventoryCert.type === 'manual') certSource = 'manual_path';
+      else if (inventoryCert.type === 'reality') certSource = 'reality';
+      certDomainOverride = inventoryCert.storage_key || inventoryCert.domain || certDomainOverride;
+    }
     if (security === 'none') {
       sni = '';
     } else if (security === 'reality') {
@@ -1096,7 +1117,6 @@ async function enableInternal(opts = {}) {
       if (certSource === 'issue_le') {
         sni = sni || tlsMaterial.normalizeHostname(opts.sni || '');
       } else {
-        // self_signed / panel / manual: allow empty SNI (bare IP)
         sni = sni || '';
       }
     }
@@ -1136,6 +1156,11 @@ async function enableInternal(opts = {}) {
     setSetting(NETWORK_KEY, network);
     setSetting(CERT_SOURCE_KEY, certSource);
     setSetting(CERT_DOMAIN_KEY, certDomainOverride);
+    if (inventoryCert) {
+      setSetting(SSL_CERT_ID_KEY, inventoryCert.id);
+    } else if (security === 'none') {
+      setSetting(SSL_CERT_ID_KEY, '');
+    }
     if (opts.wsPath != null) setSetting(WS_PATH_KEY, String(opts.wsPath).trim() || '/');
     if (opts.wsHost != null) setSetting(WS_HOST_KEY, String(opts.wsHost).trim());
     if (opts.grpcServiceName != null) setSetting(GRPC_SERVICE_KEY, String(opts.grpcServiceName).trim());
@@ -1158,29 +1183,40 @@ async function enableInternal(opts = {}) {
     setSetting(ALLOW_INSECURE_KEY, allowInsecure ? '1' : '0');
 
     if (security === 'tls') {
-      if (certSource === 'panel') {
-        tlsMaterial.assertPanelCertReuseAllowed('xray', publicPort);
-      }
-      let certDomain = certDomainOverride;
-      if (!certDomain) {
-        if (certSource === 'panel') {
-          certDomain = tlsMaterial.panelCertDomain() || sni || 'localhost';
-        } else if (certSource === 'issue_le') {
-          certDomain = sni;
-        } else {
-          certDomain = sni || 'xray.local';
+      if (inventoryCert) {
+        const key = inventoryCert.storage_key || inventoryCert.domain;
+        if (!(await tlsMaterial.certExistsInVolume(key))) {
+          throw Object.assign(new Error(`Certificate files missing for ${key}`), {
+            status: 400,
+            code: 'XRAY_CERT_MISSING',
+          });
         }
+        setSetting(CERT_DOMAIN_KEY, key);
+      } else {
+        if (certSource === 'panel') {
+          tlsMaterial.assertPanelCertReuseAllowed('xray', publicPort);
+        }
+        let certDomain = certDomainOverride;
+        if (!certDomain) {
+          if (certSource === 'panel') {
+            certDomain = tlsMaterial.panelCertDomain() || sni || 'localhost';
+          } else if (certSource === 'issue_le') {
+            certDomain = sni;
+          } else {
+            certDomain = sni || 'xray.local';
+          }
+        }
+        await tlsMaterial.resolveCertMaterial({
+          certSource,
+          domain: certDomain,
+          certPem: opts.certPem,
+          keyPem: opts.keyPem,
+          certPath: opts.certPath,
+          keyPath: opts.keyPath,
+          email: emailOpt || tlsMaterial.getCertbotEmail(),
+          issueIfMissing: certSource === 'issue_le',
+        });
       }
-      await tlsMaterial.resolveCertMaterial({
-        certSource,
-        domain: certDomain,
-        certPem: opts.certPem,
-        keyPem: opts.keyPem,
-        certPath: opts.certPath,
-        keyPath: opts.keyPath,
-        email: emailOpt || tlsMaterial.getCertbotEmail(),
-        issueIfMissing: certSource === 'issue_le',
-      });
     }
 
     if (opts.port != null && String(opts.port).trim() !== '') {
@@ -1221,7 +1257,20 @@ async function enableInternal(opts = {}) {
       await portPlan.assertHostPortsAvailable([publicPort], { allowNginx: true });
     }
 
-    const keys = security === 'reality' ? await generateRealityKeysIfMissing() : null;
+    const keys = security === 'reality'
+      ? (inventoryCert && inventoryCert.type === 'reality'
+        ? (() => {
+          setSetting(PRIV_KEY, inventoryCert.reality_private_key);
+          setSetting(PUB_KEY, inventoryCert.reality_public_key);
+          setSetting(SHORT_ID_KEY, inventoryCert.reality_short_id);
+          return {
+            privateKey: inventoryCert.reality_private_key,
+            publicKey: inventoryCert.reality_public_key,
+            shortId: inventoryCert.reality_short_id,
+          };
+        })()
+        : await generateRealityKeysIfMissing())
+      : null;
     ensureClientUuids();
     const obj = buildServerConfigObject({
       port,

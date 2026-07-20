@@ -50,6 +50,16 @@ const SslManagerPanel = {
       const t = this.$t(key);
       return (t && t !== key) ? t : type;
     },
+    sslCertSelectLabel(c) {
+      if (!c) return '—';
+      const name = c.label || c.domain || c.sni || c.id;
+      return `${name} · ${this.sslTypeLabel(c.type)}`;
+    },
+    sslFindCertById(id) {
+      const cid = String(id || '').trim();
+      if (!cid) return null;
+      return (this.sslCerts || []).find((c) => c.id === cid) || null;
+    },
     sslIsPanel(cert) {
       return !!(cert && (cert.isPanel || cert.managed));
     },
@@ -57,6 +67,15 @@ const SslManagerPanel = {
       if (!cert || this.sslIsPanel(cert)) return false;
       if (cert.type === 'reality') return false;
       return true;
+    },
+    sslCanAutoRenew(cert) {
+      if (!cert) return false;
+      return cert.type === 'lets_encrypt'
+        || cert.type === 'lets_encrypt_ip'
+        || cert.type === 'self_signed';
+    },
+    sslCanRenew(cert) {
+      return this.sslCanAutoRenew(cert);
     },
     sslFormatExpiry(notAfter) {
       if (!notAfter) return '—';
@@ -67,6 +86,9 @@ const SslManagerPanel = {
       } catch {
         return '—';
       }
+    },
+    sslFormatCheckedAt(ts) {
+      return this.sslFormatExpiry(ts);
     },
     resetSslForm() {
       this.sslForm = {
@@ -232,11 +254,57 @@ const SslManagerPanel = {
     },
     async renewSslSelected() {
       const c = this.sslDetail || this.sslSelectedCert;
-      if (!c || this.sslManagerBusy) return;
+      if (!c || !this.sslCanRenew(c) || this.sslManagerBusy) return;
       this.sslManagerBusy = true;
       this.sslManagerError = null;
       try {
         const res = await this.api.renewSslCert(c.id, { force: true });
+        this.sslDetail = (res && res.cert) || this.sslDetail;
+        await this.refreshSslCerts();
+      } catch (err) {
+        this.sslManagerError = (err && err.message) || this.$t('sslActionFailed');
+      } finally {
+        this.sslManagerBusy = false;
+      }
+    },
+    async setSslAutoRenewSelected(enabled) {
+      const c = this.sslDetail || this.sslSelectedCert;
+      if (!c || !this.sslCanAutoRenew(c) || this.sslManagerBusy) return;
+      this.sslManagerBusy = true;
+      this.sslManagerError = null;
+      try {
+        const res = await this.api.setSslAutoRenew(c.id, !!enabled);
+        this.sslDetail = (res && res.cert) || { ...c, autoRenew: !!enabled };
+        await this.refreshSslCerts();
+      } catch (err) {
+        this.sslManagerError = (err && err.message) || this.$t('sslActionFailed');
+      } finally {
+        this.sslManagerBusy = false;
+      }
+    },
+    async recheckSslSelected() {
+      const c = this.sslDetail || this.sslSelectedCert;
+      if (!c || c.type !== 'reality' || this.sslManagerBusy) return;
+      this.sslManagerBusy = true;
+      this.sslManagerError = null;
+      try {
+        const res = await this.api.recheckSslCert(c.id);
+        this.sslDetail = (res && res.cert) || this.sslDetail;
+        await this.refreshSslCerts();
+      } catch (err) {
+        this.sslManagerError = (err && err.message) || this.$t('sslActionFailed');
+      } finally {
+        this.sslManagerBusy = false;
+      }
+    },
+    async regenerateSslSelected() {
+      const c = this.sslDetail || this.sslSelectedCert;
+      if (!c || c.type !== 'reality' || this.sslManagerBusy) return;
+      if (!window.confirm(this.$t('sslRegenerateConfirm'))) return;
+      this.sslManagerBusy = true;
+      this.sslManagerError = null;
+      try {
+        const res = await this.api.regenerateSslCert(c.id);
         this.sslDetail = (res && res.cert) || this.sslDetail;
         await this.refreshSslCerts();
       } catch (err) {

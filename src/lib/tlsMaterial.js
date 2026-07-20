@@ -505,6 +505,7 @@ async function issueLetsEncryptIp(ip, email, opts = {}) {
     const install = await runCmd('docker', [
       'run', '--rm',
       '-v', `${vol}:/acme-out`,
+      '-e', 'LE_WORKING_DIR=/acme-out/acme.sh',
       '--entrypoint', 'acme.sh',
       'neilpang/acme.sh',
       '--install-cert', '-d', d,
@@ -611,17 +612,27 @@ async function injectManualPem(domain, certPem, keyPem) {
 /**
  * Generate a self-signed TLS cert directly inside the certbot volume (no host tmp bind).
  */
-async function ensureSelfSignedCert(domain) {
+async function ensureSelfSignedCert(domain, opts = {}) {
   const d = String(domain || 'localhost').trim().toLowerCase();
+  const force = opts.force === true;
   if (!d) {
     const err = new Error('Certificate domain is required for self-signed cert');
     err.status = 400;
     err.code = 'CERT_BAD_DOMAIN';
     throw err;
   }
-  if (await certExistsInVolume(d)) {
+  if (!force && await certExistsInVolume(d)) {
     const certPem = await readPemFromVolume(d);
     return { ...certPathsForDomain(d), certPem: certPem || undefined };
+  }
+  if (force && await certExistsInVolume(d)) {
+    const vol = await resolveCertbotVolumeName();
+    await runCmd('docker', [
+      'run', '--rm',
+      '-v', `${vol}:/etc/letsencrypt`,
+      'alpine:3.20',
+      'sh', '-c', `rm -rf '/etc/letsencrypt/live/${d}' '/etc/letsencrypt/archive/${d}'`,
+    ], { timeout: 30_000 });
   }
 
   const vol = await resolveCertbotVolumeName();

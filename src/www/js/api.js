@@ -464,6 +464,22 @@ class API {
     return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/renew`, body });
   }
 
+  async recheckSslCert(id) {
+    return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/recheck` });
+  }
+
+  async regenerateSslCert(id) {
+    return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/regenerate` });
+  }
+
+  async setSslAutoRenew(id, autoRenew) {
+    return this.call({
+      method: 'post',
+      path: `/ssl/certs/${encodeURIComponent(id)}/auto-renew`,
+      body: { autoRenew: !!autoRenew },
+    });
+  }
+
   async assignSslPanel(id) {
     return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/assign-panel` });
   }

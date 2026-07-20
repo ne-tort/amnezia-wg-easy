@@ -74,12 +74,7 @@ window.SidecarPanels = {
       amneziaHysteriaObfsPassword: '',
       amneziaHysteriaBandwidthUp: '',
       amneziaHysteriaBandwidthDown: '',
-      amneziaHysteriaCertSource: 'self_signed',
-      amneziaHysteriaCertSources: ['self_signed', 'issue_le', 'panel', 'manual_pem', 'manual_path'],
-      amneziaHysteriaCertPem: '',
-      amneziaHysteriaKeyPem: '',
-      amneziaHysteriaCertPath: '',
-      amneziaHysteriaKeyPath: '',
+      amneziaHysteriaSslCertId: '',
       amneziaHysteriaAdvancedOpen: false,
       amneziaHysteriaFieldErrors: {},
       masqueradeBankOpen: false,
@@ -100,6 +95,7 @@ window.SidecarPanels = {
       amneziaNaiveInstallOpen: false,
       amneziaNaiveAddress: '',
       amneziaNaiveSni: '',
+      amneziaNaiveSslCertId: '',
       amneziaNaivePublicPort: 443,
       amneziaNaiveProbeDomain: '',
       amneziaNaiveFieldErrors: {},
@@ -141,34 +137,34 @@ window.SidecarPanels = {
     canConfirmAmneziaNaiveInstall() {
       if (!String(this.amneziaNaiveAddress || '').trim()) return false;
       if (!this.isValidAmneziaNaivePublicPort) return false;
-      const sni = this.normalizeHostnameInput(this.amneziaNaiveSni);
-      if (!sni || !sni.includes('.')) return false;
-      if (!String(this.certbotEmail || '').trim().includes('@')) return false;
+      if (!String(this.amneziaNaiveSslCertId || '').trim()) return false;
       return true;
     },
     canConfirmAmneziaHysteriaInstall() {
       if (!String(this.amneziaHysteriaAddress || '').trim()) return false;
       if (!this.isValidAmneziaHysteriaPublicPort) return false;
-      if (!this.certManualFieldsOk(this.amneziaHysteriaCertSource, {
-        certPem: this.amneziaHysteriaCertPem,
-        keyPem: this.amneziaHysteriaKeyPem,
-        certPath: this.amneziaHysteriaCertPath,
-        keyPath: this.amneziaHysteriaKeyPath,
-      })) return false;
-      const src = this.amneziaHysteriaCertSource;
-      if (src === 'issue_le') {
-        if (!String(this.amneziaHysteriaSni || '').trim()) return false;
-        if (!String(this.certbotEmail || '').trim().includes('@')) return false;
-      }
+      if (!String(this.amneziaHysteriaSslCertId || '').trim()) return false;
       return true;
     },
-    hysteriaSniReadonly() {
-      return this.amneziaHysteriaModalMode === 'manage';
+    hysteriaSslCertOptions() {
+      const list = (this.sslCerts || []).filter((c) => c && c.type !== 'reality');
+      const selected = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaHysteriaSslCertId)
+        : (this.sslCerts || []).find((c) => c.id === this.amneziaHysteriaSslCertId);
+      if (selected && !list.some((c) => c.id === selected.id)) {
+        return [selected, ...list];
+      }
+      return list;
     },
-    showHysteriaSniField() {
-      return this.amneziaHysteriaCertSource === 'issue_le'
-        || this.amneziaHysteriaCertSource === 'manual_pem'
-        || this.amneziaHysteriaCertSource === 'manual_path';
+    naiveSslCertOptions() {
+      const list = (this.sslCerts || []).filter((c) => c && c.type === 'lets_encrypt');
+      const selected = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaNaiveSslCertId)
+        : (this.sslCerts || []).find((c) => c.id === this.amneziaNaiveSslCertId);
+      if (selected && !list.some((c) => c.id === selected.id)) {
+        return [selected, ...list];
+      }
+      return list;
     },
     // Hysteria is plain TLS (own FQDN for LE), not Reality — no foreign SNI bank.
     showHysteriaSniFinder() {
@@ -184,40 +180,10 @@ window.SidecarPanels = {
       const translated = this.$t(key);
       return translated !== key ? translated : raw;
     },
-    certSourceLabel(src) {
-      const key = `certSource_${src}`;
-      const t = this.$t(key);
-      return (t && t !== key) ? t : src;
-    },
     securityLabel(sec) {
       const key = `security_${sec}`;
       const t = this.$t(key);
       return (t && t !== key) ? t : sec;
-    },
-    panelCertConflict(service, certSource, publicPort) {
-      if (service === 'hysteria') return false;
-      if (certSource !== 'panel') return false;
-      const panelPort = Number(this.panelHttpsPort) || 443;
-      return Number(publicPort) === panelPort;
-    },
-    certManualFieldsOk(certSource, fields) {
-      if (certSource === 'manual_pem') {
-        return !!(String(fields.certPem || '').trim() && String(fields.keyPem || '').trim());
-      }
-      if (certSource === 'manual_path') {
-        return !!(String(fields.certPath || '').trim() && String(fields.keyPath || '').trim());
-      }
-      return true;
-    },
-    appendCertFieldsToBody(body, certSource, fields) {
-      if (certSource === 'manual_pem') {
-        body.certPem = String(fields.certPem || '').trim();
-        body.keyPem = String(fields.keyPem || '').trim();
-      } else if (certSource === 'manual_path') {
-        body.certPath = String(fields.certPath || '').trim();
-        body.keyPath = String(fields.keyPath || '').trim();
-      }
-      return body;
     },
     sniPreflightRequiredForHysteria() {
       // Reality-style SNI Finder preflight is for camouflage hosts, not own LE domains.
@@ -233,6 +199,20 @@ window.SidecarPanels = {
         if (parts.length === 2 && /^\d+$/.test(parts[1])) s = parts[0];
       }
       return s.replace(/\.$/, '');
+    },
+    onHysteriaSslCertChange() {
+      const c = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaHysteriaSslCertId)
+        : (this.sslCerts || []).find((x) => x.id === this.amneziaHysteriaSslCertId);
+      if (c) this.amneziaHysteriaSni = c.sni || c.domain || '';
+    },
+    onNaiveSslCertChange() {
+      const c = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaNaiveSslCertId)
+        : (this.sslCerts || []).find((x) => x.id === this.amneziaNaiveSslCertId);
+      if (c) {
+        this.amneziaNaiveSni = this.normalizeHostnameInput(c.sni || c.domain || '');
+      }
     },
     async openMasqueradeBank() {
       this.masqueradeBankOpen = true;
@@ -254,11 +234,6 @@ window.SidecarPanels = {
       if (!url) return;
       this.amneziaHysteriaMasqueradeUrl = url;
       this.closeMasqueradeBank();
-    },
-    onHysteriaCertSourceChange() {
-      if (this.amneziaHysteriaCertSource === 'self_signed' || this.amneziaHysteriaCertSource === 'panel') {
-        this.amneziaHysteriaSni = '';
-      }
     },
     clearSidecarFieldErrors(service) {
       if (service === 'mieru') this.amneziaMieruFieldErrors = {};
@@ -311,19 +286,9 @@ window.SidecarPanels = {
     buildHysteriaInstallBody() {
       const body = {
         address: String(this.amneziaHysteriaAddress).trim(),
-        sni: String(this.amneziaHysteriaSni || '').trim(),
         publicPort: Number(this.amneziaHysteriaPublicPort) || 443,
-        certSource: this.amneziaHysteriaCertSource,
+        sslCertId: String(this.amneziaHysteriaSslCertId || '').trim(),
       };
-      if (this.amneziaHysteriaCertSource === 'issue_le') {
-        body.email = String(this.certbotEmail || '').trim();
-      }
-      this.appendCertFieldsToBody(body, this.amneziaHysteriaCertSource, {
-        certPem: this.amneziaHysteriaCertPem,
-        keyPem: this.amneziaHysteriaKeyPem,
-        certPath: this.amneziaHysteriaCertPath,
-        keyPath: this.amneziaHysteriaKeyPath,
-      });
       const masq = String(this.amneziaHysteriaMasqueradeUrl || '').trim();
       body.masqueradeUrl = masq;
       const obfsType = String(this.amneziaHysteriaObfsType || '').trim();
@@ -338,12 +303,17 @@ window.SidecarPanels = {
       return body;
     },
     buildNaiveInstallBody() {
+      const cert = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaNaiveSslCertId)
+        : (this.sslCerts || []).find((x) => x.id === this.amneziaNaiveSslCertId);
+      const sniFromCert = cert
+        ? this.normalizeHostnameInput(cert.sni || cert.domain || '')
+        : '';
       const body = {
         address: String(this.amneziaNaiveAddress).trim(),
-        sni: this.normalizeHostnameInput(this.amneziaNaiveSni),
+        sni: sniFromCert || this.normalizeHostnameInput(this.amneziaNaiveSni),
         publicPort: Number(this.amneziaNaivePublicPort) || 443,
-        email: String(this.certbotEmail || '').trim(),
-        certSource: 'issue_le',
+        sslCertId: String(this.amneziaNaiveSslCertId || '').trim(),
       };
       const probe = String(this.amneziaNaiveProbeDomain || '').trim();
       if (probe) body.probeResistanceDomain = probe;
@@ -534,10 +504,7 @@ window.SidecarPanels = {
         if (st.obfsType) this.amneziaHysteriaObfsType = st.obfsType;
         if (st.bandwidthUp) this.amneziaHysteriaBandwidthUp = st.bandwidthUp;
         if (st.bandwidthDown) this.amneziaHysteriaBandwidthDown = st.bandwidthDown;
-        if (st.certSource) this.amneziaHysteriaCertSource = st.certSource;
-        if (st.certDomain && this.amneziaHysteriaCertSource === 'panel') {
-          this.amneziaHysteriaSni = st.certDomain;
-        }
+        if (st.sslCertId) this.amneziaHysteriaSslCertId = st.sslCertId;
       }
       if (this.amneziaHysteriaBusy) this.ensureAmneziaHysteriaPoll();
       else this.stopAmneziaHysteriaPoll();
@@ -590,13 +557,12 @@ window.SidecarPanels = {
       this.clearSidecarFieldErrors('hysteria');
       Promise.all([
         this.refreshAmneziaHysteriaStatus(),
-        this.refreshSniCache({ ensureBg: true }),
+        this.refreshSslCerts ? this.refreshSslCerts() : Promise.resolve(),
       ]).finally(() => {
         if (!String(this.amneziaHysteriaAddress || '').trim()) {
           this.amneziaHysteriaAddress = sidecarDefaultAddress();
         }
-        // Masquerade is optional and unrelated to LE SNI — do not auto-fill from SNI bank
-        this.onHysteriaCertSourceChange();
+        if (this.amneziaHysteriaSslCertId) this.onHysteriaSslCertChange();
         this.amneziaHysteriaInstallOpen = true;
       });
     },
@@ -708,6 +674,7 @@ window.SidecarPanels = {
           this.amneziaNaiveProbeDomain = st.probeResistanceDomain;
         }
         if (st.publicPort) this.amneziaNaivePublicPort = st.publicPort;
+        if (st.sslCertId) this.amneziaNaiveSslCertId = st.sslCertId;
       }
       if (this.amneziaNaiveBusy) this.ensureAmneziaNaivePoll();
       else this.stopAmneziaNaivePoll();
@@ -760,11 +727,12 @@ window.SidecarPanels = {
       this.clearSidecarFieldErrors('naive');
       Promise.all([
         this.refreshAmneziaNaiveStatus(),
-        this.refreshSniCache({ ensureBg: true }),
+        this.refreshSslCerts ? this.refreshSslCerts() : Promise.resolve(),
       ]).finally(() => {
         if (!String(this.amneziaNaiveAddress || '').trim()) {
           this.amneziaNaiveAddress = sidecarDefaultAddress();
         }
+        if (this.amneziaNaiveSslCertId) this.onNaiveSslCertChange();
         this.amneziaNaiveInstallOpen = true;
       });
     },
