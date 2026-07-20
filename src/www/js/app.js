@@ -1296,7 +1296,7 @@ new Vue({
       if (profile) params.push(`profile=${encodeURIComponent(profile)}`);
       if (signature) params.push(`signature=${encodeURIComponent(signature)}`);
       if (fmt === 'amnezia') params.push('format=amnezia');
-      return `/api/wireguard/client/${client.id}/configuration?${params.join('&')}`;
+      return `${this.api.apiRoot()}/wireguard/client/${client.id}/configuration?${params.join('&')}`;
     },
     clientDownloadFilename(client) {
       const safe = String(client.name || client.id || 'configuration')
