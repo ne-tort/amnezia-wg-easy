@@ -193,8 +193,8 @@ function getNetwork() {
 
 function getCertSource() {
   const tlsMaterial = require('./tlsMaterial');
-  const s = getSetting(CERT_SOURCE_KEY, 'issue_le').trim().toLowerCase();
-  return tlsMaterial.CERT_SOURCES.includes(s) ? s : 'issue_le';
+  const s = getSetting(CERT_SOURCE_KEY, 'self_signed').trim().toLowerCase();
+  return tlsMaterial.CERT_SOURCES.includes(s) ? s : 'self_signed';
 }
 
 function resolveCertDomain() {
@@ -233,7 +233,9 @@ function getTlsAlpn() {
 
 function getAllowInsecure() {
   const raw = getSetting(ALLOW_INSECURE_KEY, '');
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return getSecurity() === 'tls' && getCertSource() === 'self_signed';
 }
 
 function clientStreamOpts() {
@@ -1074,7 +1076,19 @@ async function enableInternal(opts = {}) {
     const network = xrayVlessConfig.normalizeNetwork(
       opts.network != null ? opts.network : getNetwork(),
     );
-    const sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni() || DEFAULT_SNI;
+    const certSource = opts.certSource != null
+      ? String(opts.certSource).trim().toLowerCase()
+      : getCertSource();
+    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+
+    let sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni() || DEFAULT_SNI;
+    if (security === 'none') {
+      sni = '';
+    } else if (security === 'tls' && certSource === 'panel') {
+      const panelDomain = require('./tlsMaterial').panelCertDomain();
+      if (panelDomain) sni = panelDomain;
+    }
+
     let fingerprint = opts.fingerprint != null ? String(opts.fingerprint).trim() : getFingerprint();
     if (!FINGERPRINTS.includes(fingerprint)) fingerprint = DEFAULT_FP;
     let flow = opts.flow != null ? String(opts.flow) : getFlow();
@@ -1090,24 +1104,25 @@ async function enableInternal(opts = {}) {
       });
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
-    assertSniDemux(sni, publicPort);
+    if (security !== 'none' && sni) {
+      assertSniDemux(sni, publicPort);
+    }
 
-    if (security === 'reality') {
+    if (security === 'reality' || (security === 'tls' && (certSource === 'issue_le' || certSource === 'panel'))) {
       const { domainHasPublicDns } = require('./sniFinder');
-      if (!(await domainHasPublicDns(sni))) {
+      const dnsTarget = (security === 'tls' && certSource === 'panel')
+        ? (require('./tlsMaterial').panelCertDomain() || sni)
+        : sni;
+      if (dnsTarget && !(await domainHasPublicDns(dnsTarget))) {
         throw Object.assign(
           new Error(
-            `SNI «${sni}» не резолвится в публичном DNS (нужен реальный hostname, не CDN-SAN)`,
+            `SNI «${dnsTarget}» не резолвится в публичном DNS (нужен реальный hostname, не CDN-SAN)`,
           ),
           { status: 400, code: 'XRAY_SNI_NO_DNS' },
         );
       }
     }
 
-    const certSource = opts.certSource != null
-      ? String(opts.certSource).trim().toLowerCase()
-      : getCertSource();
-    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
     setSetting(SECURITY_KEY, security);
     setSetting(NETWORK_KEY, network);
     setSetting(CERT_SOURCE_KEY, certSource);
@@ -1122,16 +1137,29 @@ async function enableInternal(opts = {}) {
       const alpnVal = Array.isArray(opts.alpn) ? opts.alpn.join(',') : String(opts.alpn).trim();
       setSetting(ALPN_KEY, alpnVal);
     }
-    if (opts.allowInsecure != null) {
-      setSetting(ALLOW_INSECURE_KEY, (opts.allowInsecure === true || opts.allowInsecure === '1') ? '1' : '0');
+    let allowInsecure = opts.allowInsecure != null
+      ? (opts.allowInsecure === true || opts.allowInsecure === '1' || opts.allowInsecure === 'true')
+      : getAllowInsecure();
+    if (security === 'tls' && certSource === 'self_signed' && opts.allowInsecure == null) {
+      allowInsecure = true;
     }
+    setSetting(ALLOW_INSECURE_KEY, allowInsecure ? '1' : '0');
 
     if (security === 'tls') {
       const tlsMaterial = require('./tlsMaterial');
       if (certSource === 'panel') {
         tlsMaterial.assertPanelCertReuseAllowed('xray', publicPort);
       }
-      const certDomain = certDomainOverride || (certSource === 'issue_le' ? sni : resolveCertDomain());
+      let certDomain = certDomainOverride;
+      if (!certDomain) {
+        if (certSource === 'panel') {
+          certDomain = tlsMaterial.panelCertDomain() || sni;
+        } else if (certSource === 'issue_le' || certSource === 'self_signed') {
+          certDomain = sni || 'xray.local';
+        } else {
+          certDomain = resolveCertDomain();
+        }
+      }
       await tlsMaterial.resolveCertMaterial({
         certSource,
         domain: certDomain,

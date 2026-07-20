@@ -831,6 +831,8 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     return {
       clients,
       serverCapabilities: {
+        panelHttpsPort: parseInt(String(config.PANEL_HTTPS_PORT || '443'), 10),
+        panelDomain: String(config.PANEL_DOMAIN || '').trim(),
         amneziaDnsAvailable,
         amneziaDns: {
           phase: amneziaDnsStatus.phase,
@@ -856,6 +858,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
           flow: amneziaXrayStatus.flow,
           port: amneziaXrayStatus.port,
           publicPort: amneziaXrayStatus.publicPort,
+          security: amneziaXrayStatus.security,
+          certSource: amneziaXrayStatus.certSource,
+          certDomain: amneziaXrayStatus.certDomain,
+          allowInsecure: amneziaXrayStatus.allowInsecure,
           mode: amneziaXrayStatus.mode,
           demuxPeers: amneziaXrayStatus.demuxPeers,
           healthy: amneziaXrayStatus.healthy === true,
@@ -890,6 +896,10 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
           sniStored: amneziaHysteriaStatus.sniStored,
           publicPort: amneziaHysteriaStatus.publicPort,
           masqueradeUrl: amneziaHysteriaStatus.masqueradeUrl,
+          masqueradeUrlStored: amneziaHysteriaStatus.masqueradeUrlStored,
+          certSource: amneziaHysteriaStatus.certSource,
+          certDomain: amneziaHysteriaStatus.certDomain,
+          tlsInsecureClient: amneziaHysteriaStatus.tlsInsecureClient,
           healthy: amneziaHysteriaStatus.healthy === true,
           smoke: amneziaHysteriaStatus.smoke || null,
         },

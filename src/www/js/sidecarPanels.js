@@ -76,8 +76,18 @@ window.SidecarPanels = {
       amneziaHysteriaBandwidthDown: '',
       amneziaHysteriaCertSource: 'self_signed',
       amneziaHysteriaCertSources: ['self_signed', 'issue_le', 'panel', 'manual_pem', 'manual_path'],
+      amneziaHysteriaCertPem: '',
+      amneziaHysteriaKeyPem: '',
+      amneziaHysteriaCertPath: '',
+      amneziaHysteriaKeyPath: '',
       amneziaHysteriaAdvancedOpen: false,
       amneziaHysteriaFieldErrors: {},
+      masqueradeBankOpen: false,
+      masqueradeBankEntries: [],
+      masqueradeBankBusy: false,
+
+      panelHttpsPort: 443,
+      panelDomain: '',
 
       amneziaNaiveAvailable: false,
       amneziaNaiveHealthy: false,
@@ -127,6 +137,29 @@ window.SidecarPanels = {
     isValidAmneziaNaivePublicPort() {
       return sidecarValidPort(this.amneziaNaivePublicPort);
     },
+    canConfirmAmneziaHysteriaInstall() {
+      if (!String(this.amneziaHysteriaAddress || '').trim()) return false;
+      if (!this.isValidAmneziaHysteriaPublicPort) return false;
+      if (this.panelCertConflict('hysteria', this.amneziaHysteriaCertSource, this.amneziaHysteriaPublicPort)) {
+        return false;
+      }
+      if (!this.certManualFieldsOk(this.amneziaHysteriaCertSource, {
+        certPem: this.amneziaHysteriaCertPem,
+        keyPem: this.amneziaHysteriaKeyPem,
+        certPath: this.amneziaHysteriaCertPath,
+        keyPath: this.amneziaHysteriaKeyPath,
+      })) return false;
+      const src = this.amneziaHysteriaCertSource;
+      if (src === 'panel') return true;
+      return !!String(this.amneziaHysteriaSni || '').trim();
+    },
+    hysteriaSniReadonly() {
+      return this.amneziaHysteriaModalMode === 'manage' || this.amneziaHysteriaCertSource === 'panel';
+    },
+    showHysteriaSniFinder() {
+      return this.amneziaHysteriaModalMode !== 'manage'
+        && this.amneziaHysteriaCertSource === 'issue_le';
+    },
   },
 
   methods: {
@@ -141,6 +174,82 @@ window.SidecarPanels = {
       const key = `certSource_${src}`;
       const t = this.$t(key);
       return (t && t !== key) ? t : src;
+    },
+    securityLabel(sec) {
+      const key = `security_${sec}`;
+      const t = this.$t(key);
+      return (t && t !== key) ? t : sec;
+    },
+    certSourceHint(src) {
+      const key = `certHint_${src}`;
+      const t = this.$t(key);
+      return (t && t !== key) ? t : '';
+    },
+    panelCertConflict(service, certSource, publicPort) {
+      if (certSource !== 'panel') return false;
+      const panelPort = Number(this.panelHttpsPort) || 443;
+      return Number(publicPort) === panelPort;
+    },
+    certManualFieldsOk(certSource, fields) {
+      if (certSource === 'manual_pem') {
+        return !!(String(fields.certPem || '').trim() && String(fields.keyPem || '').trim());
+      }
+      if (certSource === 'manual_path') {
+        return !!(String(fields.certPath || '').trim() && String(fields.keyPath || '').trim());
+      }
+      return true;
+    },
+    appendCertFieldsToBody(body, certSource, fields) {
+      if (certSource === 'manual_pem') {
+        body.certPem = String(fields.certPem || '').trim();
+        body.keyPem = String(fields.keyPem || '').trim();
+      } else if (certSource === 'manual_path') {
+        body.certPath = String(fields.certPath || '').trim();
+        body.keyPath = String(fields.keyPath || '').trim();
+      }
+      return body;
+    },
+    sniPreflightRequiredForHysteria() {
+      const src = this.amneziaHysteriaCertSource;
+      return src === 'issue_le' || src === 'panel';
+    },
+    async setMasqueradeFromSni() {
+      const sni = String(this.amneziaHysteriaSni || '').trim();
+      if (!sni) return;
+      this.amneziaHysteriaMasqueradeUrl = `https://${sni.replace(/^https?:\/\//i, '').split('/')[0]}/`;
+    },
+    async openMasqueradeBank() {
+      this.masqueradeBankOpen = true;
+      this.masqueradeBankBusy = true;
+      try {
+        const res = await this.api.getMasqueradeBank();
+        this.masqueradeBankEntries = (res && res.entries) || [];
+      } catch {
+        this.masqueradeBankEntries = [];
+      } finally {
+        this.masqueradeBankBusy = false;
+      }
+    },
+    closeMasqueradeBank() {
+      this.masqueradeBankOpen = false;
+    },
+    pickMasqueradeUrl(entry) {
+      const url = entry && (entry.url || (entry.domain ? `https://${entry.domain}/` : ''));
+      if (!url) return;
+      this.amneziaHysteriaMasqueradeUrl = url;
+      this.closeMasqueradeBank();
+    },
+    onHysteriaCertSourceChange() {
+      if (this.amneziaHysteriaCertSource === 'panel' && this.panelDomain) {
+        this.amneziaHysteriaSni = this.panelDomain;
+      } else if (this.amneziaHysteriaCertSource === 'self_signed' && !String(this.amneziaHysteriaSni || '').trim()) {
+        const addr = String(this.amneziaHysteriaAddress || '').trim();
+        if (addr && !/^\d+\.\d+\.\d+\.\d+$/.test(addr) && addr.includes('.')) {
+          this.amneziaHysteriaSni = addr.toLowerCase();
+        } else {
+          this.amneziaHysteriaSni = 'hysteria.local';
+        }
+      }
     },
     clearSidecarFieldErrors(service) {
       if (service === 'mieru') this.amneziaMieruFieldErrors = {};
@@ -197,6 +306,12 @@ window.SidecarPanels = {
         publicPort: Number(this.amneziaHysteriaPublicPort) || 443,
         certSource: this.amneziaHysteriaCertSource,
       };
+      this.appendCertFieldsToBody(body, this.amneziaHysteriaCertSource, {
+        certPem: this.amneziaHysteriaCertPem,
+        keyPem: this.amneziaHysteriaKeyPem,
+        certPath: this.amneziaHysteriaCertPath,
+        keyPath: this.amneziaHysteriaKeyPath,
+      });
       const masq = String(this.amneziaHysteriaMasqueradeUrl || '').trim();
       if (masq) body.masqueradeUrl = masq;
       const obfsType = String(this.amneziaHysteriaObfsType || '').trim();
@@ -222,6 +337,8 @@ window.SidecarPanels = {
     },
     applySidecarCapabilities(caps) {
       const c = caps || {};
+      if (c.panelHttpsPort != null) this.panelHttpsPort = Number(c.panelHttpsPort) || 443;
+      if (c.panelDomain != null) this.panelDomain = String(c.panelDomain || '');
       this.applyAmneziaMieruCapability(c);
       this.applyAmneziaHysteriaCapability(c);
       this.applyAmneziaNaiveCapability(c);
@@ -401,6 +518,9 @@ window.SidecarPanels = {
         if (st.bandwidthUp) this.amneziaHysteriaBandwidthUp = st.bandwidthUp;
         if (st.bandwidthDown) this.amneziaHysteriaBandwidthDown = st.bandwidthDown;
         if (st.certSource) this.amneziaHysteriaCertSource = st.certSource;
+        if (st.certDomain && this.amneziaHysteriaCertSource === 'panel') {
+          this.amneziaHysteriaSni = st.certDomain;
+        }
       }
       if (this.amneziaHysteriaBusy) this.ensureAmneziaHysteriaPoll();
       else this.stopAmneziaHysteriaPoll();
@@ -458,19 +578,30 @@ window.SidecarPanels = {
         if (!String(this.amneziaHysteriaAddress || '').trim()) {
           this.amneziaHysteriaAddress = sidecarDefaultAddress();
         }
-        if (!String(this.amneziaHysteriaSni || '').trim() && this.sniFinderDefaultSni) {
-          this.amneziaHysteriaSni = this.sniFinderDefaultSni;
+        if (!String(this.amneziaHysteriaSni || '').trim()) {
+          if (this.amneziaHysteriaCertSource === 'self_signed') {
+            const addr = sidecarDefaultAddress();
+            if (addr && !/^\d+\.\d+\.\d+\.\d+$/.test(addr) && addr.includes('.')) {
+              this.amneziaHysteriaSni = addr.toLowerCase();
+            } else {
+              this.amneziaHysteriaSni = 'hysteria.local';
+            }
+          } else if (this.sniFinderDefaultSni) {
+            this.amneziaHysteriaSni = this.sniFinderDefaultSni;
+          }
         }
+        if (!String(this.amneziaHysteriaMasqueradeUrl || '').trim()) {
+          const sni = String(this.amneziaHysteriaSni || '').trim();
+          if (sni && sni !== 'hysteria.local') {
+            this.amneziaHysteriaMasqueradeUrl = `https://${sni.replace(/^https?:\/\//i, '').split('/')[0]}/`;
+          }
+        }
+        this.onHysteriaCertSourceChange();
         this.amneziaHysteriaInstallOpen = true;
       });
     },
     async confirmAmneziaHysteriaInstall() {
-      if (
-        this.amneziaHysteriaBusy
-        || !String(this.amneziaHysteriaSni || '').trim()
-        || !String(this.amneziaHysteriaAddress || '').trim()
-        || !this.isValidAmneziaHysteriaPublicPort
-      ) return;
+      if (this.amneziaHysteriaBusy || !this.canConfirmAmneziaHysteriaInstall) return;
       const body = this.buildHysteriaInstallBody();
       const valid = await this.runPortPlanValidate('hysteria', body);
       if (!valid) return;
@@ -478,7 +609,19 @@ window.SidecarPanels = {
       this.amneziaHysteriaBusy = true;
       this.ensureAmneziaHysteriaPoll();
       try {
-        await this.preflightSniForInstall(this.amneziaHysteriaSni);
+        if (this.sniPreflightRequiredForHysteria() && body.sni) {
+          await this.preflightSniForInstall(body.sni);
+        }
+        const masq = String(body.masqueradeUrl || '').trim();
+        if (masq) {
+          const mp = await this.api.preflightMasqueradeUrl({ url: masq });
+          if (!mp || mp.ok === false) {
+            throw new Error(
+              this.$t('hysteriaMasqueradePreflightFailed', { url: masq })
+              || `Masquerade URL failed check: ${masq}`,
+            );
+          }
+        }
         await this.withAmneziaDnsTimeout(this.api.enableAmneziaHysteria(body), 180000);
         await this.refreshAmneziaHysteriaStatus();
         await this.refresh();

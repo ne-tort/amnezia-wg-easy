@@ -1239,6 +1239,24 @@ module.exports = class Server {
           throw httpError(500, err.message || 'Amnezia Mieru cleanup failed');
         }
       }))
+      .post('/api/tls/preflight-masquerade-url', defineEventHandler(async (event) => {
+        acl.requireAnyCapability(event, [
+          acl.CAP.SYSTEM_HYSTERIA,
+          acl.CAP.SYSTEM_SETTINGS,
+        ]);
+        const body = await readBody(event).catch(() => ({}));
+        const url = body && (body.url != null ? body.url : body.masqueradeUrl);
+        if (!url || !String(url).trim()) {
+          throw httpError(400, 'url is required');
+        }
+        const masqueradeBank = require('./masqueradeBank');
+        return masqueradeBank.preflightMasqueradeUrl(String(url).trim());
+      }))
+      .get('/api/amnezia-hysteria/masquerade-bank', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_HYSTERIA);
+        const masqueradeBank = require('./masqueradeBank');
+        return { entries: masqueradeBank.listMasqueradeBank() };
+      }))
       .get('/api/amnezia-hysteria', defineEventHandler((event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_HYSTERIA);
         return amneziaHysteria.getStatus();

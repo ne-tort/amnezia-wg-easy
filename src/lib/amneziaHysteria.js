@@ -119,27 +119,12 @@ function getSniStored() {
 }
 
 function loadMirrorBankDomains() {
-  const volPath = path.join(config.WG_PATH, HYSTERIA_REL, 'mirror-bank.json');
-  const candidates = [volPath, MIRROR_BANK_SEED, MIRROR_BANK_SEED_IN_IMAGE];
-  for (const p of candidates) {
-    if (!fs.existsSync(p)) continue;
-    try {
-      const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
-      const list = Array.isArray(raw) ? raw : (raw.domains || []);
-      return list.map((d) => String(d).trim()).filter(Boolean);
-    } catch {
-      /* try next */
-    }
-  }
-  return [];
+  return require('./masqueradeBank').loadMirrorBankDomains();
 }
 
 function pickDefaultMasqueradeUrl() {
-  const domains = loadMirrorBankDomains();
-  if (domains.length) {
-    const d = domains[Math.floor(Math.random() * domains.length)];
-    return `https://${d}/`;
-  }
+  const picked = require('./masqueradeBank').pickRandomMasqueradeUrl();
+  if (picked) return picked;
   try {
     const sni = require('./sniFinder').pickDefaultSni();
     if (sni) return `https://${sni}/`;
@@ -824,7 +809,17 @@ async function enableInternal(opts = {}) {
   setDesired(true);
   const deadline = Date.now() + ENABLE_TIMEOUT_MS;
   try {
-    const sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni() || DEFAULT_SNI;
+    const sidecarValidate = require('./sidecarValidate');
+    const validation = sidecarValidate.validateHysteria(opts);
+    if (!validation.ok) {
+      const msg = Object.values(validation.fieldErrors || {}).join('; ') || 'Invalid Hysteria settings';
+      throw Object.assign(new Error(msg), {
+        status: 400,
+        code: validation.code || 'HYSTERIA_VALIDATION',
+        fieldErrors: validation.fieldErrors,
+      });
+    }
+
     const publicPort = opts.publicPort != null
       ? parseInt(String(opts.publicPort).trim(), 10)
       : getPublicPort();
@@ -836,12 +831,33 @@ async function enableInternal(opts = {}) {
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
 
-    {
+    const certSource = opts.certSource != null
+      ? String(opts.certSource).trim().toLowerCase()
+      : getCertSource();
+    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
+
+    let sni = (opts.sni != null ? String(opts.sni).trim() : '') || getSni() || DEFAULT_SNI;
+    if (certSource === 'panel') {
+      const panelDomain = require('./tlsMaterial').panelCertDomain();
+      if (panelDomain) sni = panelDomain;
+    } else if (certSource === 'self_signed' && !(opts.sni != null && String(opts.sni).trim())) {
+      const addr = (opts.address != null ? String(opts.address).trim() : '') || getAddress() || getPublicHost();
+      if (addr && !require('./portPlan').isIpLiteral(addr) && addr.includes('.')) {
+        sni = addr.toLowerCase();
+      } else {
+        sni = 'hysteria.local';
+      }
+    }
+
+    if (certSource === 'issue_le' || certSource === 'panel') {
       const { domainHasPublicDns } = require('./sniFinder');
-      if (!(await domainHasPublicDns(sni))) {
+      const dnsTarget = certSource === 'panel'
+        ? (require('./tlsMaterial').panelCertDomain() || sni)
+        : sni;
+      if (dnsTarget && !(await domainHasPublicDns(dnsTarget))) {
         throw Object.assign(
           new Error(
-            `SNI «${sni}» не резолвится в публичном DNS (нужен реальный hostname)`,
+            `SNI «${dnsTarget}» не резолвится в публичном DNS (нужен реальный hostname)`,
           ),
           { status: 400, code: 'HYSTERIA_SNI_NO_DNS' },
         );
@@ -867,10 +883,6 @@ async function enableInternal(opts = {}) {
       ? (opts.ignoreClientBandwidth === true || opts.ignoreClientBandwidth === '1'
         || opts.ignoreClientBandwidth === 'true')
       : getIgnoreClientBandwidth();
-    const certSource = opts.certSource != null
-      ? String(opts.certSource).trim().toLowerCase()
-      : getCertSource();
-    const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
     let tlsInsecure = opts.tlsInsecureClient != null
       ? (opts.tlsInsecureClient === true || opts.tlsInsecureClient === '1'
         || opts.tlsInsecureClient === 'true')
@@ -896,7 +908,19 @@ async function enableInternal(opts = {}) {
     if (certSource === 'panel') {
       tlsMaterial.assertPanelCertReuseAllowed('hysteria', publicPort);
     }
-    const certDomainForIssue = certDomainOverride || sni || 'hysteria.local';
+    let certDomainForIssue = certDomainOverride;
+    if (!certDomainForIssue) {
+      if (certSource === 'panel') {
+        certDomainForIssue = tlsMaterial.panelCertDomain() || sni;
+      } else if (certSource === 'issue_le' || certSource === 'self_signed') {
+        certDomainForIssue = sni || 'hysteria.local';
+      } else {
+        certDomainForIssue = sni || 'hysteria.local';
+      }
+    }
+    if (certSource === 'panel' && certDomainForIssue) {
+      sni = certDomainForIssue;
+    }
     await tlsMaterial.resolveCertMaterial({
       certSource,
       domain: certDomainForIssue,
@@ -904,7 +928,7 @@ async function enableInternal(opts = {}) {
       keyPem: opts.keyPem,
       certPath: opts.certPath,
       keyPath: opts.keyPath,
-      issueIfMissing: false,
+      issueIfMissing: certSource === 'issue_le',
     });
     if (!(await tlsMaterial.certExistsInVolume(resolveCertDomain()))) {
       throw Object.assign(

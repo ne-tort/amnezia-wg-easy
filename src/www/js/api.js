@@ -537,6 +537,18 @@ class API {
     });
   }
 
+  async preflightMasqueradeUrl({ url } = {}) {
+    return this.call({
+      method: 'post',
+      path: '/tls/preflight-masquerade-url',
+      body: { url },
+    });
+  }
+
+  async getMasqueradeBank() {
+    return this.call({ method: 'get', path: '/amnezia-hysteria/masquerade-bank' });
+  }
+
   async validatePortPlan({ service, ...fields } = {}) {
     return this.call({
       method: 'post',

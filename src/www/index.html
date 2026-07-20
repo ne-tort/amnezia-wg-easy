@@ -1670,31 +1670,47 @@
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
                   :placeholder="$t('xrayAddressPlaceholder')" />
               </div>
-              <div>
+              <div v-if="showXraySniField">
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('xraySni') }}</label>
-                  <button v-if="amneziaXrayModalMode !== 'manage'" type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
-                    @click="openSniFinder()" :disabled="amneziaXrayBusy">
+                  <button v-if="showXraySniFinder" type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
+                    @click="openSniFinder('xray')" :disabled="amneziaXrayBusy">
                     <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                     </svg>
                     <span v-if="sniFinderAliveCount > 0" class="icon-btn-badge-count">{{ sniFinderAliveCount }}</span>
                   </button>
                 </div>
-                <input v-model.trim="amneziaXraySni" type="text" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <input v-model.trim="amneziaXraySni" type="text" :readonly="xraySniReadonly" :disabled="xraySniReadonly" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p v-if="xraySniHintKey" class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t(xraySniHintKey) }}</p>
                 <p v-if="amneziaXrayFieldErrors.sni" class="field-error">{{ sidecarFieldError(amneziaXrayFieldErrors, 'sni') }}</p>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xraySecurity') }}</label>
-                <select v-model="amneziaXraySecurity" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
-                  <option v-for="sec in amneziaXraySecurities" :key="sec" :value="sec">{{ sec }}</option>
+                <select v-model="amneziaXraySecurity" @change="onXraySecurityChange" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="sec in amneziaXraySecurities" :key="sec" :value="sec">{{ securityLabel(sec) }}</option>
                 </select>
               </div>
               <div v-if="amneziaXraySecurity === 'tls'">
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayCertSource') }}</label>
-                <select v-model="amneziaXrayCertSource" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
-                  <option v-for="src in amneziaXrayCertSources" :key="src" :value="src">{{ src }}</option>
+                <select v-model="amneziaXrayCertSource" @change="onXrayCertSourceChange" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="src in amneziaXrayCertSources" :key="src" :value="src">{{ certSourceLabel(src) }}</option>
                 </select>
+                <p v-if="certSourceHint(amneziaXrayCertSource)" class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ certSourceHint(amneziaXrayCertSource) }}</p>
+                <p v-if="panelCertConflict('xray', amneziaXrayCertSource, amneziaXrayPublicPort)" class="field-error">{{ $t('certWarn_panelSamePort') }}</p>
+                <p v-if="amneziaXrayFieldErrors.certSource" class="field-error">{{ sidecarFieldError(amneziaXrayFieldErrors, 'certSource') }}</p>
+                <div v-if="amneziaXrayCertSource === 'manual_pem'" class="mt-2 flex flex-col gap-2">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('certPemLabel') }}</label>
+                  <textarea v-model="amneziaXrayCertPem" rows="4" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono text-xs"></textarea>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('keyPemLabel') }}</label>
+                  <textarea v-model="amneziaXrayKeyPem" rows="4" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono text-xs"></textarea>
+                </div>
+                <div v-if="amneziaXrayCertSource === 'manual_path'" class="mt-2 flex flex-col gap-2">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('certPathLabel') }}</label>
+                  <input v-model.trim="amneziaXrayCertPath" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('keyPathLabel') }}</label>
+                  <input v-model.trim="amneziaXrayKeyPath" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                </div>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayFingerprint') }}</label>
@@ -1729,7 +1745,7 @@
                 {{ $t('xrayUninstall') }}
               </button>
               <button v-else type="button" @click="confirmAmneziaXrayInstall"
-                :disabled="!amneziaXrayAddress || amneziaXrayBusy || !isValidAmneziaXrayPort || !isValidAmneziaXrayPublicPort || (amneziaXraySecurity !== 'none' && !amneziaXraySni)"
+                :disabled="amneziaXrayBusy || !canConfirmAmneziaXrayInstall"
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
                 {{ $t('xrayInstallConfirm') }}
               </button>
@@ -1828,28 +1844,61 @@
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
               </div>
               <div>
-                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaSni') }}</label>
-                <input v-model.trim="amneziaHysteriaSni" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
-                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
-                <p v-if="amneziaHysteriaFieldErrors.sni" class="field-error">{{ sidecarFieldError(amneziaHysteriaFieldErrors, 'sni') }}</p>
-              </div>
-              <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaPublicPort') }}</label>
                 <input v-model="amneziaHysteriaPublicPort" type="number" min="1" max="65535" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
                 <p v-if="amneziaHysteriaFieldErrors.publicPort" class="field-error">{{ sidecarFieldError(amneziaHysteriaFieldErrors, 'publicPort') }}</p>
               </div>
               <div>
-                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaMasqueradeUrl') }}</label>
-                <input v-model.trim="amneziaHysteriaMasqueradeUrl" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
-                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="https://..." />
-              </div>
-              <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaCertSource') }}</label>
-                <select v-model="amneziaHysteriaCertSource" :disabled="amneziaHysteriaModalMode === 'manage'"
+                <select v-model="amneziaHysteriaCertSource" @change="onHysteriaCertSourceChange" :disabled="amneziaHysteriaModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
                   <option v-for="src in amneziaHysteriaCertSources" :key="src" :value="src">{{ certSourceLabel(src) }}</option>
                 </select>
+                <p v-if="certSourceHint(amneziaHysteriaCertSource)" class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ certSourceHint(amneziaHysteriaCertSource) }}</p>
+                <p v-if="panelCertConflict('hysteria', amneziaHysteriaCertSource, amneziaHysteriaPublicPort)" class="field-error">{{ $t('certWarn_panelSamePort') }}</p>
+                <p v-if="amneziaHysteriaFieldErrors.certSource" class="field-error">{{ sidecarFieldError(amneziaHysteriaFieldErrors, 'certSource') }}</p>
+                <div v-if="amneziaHysteriaCertSource === 'manual_pem'" class="mt-2 flex flex-col gap-2">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('certPemLabel') }}</label>
+                  <textarea v-model="amneziaHysteriaCertPem" rows="4" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono text-xs"></textarea>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('keyPemLabel') }}</label>
+                  <textarea v-model="amneziaHysteriaKeyPem" rows="4" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono text-xs"></textarea>
+                </div>
+                <div v-if="amneziaHysteriaCertSource === 'manual_path'" class="mt-2 flex flex-col gap-2">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('certPathLabel') }}</label>
+                  <input v-model.trim="amneziaHysteriaCertPath" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('keyPathLabel') }}</label>
+                  <input v-model.trim="amneziaHysteriaKeyPath" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                </div>
+              </div>
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-1">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('hysteriaSni') }}</label>
+                  <button v-if="showHysteriaSniFinder" type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
+                    @click="openSniFinder('hysteria')" :disabled="amneziaHysteriaBusy">
+                    <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                    <span v-if="sniFinderAliveCount > 0" class="icon-btn-badge-count">{{ sniFinderAliveCount }}</span>
+                  </button>
+                </div>
+                <input v-model.trim="amneziaHysteriaSni" type="text" :readonly="hysteriaSniReadonly" :disabled="hysteriaSniReadonly"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('hysteriaSniHint') }}</p>
+                <p v-if="amneziaHysteriaFieldErrors.sni" class="field-error">{{ sidecarFieldError(amneziaHysteriaFieldErrors, 'sni') }}</p>
+              </div>
+              <div>
+                <div class="flex items-center justify-between gap-2 mb-1">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('hysteriaMasqueradeUrl') }}</label>
+                  <div class="flex gap-1">
+                    <button v-if="amneziaHysteriaModalMode !== 'manage'" type="button" class="text-xs text-red-800 dark:text-red-400 hover:underline" @click="setMasqueradeFromSni">{{ $t('hysteriaMasqueradeFromSni') }}</button>
+                    <button v-if="amneziaHysteriaModalMode !== 'manage'" type="button" class="text-xs text-red-800 dark:text-red-400 hover:underline" @click="openMasqueradeBank">{{ $t('hysteriaMasqueradePick') }}</button>
+                  </div>
+                </div>
+                <input v-model.trim="amneziaHysteriaMasqueradeUrl" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="https://example.com/" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('hysteriaMasqueradeHint') }}</p>
+                <p v-if="amneziaHysteriaFieldErrors.masqueradeUrl" class="field-error">{{ sidecarFieldError(amneziaHysteriaFieldErrors, 'masqueradeUrl') }}</p>
               </div>
               <div>
                 <button type="button" class="text-sm text-red-800 dark:text-red-400 hover:underline" @click="amneziaHysteriaAdvancedOpen = !amneziaHysteriaAdvancedOpen">
@@ -1887,7 +1936,7 @@
               <button v-if="amneziaHysteriaModalMode === 'manage'" type="button" @click="confirmAmneziaHysteriaDisable" :disabled="amneziaHysteriaBusy"
                 class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('hysteriaUninstall') }}</button>
               <button v-else type="button" @click="confirmAmneziaHysteriaInstall"
-                :disabled="!amneziaHysteriaSni || !amneziaHysteriaAddress || amneziaHysteriaBusy || !isValidAmneziaHysteriaPublicPort"
+                :disabled="amneziaHysteriaBusy || !canConfirmAmneziaHysteriaInstall"
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white py-2 px-4 rounded transition">{{ $t('hysteriaInstallConfirm') }}</button>
               <button type="button" @click="closeAmneziaHysteriaInstall"
                 class="bg-gray-200 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('dnsInstallCancel') }}</button>
@@ -1934,6 +1983,32 @@
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white py-2 px-4 rounded transition">{{ $t('naiveInstallConfirm') }}</button>
               <button type="button" @click="closeAmneziaNaiveInstall"
                 class="bg-gray-200 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('dnsInstallCancel') }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Masquerade bank picker (Hysteria) -->
+        <div v-if="masqueradeBankOpen" class="modal-root modal-root-over">
+          <div class="modal-backdrop" @click="closeMasqueradeBank"></div>
+          <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-title-row">
+              <h3 class="modal-title modal-title-inline">{{ $t('hysteriaMasqueradePickTitle') }}</h3>
+              <button type="button" class="icon-btn-sm" @click="closeMasqueradeBank">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <p v-if="masqueradeBankBusy" class="text-sm text-gray-500 dark:text-neutral-400">{{ $t('hysteriaMasqueradeLoading') }}</p>
+              <div v-else-if="masqueradeBankEntries && masqueradeBankEntries.length" class="sni-finder-list thin-scroll">
+                <button type="button" v-for="entry in masqueradeBankEntries" :key="entry.domain"
+                  class="sni-finder-row" @click="pickMasqueradeUrl(entry)">
+                  <span class="sni-finder-domain">{{ entry.domain }}</span>
+                  <span class="sni-finder-meta text-xs text-gray-500">{{ entry.url }}</span>
+                </button>
+              </div>
+              <p v-else class="text-sm text-gray-500 dark:text-neutral-400">{{ $t('hysteriaMasqueradeBankEmpty') }}</p>
             </div>
           </div>
         </div>
@@ -2706,10 +2781,10 @@
   <script src="./js/vendor/vue-apexcharts.min.js"></script>
   <script src="./js/vendor/sha256.min.js"></script>
   <script src="./js/vendor/timeago.full.min.js"></script>
-  <script src="./js/api.js?v=10"></script>
-  <script src="./js/i18n.js?v=10"></script>
-  <script src="./js/sidecarPanels.js?v=3"></script>
-  <script src="./js/app.js?v=11"></script>
+  <script src="./js/api.js?v=11"></script>
+  <script src="./js/i18n.js?v=11"></script>
+  <script src="./js/sidecarPanels.js?v=4"></script>
+  <script src="./js/app.js?v=12"></script>
 </body>
 
 </html>
