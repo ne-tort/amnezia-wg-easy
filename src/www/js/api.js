@@ -460,8 +460,12 @@ class API {
     return this.call({ method: 'post', path: '/ssl/certs/import-path', body });
   }
 
-  async renewSslCert(id) {
-    return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/renew` });
+  async renewSslCert(id, body = { force: true }) {
+    return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/renew`, body });
+  }
+
+  async assignSslPanel(id) {
+    return this.call({ method: 'post', path: `/ssl/certs/${encodeURIComponent(id)}/assign-panel` });
   }
 
   async deleteSslCert(id) {

@@ -16,6 +16,7 @@ const SslManagerPanel = {
       sslManagerError: null,
       sslCerts: [],
       sslCertbotEmail: '',
+      sslPanelDomain: '',
       sslSelectedId: null,
       sslDetail: null,
       sslForm: {
@@ -25,6 +26,7 @@ const SslManagerPanel = {
         sni: '',
         dest: '',
         days: '825',
+        leTarget: 'domain', // domain | ip
         certPem: '',
         keyPem: '',
         certPath: '',
@@ -42,9 +44,18 @@ const SslManagerPanel = {
 
   methods: {
     sslTypeLabel(type) {
+      if (type === 'panel') return this.$t('sslType_self_signed');
       const key = `sslType_${type}`;
       const t = this.$t(key);
       return (t && t !== key) ? t : type;
+    },
+    sslIsPanel(cert) {
+      return !!(cert && (cert.isPanel || cert.managed));
+    },
+    sslCanAssignPanel(cert) {
+      if (!cert || this.sslIsPanel(cert)) return false;
+      if (cert.type === 'reality') return false;
+      return true;
     },
     sslFormatExpiry(notAfter) {
       if (!notAfter) return '—';
@@ -64,6 +75,7 @@ const SslManagerPanel = {
         sni: '',
         dest: '',
         days: '825',
+        leTarget: 'domain',
         certPem: '',
         keyPem: '',
         certPath: '',
@@ -99,6 +111,7 @@ const SslManagerPanel = {
           this.sslCertbotEmail = res.certbotEmail;
           if (!String(this.certbotEmail || '').trim()) this.certbotEmail = res.certbotEmail;
         }
+        if (res && res.panelDomain != null) this.sslPanelDomain = res.panelDomain;
       } catch (err) {
         this.sslManagerError = (err && err.message) || this.$t('sslLoadFailed');
         this.sslCerts = [];
@@ -160,6 +173,7 @@ const SslManagerPanel = {
           case 'lets_encrypt':
             res = await this.api.createSslLetsEncrypt({
               domain: f.domain,
+              ip: f.leTarget === 'ip' ? f.domain : undefined,
               email: f.email,
               label: f.label || undefined,
             });
@@ -207,7 +221,23 @@ const SslManagerPanel = {
       this.sslManagerBusy = true;
       this.sslManagerError = null;
       try {
-        const res = await this.api.renewSslCert(c.id);
+        const res = await this.api.renewSslCert(c.id, { force: true });
+        this.sslDetail = (res && res.cert) || this.sslDetail;
+        await this.refreshSslCerts();
+      } catch (err) {
+        this.sslManagerError = (err && err.message) || this.$t('sslActionFailed');
+      } finally {
+        this.sslManagerBusy = false;
+      }
+    },
+    async assignSslPanelSelected() {
+      const c = this.sslDetail || this.sslSelectedCert;
+      if (!c || !this.sslCanAssignPanel(c) || this.sslManagerBusy) return;
+      if (!window.confirm(this.$t('sslAssignPanelConfirm'))) return;
+      this.sslManagerBusy = true;
+      this.sslManagerError = null;
+      try {
+        const res = await this.api.assignSslPanel(c.id);
         this.sslDetail = (res && res.cert) || this.sslDetail;
         await this.refreshSslCerts();
       } catch (err) {
@@ -218,7 +248,7 @@ const SslManagerPanel = {
     },
     async deleteSslSelected() {
       const c = this.sslDetail || this.sslSelectedCert;
-      if (!c || c.managed || this.sslManagerBusy) return;
+      if (!c || this.sslIsPanel(c) || this.sslManagerBusy) return;
       if (!window.confirm(this.$t('sslDeleteConfirm'))) return;
       this.sslManagerBusy = true;
       this.sslManagerError = null;

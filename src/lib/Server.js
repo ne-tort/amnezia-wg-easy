@@ -1067,10 +1067,23 @@ module.exports = class Server {
         const sslManager = require('./sslManager');
         try {
           const id = getRouterParam(event, 'id');
-          return { success: true, cert: await sslManager.renew(id) };
+          const body = await readBody(event).catch(() => ({}));
+          const force = body && body.force === false ? false : true;
+          return { success: true, cert: await sslManager.renew(id, { force }) };
         } catch (err) {
           if (err && err.status) throw httpError(err.status, err.message);
           throw httpError(500, err.message || 'Renew failed');
+        }
+      }))
+      .post('/api/ssl/certs/:id/assign-panel', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const id = getRouterParam(event, 'id');
+          return { success: true, cert: await sslManager.assignPanel(id) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Assign panel cert failed');
         }
       }))
       .delete('/api/ssl/certs/:id', defineEventHandler(async (event) => {

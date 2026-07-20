@@ -1042,4 +1042,5 @@ module.exports = {
   isIpLiteral,
   panelCanJoinDemuxBySni,
   parsePort,
+  reloadNginx,
 };

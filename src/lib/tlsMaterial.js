@@ -5,6 +5,7 @@
  * Certs live in the nginx certbot volume at /etc/letsencrypt/live/{domain}/.
  */
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
@@ -39,10 +40,20 @@ function isFqdn(host) {
   return s.includes('.');
 }
 
+/** FQDN panel domain for sidecar `certSource: panel` (empty when panel is bare IP). */
 function panelCertDomain() {
   const d = (config.PANEL_DOMAIN || '').trim();
   if (d && d !== 'localhost' && isFqdn(d)) return d;
   return '';
+}
+
+/**
+ * Directory name under live/ used by nginx ssl_certificate (FQDN or IP from PANEL_DOMAIN).
+ */
+function panelLiveDomain() {
+  const d = String(config.PANEL_DOMAIN || '').trim().toLowerCase();
+  if (!d || d === 'localhost') return '';
+  return d;
 }
 
 function certPathsForDomain(domain) {
@@ -53,6 +64,26 @@ function certPathsForDomain(domain) {
     key: `${base}/privkey.pem`,
     domain: d,
   };
+}
+
+/**
+ * Parse certificate PEM with Node crypto (no docker/openssl).
+ * @returns {{ notAfter: number|null, issuer: string, fingerprintSha256: string }}
+ */
+function parsePemMeta(certPem) {
+  const pem = String(certPem || '').trim();
+  if (!pem) return { notAfter: null, issuer: '', fingerprintSha256: '' };
+  try {
+    const x509 = new crypto.X509Certificate(pem);
+    const ms = Date.parse(x509.validTo);
+    return {
+      notAfter: Number.isFinite(ms) ? Math.floor(ms / 1000) : null,
+      issuer: String(x509.issuer || '').trim(),
+      fingerprintSha256: String(x509.fingerprint256 || '').replace(/:/g, '').toLowerCase(),
+    };
+  } catch {
+    return { notAfter: null, issuer: '', fingerprintSha256: '' };
+  }
 }
 
 async function resolveNginxVolume(destination, fallbackSuffix) {
@@ -83,8 +114,78 @@ async function certExistsInVolume(domain) {
     '-v', `${vol}:/etc/letsencrypt:ro`,
     'alpine:3.20',
     'sh', '-c', `test -f '${paths.cert}' && test -f '${paths.key}' && echo ok`,
-  ]);
+  ], { timeout: 20_000 });
   return r.ok && r.stdout.trim() === 'ok';
+}
+
+async function readPemFromVolume(domain) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!d) return null;
+  const vol = await resolveCertbotVolumeName();
+  const paths = certPathsForDomain(d);
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt:ro`,
+    'alpine:3.20',
+    'cat', paths.cert,
+  ], { timeout: 15_000 });
+  if (!r.ok || !String(r.stdout || '').includes('BEGIN CERTIFICATE')) return null;
+  return String(r.stdout);
+}
+
+async function copyLiveCert(fromDomain, toDomain) {
+  const from = String(fromDomain || '').trim().toLowerCase();
+  const to = String(toDomain || '').trim().toLowerCase();
+  if (!from || !to) {
+    const err = new Error('copyLiveCert requires from and to domains');
+    err.status = 400;
+    err.code = 'CERT_COPY_BAD_DOMAIN';
+    throw err;
+  }
+  if (from === to) return certPathsForDomain(to);
+  const vol = await resolveCertbotVolumeName();
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt`,
+    'alpine:3.20',
+    'sh', '-c', `
+      set -e
+      test -f '/etc/letsencrypt/live/${from}/fullchain.pem'
+      test -f '/etc/letsencrypt/live/${from}/privkey.pem'
+      mkdir -p '/etc/letsencrypt/live/${to}'
+      cp '/etc/letsencrypt/live/${from}/fullchain.pem' '/etc/letsencrypt/live/${to}/fullchain.pem'
+      cp '/etc/letsencrypt/live/${from}/privkey.pem' '/etc/letsencrypt/live/${to}/privkey.pem'
+      chmod 644 '/etc/letsencrypt/live/${to}/fullchain.pem'
+      chmod 600 '/etc/letsencrypt/live/${to}/privkey.pem'
+    `,
+  ], { timeout: 30_000 });
+  if (!r.ok) {
+    const err = new Error((r.stderr || 'copy cert failed').trim().slice(0, 300));
+    err.status = 400;
+    err.code = 'CERT_COPY_FAILED';
+    throw err;
+  }
+  return certPathsForDomain(to);
+}
+
+async function removeLiveCert(domain) {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!d) return false;
+  const panel = panelLiveDomain();
+  if (panel && d === panel) {
+    const err = new Error('Refusing to delete panel live certificate directory');
+    err.status = 400;
+    err.code = 'CERT_PANEL_LIVE';
+    throw err;
+  }
+  const vol = await resolveCertbotVolumeName();
+  const r = await runCmd('docker', [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt`,
+    'alpine:3.20',
+    'sh', '-c', `rm -rf '/etc/letsencrypt/live/${d}' '/etc/letsencrypt/archive/${d}' '/etc/letsencrypt/renewal/${d}.conf'`,
+  ], { timeout: 30_000 });
+  return r.ok;
 }
 
 /** Minimum remaining lifetime before we treat an existing cert as reusable. */
@@ -108,20 +209,11 @@ function parseOpensslEnddate(line) {
 async function certUsableInVolume(domain, { minRemainingMs = CERT_REUSE_MIN_REMAINING_MS } = {}) {
   const d = String(domain || '').trim().toLowerCase();
   if (!d) return false;
-  if (!(await certExistsInVolume(d))) return false;
-  const vol = await resolveCertbotVolumeName();
-  const paths = certPathsForDomain(d);
-  const r = await runCmd('docker', [
-    'run', '--rm',
-    '-v', `${vol}:/etc/letsencrypt:ro`,
-    'alpine:3.20',
-    'sh', '-c',
-    `apk add --no-cache openssl >/dev/null 2>&1; openssl x509 -in '${paths.cert}' -noout -enddate`,
-  ], { timeout: 60_000 });
-  if (!r.ok) return false;
-  const endMs = parseOpensslEnddate(r.stdout.trim().split('\n').pop());
-  if (endMs == null) return false;
-  return endMs > Date.now() + Math.max(0, Number(minRemainingMs) || 0);
+  const pem = await readPemFromVolume(d);
+  if (!pem) return false;
+  const meta = parsePemMeta(pem);
+  if (meta.notAfter == null) return false;
+  return meta.notAfter * 1000 > Date.now() + Math.max(0, Number(minRemainingMs) || 0);
 }
 
 const CERTBOT_EMAIL_KEY = 'certbot_email';
@@ -145,10 +237,31 @@ function setCertbotEmail(email) {
   } catch { /* ignore */ }
 }
 
+function certbotIssueError(detail, domain) {
+  let msg = String(detail || 'certbot failed').trim().replace(/\s+/g, ' ').slice(0, 400);
+  if (/405|Method Not Allowed/i.test(msg)) {
+    msg = `Let's Encrypt HTTP-01 got Method Not Allowed for ${domain}. `
+      + 'Ensure domain/IP points to this server, port 80 is open to nginx, '
+      + 'and /.well-known/acme-challenge/ is reachable over HTTP. '
+      + msg.slice(0, 220);
+  } else if (/404|NXDOMAIN|Timeout|Connection refused/i.test(msg)) {
+    msg = `Let's Encrypt could not validate ${domain} via HTTP-01 on port 80. `
+      + 'Check DNS/A-record → panel IP and that host port 80 publishes nginx. '
+      + msg.slice(0, 220);
+  }
+  const err = new Error(msg);
+  err.status = 400;
+  err.code = 'CERT_ISSUE_FAILED';
+  return err;
+}
+
 /**
- * Issue or renew LE cert for domain via certbot webroot (nginx must serve /.well-known).
+ * Issue or renew LE cert for FQDN via certbot webroot (nginx must serve /.well-known).
+ * @param {string} domain
+ * @param {string} email
+ * @param {{ force?: boolean }} [opts]
  */
-async function issueLetsEncrypt(domain, email) {
+async function issueLetsEncrypt(domain, email, opts = {}) {
   const d = String(domain || '').trim().toLowerCase();
   if (!isFqdn(d)) {
     const err = new Error(`Invalid certificate domain: ${d}`);
@@ -165,9 +278,10 @@ async function issueLetsEncrypt(domain, email) {
   }
   setCertbotEmail(em);
 
+  const force = opts.force === true;
   const vol = await resolveCertbotVolumeName();
   const wwwVol = await resolveCertbotWwwVolumeName();
-  const r = await runCmd('docker', [
+  const args = [
     'run', '--rm',
     '-v', `${vol}:/etc/letsencrypt`,
     '-v', `${wwwVol}:/var/www/certbot`,
@@ -177,28 +291,123 @@ async function issueLetsEncrypt(domain, email) {
     '--email', em,
     '--agree-tos',
     '--non-interactive',
-    '--keep-until-expiring',
-  ], { timeout: 300_000 });
+    force ? '--force-renewal' : '--keep-until-expiring',
+  ];
+  const r = await runCmd('docker', args, { timeout: 300_000 });
 
   if (!r.ok) {
-    let detail = (r.stderr || r.stdout || 'certbot failed').trim().replace(/\s+/g, ' ').slice(0, 400);
-    if (/405|Method Not Allowed/i.test(detail)) {
-      detail = `Let's Encrypt HTTP-01 got Method Not Allowed for ${d}. `
-        + 'Ensure domain A record points to this server, port 80 is open to nginx, '
-        + 'and /.well-known/acme-challenge/ is reachable over HTTP (not blocked by CDN). '
-        + detail.slice(0, 220);
-    } else if (/404|NXDOMAIN|Timeout|Connection refused/i.test(detail)) {
-      detail = `Let's Encrypt could not validate ${d} via HTTP-01 on port 80. `
-        + 'Check A-record → panel IP and that host port 80 publishes nginx. '
-        + detail.slice(0, 220);
-    }
-    const err = new Error(detail);
+    throw certbotIssueError(r.stderr || r.stdout, d);
+  }
+  if (!(await certExistsInVolume(d))) {
+    const err = new Error(`Certificate files missing after issue for ${d}`);
     err.status = 400;
     err.code = 'CERT_ISSUE_FAILED';
     throw err;
   }
+  return certPathsForDomain(d);
+}
+
+/**
+ * Issue LE shortlived cert for a public IP (HTTP-01 webroot), same idea as install.sh acme shortlived.
+ * @param {string} ip
+ * @param {string} email
+ * @param {{ force?: boolean }} [opts]
+ */
+async function issueLetsEncryptIp(ip, email, opts = {}) {
+  const portPlan = require('./portPlan');
+  const d = String(ip || '').trim().toLowerCase();
+  if (!portPlan.isIpLiteral(d)) {
+    const err = new Error(`Invalid certificate IP: ${d}`);
+    err.status = 400;
+    err.code = 'CERT_BAD_DOMAIN';
+    throw err;
+  }
+  const em = String(email || getCertbotEmail() || '').trim();
+  if (!em || !em.includes('@')) {
+    const err = new Error('Email is required for Let\'s Encrypt');
+    err.status = 400;
+    err.code = 'CERT_NO_EMAIL';
+    throw err;
+  }
+  setCertbotEmail(em);
+
+  const force = opts.force === true;
+  const vol = await resolveCertbotVolumeName();
+  const wwwVol = await resolveCertbotWwwVolumeName();
+
+  // Prefer certbot shortlived + webroot (nginx already serves ACME on :80).
+  const certbotArgs = [
+    'run', '--rm',
+    '-v', `${vol}:/etc/letsencrypt`,
+    '-v', `${wwwVol}:/var/www/certbot`,
+    'certbot/certbot',
+    'certonly', '--webroot', '-w', '/var/www/certbot',
+    '-d', d,
+    '--email', em,
+    '--agree-tos',
+    '--non-interactive',
+    '--certificate-profile', 'shortlived',
+    force ? '--force-renewal' : '--keep-until-expiring',
+  ];
+  let r = await runCmd('docker', certbotArgs, { timeout: 300_000 });
+
+  if (!r.ok) {
+    // Fallback: acme.sh webroot shortlived (install.sh uses standalone; panel keeps nginx up).
+    r = await runCmd('docker', [
+      'run', '--rm',
+      '-v', `${vol}:/acme-out`,
+      '-v', `${wwwVol}:/var/www/certbot`,
+      '-e', 'LE_WORKING_DIR=/acme-out/acme.sh',
+      '--entrypoint', 'acme.sh',
+      'neilpang/acme.sh',
+      '--issue',
+      '-d', d,
+      '-w', '/var/www/certbot',
+      '--server', 'letsencrypt',
+      '--certificate-profile', 'shortlived',
+      '--days', '6',
+      '-m', em,
+      ...(force ? ['--force'] : []),
+    ], { timeout: 300_000 });
+
+    if (!r.ok) {
+      throw certbotIssueError(r.stderr || r.stdout, d);
+    }
+
+    const install = await runCmd('docker', [
+      'run', '--rm',
+      '-v', `${vol}:/acme-out`,
+      '--entrypoint', 'acme.sh',
+      'neilpang/acme.sh',
+      '--install-cert', '-d', d,
+      '--fullchain-file', `/acme-out/live/${d}/fullchain.pem`,
+      '--key-file', `/acme-out/live/${d}/privkey.pem`,
+      '--reloadcmd', 'true',
+    ], { timeout: 60_000 });
+    if (!install.ok) {
+      const copy = await runCmd('docker', [
+        'run', '--rm',
+        '-v', `${vol}:/acme-out`,
+        'alpine:3.20',
+        'sh', '-c', `
+          set -e
+          SRC=$(ls -d /acme-out/acme.sh/${d}_ecc /acme-out/acme.sh/${d} 2>/dev/null | head -1)
+          test -n "$SRC"
+          mkdir -p '/acme-out/live/${d}'
+          cp "$SRC/fullchain.cer" '/acme-out/live/${d}/fullchain.pem' 2>/dev/null || cp "$SRC/fullchain.pem" '/acme-out/live/${d}/fullchain.pem'
+          cp "$SRC/${d}.key" '/acme-out/live/${d}/privkey.pem' 2>/dev/null || cp "$SRC/privkey.pem" '/acme-out/live/${d}/privkey.pem'
+          chmod 644 '/acme-out/live/${d}/fullchain.pem'
+          chmod 600 '/acme-out/live/${d}/privkey.pem'
+        `,
+      ], { timeout: 30_000 });
+      if (!copy.ok) {
+        throw certbotIssueError(install.stderr || copy.stderr || 'acme install-cert failed', d);
+      }
+    }
+  }
+
   if (!(await certExistsInVolume(d))) {
-    const err = new Error(`Certificate files missing after issue for ${d}`);
+    const err = new Error(`Certificate files missing after IP issue for ${d}`);
     err.status = 400;
     err.code = 'CERT_ISSUE_FAILED';
     throw err;
@@ -249,7 +458,7 @@ async function injectManualPem(domain, certPem, keyPem) {
     err.code = 'CERT_INJECT_FAILED';
     throw err;
   }
-  return certPathsForDomain(d);
+  return { ...certPathsForDomain(d), certPem, keyPem };
 }
 
 /**
@@ -264,7 +473,8 @@ async function ensureSelfSignedCert(domain) {
     throw err;
   }
   if (await certExistsInVolume(d)) {
-    return certPathsForDomain(d);
+    const certPem = await readPemFromVolume(d);
+    return { ...certPathsForDomain(d), certPem: certPem || undefined };
   }
 
   const tmpDir = path.join(config.WG_PATH || '/tmp', '_tls_selfsigned');
@@ -343,9 +553,9 @@ async function resolveCertMaterial(opts = {}) {
 
   let certDomain = domain;
   if (source === 'panel') {
-    certDomain = panelCertDomain() || domain;
+    certDomain = panelLiveDomain() || panelCertDomain() || domain;
     if (!certDomain) {
-      const err = new Error('Panel certificate domain (PANEL_DOMAIN FQDN) is not configured');
+      const err = new Error('Panel certificate domain (PANEL_DOMAIN) is not configured');
       err.status = 400;
       err.code = 'CERT_PANEL_DOMAIN_MISSING';
       throw err;
@@ -355,7 +565,12 @@ async function resolveCertMaterial(opts = {}) {
   // LE: reuse live PEM when still valid; otherwise certbot --keep-until-expiring.
   if (source === 'issue_le' || opts.issueIfMissing) {
     if (!(await certUsableInVolume(certDomain))) {
-      await issueLetsEncrypt(certDomain, opts.email);
+      const portPlan = require('./portPlan');
+      if (portPlan.isIpLiteral(certDomain)) {
+        await issueLetsEncryptIp(certDomain, opts.email, { force: false });
+      } else {
+        await issueLetsEncrypt(certDomain, opts.email, { force: false });
+      }
     }
   } else if (!(await certExistsInVolume(certDomain))) {
     const err = new Error(`Certificate not found for ${certDomain} in certbot volume`);
@@ -404,14 +619,20 @@ module.exports = {
   NGINX_CONTAINER,
   isFqdn,
   panelCertDomain,
+  panelLiveDomain,
   certPathsForDomain,
   resolveCertbotVolumeName,
   resolveCertbotWwwVolumeName,
   certExistsInVolume,
   certUsableInVolume,
+  readPemFromVolume,
+  copyLiveCert,
+  removeLiveCert,
+  parsePemMeta,
   parseOpensslEnddate,
   CERT_REUSE_MIN_REMAINING_MS,
   issueLetsEncrypt,
+  issueLetsEncryptIp,
   injectManualPem,
   ensureSelfSignedCert,
   resolveCertMaterial,

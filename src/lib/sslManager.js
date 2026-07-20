@@ -2,7 +2,7 @@
 
 /**
  * SSL Certificate Manager — inventory of PEM certs (certbot volume) + Reality key sets.
- * Isolated from sidecar enable paths; wraps tlsMaterial for issue/import.
+ * Panel is a role (is_panel), not a certificate type.
  */
 
 const crypto = require('node:crypto');
@@ -14,7 +14,7 @@ const tlsMaterial = require('./tlsMaterial');
 
 const execFileAsync = promisify(execFile);
 
-const TYPES = Object.freeze(['self_signed', 'lets_encrypt', 'panel', 'reality', 'manual']);
+const TYPES = Object.freeze(['self_signed', 'lets_encrypt', 'reality', 'manual']);
 const XRAY_IMAGE = 'amnezia-xray';
 
 function nowSec() {
@@ -51,11 +51,23 @@ function httpError(status, message, code) {
   return err;
 }
 
+function isPanelRow(row) {
+  return !!(row && (row.is_panel || row.managed));
+}
+
+function guessPanelMaterialType() {
+  const mode = String(process.env.SSL_MODE || '').toLowerCase();
+  if (mode === 'certbot' || mode === 'acme') return 'lets_encrypt';
+  if (mode === 'selfsigned') return 'self_signed';
+  return 'self_signed';
+}
+
 function rowToPublic(row, { includeSecrets = false } = {}) {
   if (!row) return null;
+  const isPanel = isPanelRow(row);
   const out = {
     id: row.id,
-    type: row.type,
+    type: row.type === 'panel' ? guessPanelMaterialType() : row.type,
     label: row.label || '',
     domain: row.domain || '',
     sni: row.sni || row.domain || '',
@@ -68,7 +80,8 @@ function rowToPublic(row, { includeSecrets = false } = {}) {
     realityPublicKey: row.reality_public_key || '',
     realityShortId: row.reality_short_id || '',
     source: row.source || '',
-    managed: !!row.managed,
+    isPanel,
+    managed: isPanel,
     notes: row.notes || '',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -94,32 +107,34 @@ function getByIdSync(id, { includeSecrets = false } = {}) {
   return rowToPublic(row, { includeSecrets });
 }
 
-async function getById(id, { includeSecrets = false, refreshMeta = true } = {}) {
-  let row = getRaw(id);
-  if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
-  if (refreshMeta && row.type !== 'reality' && row.storage_key) {
-    try {
-      await applyPemMeta(row.id, row.storage_key);
-      row = getRaw(id) || row;
-    } catch { /* keep stale meta */ }
-  }
-  return rowToPublic(row, { includeSecrets });
+async function getById(id, { includeSecrets = false } = {}) {
+  return getByIdSync(id, { includeSecrets });
+}
+
+function metaFromPem(certPem) {
+  return tlsMaterial.parsePemMeta(certPem);
+}
+
+async function metaFromVolume(storageKey) {
+  const pem = await tlsMaterial.readPemFromVolume(storageKey);
+  return pem ? metaFromPem(pem) : { notAfter: null, issuer: '', fingerprintSha256: '' };
 }
 
 function insertRow(fields) {
   const t = nowSec();
   const id = fields.id || newId();
+  const isPanel = fields.is_panel ? 1 : 0;
   database().prepare(`
     INSERT INTO ssl_certificates (
       id, type, label, domain, sni, email, storage_key,
       not_after, issuer, fingerprint_sha256,
       reality_private_key, reality_public_key, reality_short_id, reality_dest,
-      source, managed, notes, created_at, updated_at
+      source, managed, is_panel, notes, created_at, updated_at
     ) VALUES (
       @id, @type, @label, @domain, @sni, @email, @storage_key,
       @not_after, @issuer, @fingerprint_sha256,
       @reality_private_key, @reality_public_key, @reality_short_id, @reality_dest,
-      @source, @managed, @notes, @created_at, @updated_at
+      @source, @managed, @is_panel, @notes, @created_at, @updated_at
     )
   `).run({
     id,
@@ -137,7 +152,8 @@ function insertRow(fields) {
     reality_short_id: fields.reality_short_id || null,
     reality_dest: fields.reality_dest || null,
     source: fields.source || null,
-    managed: fields.managed ? 1 : 0,
+    managed: isPanel || fields.managed ? 1 : 0,
+    is_panel: isPanel,
     notes: fields.notes || null,
     created_at: t,
     updated_at: t,
@@ -152,6 +168,10 @@ function updateRow(id, patch) {
   for (const [k, v] of Object.entries(patch)) {
     if (v !== undefined) next[k] = v;
   }
+  if (patch.is_panel !== undefined) {
+    next.is_panel = patch.is_panel ? 1 : 0;
+    next.managed = next.is_panel ? 1 : (patch.managed !== undefined ? (patch.managed ? 1 : 0) : next.managed);
+  }
   next.updated_at = nowSec();
   database().prepare(`
     UPDATE ssl_certificates SET
@@ -159,7 +179,7 @@ function updateRow(id, patch) {
       not_after=@not_after, issuer=@issuer, fingerprint_sha256=@fingerprint_sha256,
       reality_private_key=@reality_private_key, reality_public_key=@reality_public_key,
       reality_short_id=@reality_short_id, reality_dest=@reality_dest,
-      source=@source, managed=@managed, notes=@notes, updated_at=@updated_at
+      source=@source, managed=@managed, is_panel=@is_panel, notes=@notes, updated_at=@updated_at
     WHERE id=@id
   `).run({
     id,
@@ -177,111 +197,61 @@ function updateRow(id, patch) {
     reality_short_id: next.reality_short_id,
     reality_dest: next.reality_dest,
     source: next.source,
-    managed: next.managed ? 1 : 0,
+    managed: next.is_panel ? 1 : (next.managed ? 1 : 0),
+    is_panel: next.is_panel ? 1 : 0,
     notes: next.notes,
     updated_at: next.updated_at,
   });
   return getByIdSync(id, { includeSecrets: true });
 }
 
-async function inspectVolumeCert(storageKey) {
-  const key = String(storageKey || '').trim().toLowerCase();
-  if (!key || !(await tlsMaterial.certExistsInVolume(key))) {
-    return { notAfter: null, issuer: '', fingerprintSha256: '' };
-  }
-  const vol = await tlsMaterial.resolveCertbotVolumeName();
-  const paths = tlsMaterial.certPathsForDomain(key);
-  const r = await runCmd('docker', [
-    'run', '--rm',
-    '-v', `${vol}:/etc/letsencrypt:ro`,
-    'alpine:3.20',
-    'sh', '-c',
-    `apk add --no-cache openssl >/dev/null 2>&1
-     openssl x509 -in '${paths.cert}' -noout -enddate -issuer -fingerprint -sha256 2>/dev/null`,
-  ], { timeout: 60_000 });
-  if (!r.ok) return { notAfter: null, issuer: '', fingerprintSha256: '' };
-  const lines = r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  let notAfter = null;
-  let issuer = '';
-  let fingerprintSha256 = '';
-  for (const line of lines) {
-    if (/^notAfter=/i.test(line)) {
-      const ms = tlsMaterial.parseOpensslEnddate(line);
-      if (ms != null) notAfter = Math.floor(ms / 1000);
-    } else if (/^issuer=/i.test(line)) {
-      issuer = line.replace(/^issuer=/i, '').trim();
-    } else if (/fingerprint=/i.test(line)) {
-      fingerprintSha256 = line.split('=')[1].trim().replace(/:/g, '').toLowerCase();
-    }
-  }
-  return { notAfter, issuer, fingerprintSha256 };
+function clearPanelFlags() {
+  database().prepare('UPDATE ssl_certificates SET is_panel = 0, managed = 0 WHERE is_panel = 1 OR managed = 1').run();
 }
 
-async function applyPemMeta(id, storageKey) {
-  const meta = await inspectVolumeCert(storageKey);
-  return updateRow(id, {
-    not_after: meta.notAfter,
-    issuer: meta.issuer || null,
-    fingerprint_sha256: meta.fingerprintSha256 || null,
-  });
-}
-
-async function syncPanel({ inspect = false } = {}) {
-  const domain = tlsMaterial.panelCertDomain();
+/**
+ * Ensure a panel-role inventory row exists (DB only, no volume inspect).
+ */
+async function syncPanel() {
+  const domain = tlsMaterial.panelLiveDomain();
   if (!domain) return null;
-  let meta = { notAfter: null, issuer: '', fingerprintSha256: '' };
-  if (inspect) {
-    try {
-      const exists = await tlsMaterial.certExistsInVolume(domain);
-      if (exists) meta = await inspectVolumeCert(domain);
-    } catch {
-      /* keep empty / stale */
-    }
-  }
-  const row = database().prepare(
-    "SELECT * FROM ssl_certificates WHERE type = 'panel' LIMIT 1",
+
+  const existingPanel = database().prepare(
+    'SELECT * FROM ssl_certificates WHERE is_panel = 1 LIMIT 1',
   ).get();
-  if (!row) {
-    return insertRow({
-      type: 'panel',
-      label: 'Panel',
-      domain,
-      sni: domain,
-      storage_key: domain,
-      not_after: meta.notAfter,
-      issuer: meta.issuer,
-      fingerprint_sha256: meta.fingerprintSha256,
-      source: 'synced_panel',
-      managed: 1,
-    });
+  if (existingPanel) {
+    return updateRow(existingPanel.id, { is_panel: 1, managed: 1 });
   }
-  const patch = {
+
+  const byKey = database().prepare(
+    'SELECT * FROM ssl_certificates WHERE storage_key = ? LIMIT 1',
+  ).get(domain);
+  if (byKey && byKey.type !== 'reality') {
+    clearPanelFlags();
+    return updateRow(byKey.id, { is_panel: 1, managed: 1 });
+  }
+
+  return insertRow({
+    type: guessPanelMaterialType(),
+    label: 'Panel',
     domain,
     sni: domain,
     storage_key: domain,
     source: 'synced_panel',
     managed: 1,
-  };
-  if (inspect) {
-    patch.not_after = meta.notAfter;
-    patch.issuer = meta.issuer;
-    patch.fingerprint_sha256 = meta.fingerprintSha256;
-  }
-  return updateRow(row.id, patch);
+    is_panel: 1,
+  });
 }
 
-/**
- * Fast inventory list: DB rows only (no docker openssl per cert — that blocked the UI).
- * Meta refresh happens on get()/renew/create.
- */
 async function list() {
-  await syncPanel({ inspect: false }).catch(() => null);
+  await syncPanel().catch(() => null);
   const rows = database().prepare(
-    'SELECT * FROM ssl_certificates ORDER BY managed DESC, type ASC, domain ASC',
+    'SELECT * FROM ssl_certificates ORDER BY is_panel DESC, type ASC, domain ASC',
   ).all();
   return {
     certs: rows.map((row) => rowToPublic(row, { includeSecrets: false })),
     certbotEmail: tlsMaterial.getCertbotEmail() || '',
+    panelDomain: tlsMaterial.panelLiveDomain() || '',
   };
 }
 
@@ -304,8 +274,10 @@ function normalizeDomainInput(raw) {
 
 async function createSelfSigned(opts = {}) {
   const domain = normalizeDomainInput(opts.domain);
-  await tlsMaterial.ensureSelfSignedCert(domain);
-  const meta = await inspectVolumeCert(domain);
+  const issued = await tlsMaterial.ensureSelfSignedCert(domain);
+  const meta = issued.certPem
+    ? metaFromPem(issued.certPem)
+    : await metaFromVolume(domain);
   const existing = database().prepare(
     "SELECT id FROM ssl_certificates WHERE storage_key = ? AND type = 'self_signed'",
   ).get(domain);
@@ -319,36 +291,41 @@ async function createSelfSigned(opts = {}) {
     fingerprint_sha256: meta.fingerprintSha256,
     source: 'generated',
   };
-  if (existing) return updateRow(existing.id, patch);
+  if (existing) {
+    return updateRow(existing.id, patch);
+  }
   return insertRow({ type: 'self_signed', ...patch });
 }
 
 async function createLetsEncrypt(opts = {}) {
-  const domain = normalizeDomainInput(opts.domain);
-  if (!tlsMaterial.isFqdn(domain)) {
-    throw httpError(400, 'Let\'s Encrypt requires a valid FQDN', 'SSL_BAD_DOMAIN');
-  }
+  const host = normalizeDomainInput(opts.domain || opts.ip);
   const email = String(opts.email || tlsMaterial.getCertbotEmail() || '').trim();
-  await tlsMaterial.issueLetsEncrypt(domain, email);
-  const meta = await inspectVolumeCert(domain);
+  const force = opts.force === true;
+  const portPlan = require('./portPlan');
+  if (portPlan.isIpLiteral(host)) {
+    await tlsMaterial.issueLetsEncryptIp(host, email, { force });
+  } else if (!tlsMaterial.isFqdn(host)) {
+    throw httpError(400, 'Let\'s Encrypt requires a valid FQDN or IP', 'SSL_BAD_DOMAIN');
+  } else {
+    await tlsMaterial.issueLetsEncrypt(host, email, { force });
+  }
+  const meta = await metaFromVolume(host);
   const existing = database().prepare(
-    "SELECT id FROM ssl_certificates WHERE storage_key = ?",
-  ).get(domain);
+    'SELECT id FROM ssl_certificates WHERE storage_key = ?',
+  ).get(host);
   const patch = {
     type: 'lets_encrypt',
-    label: opts.label != null ? String(opts.label).trim() : domain,
-    domain,
-    sni: domain,
+    label: opts.label != null ? String(opts.label).trim() : host,
+    domain: host,
+    sni: host,
     email,
-    storage_key: domain,
+    storage_key: host,
     not_after: meta.notAfter,
     issuer: meta.issuer,
     fingerprint_sha256: meta.fingerprintSha256,
     source: 'issued',
   };
   if (existing) {
-    const cur = getRaw(existing.id);
-    if (cur && cur.managed) throw httpError(400, 'Cannot overwrite panel certificate entry', 'SSL_MANAGED');
     return updateRow(existing.id, patch);
   }
   return insertRow(patch);
@@ -381,7 +358,7 @@ async function importPem(opts = {}) {
     throw httpError(400, 'Certificate and private key PEM are required', 'SSL_PEM_MISSING');
   }
   await tlsMaterial.injectManualPem(domain, certPem, keyPem);
-  const meta = await inspectVolumeCert(domain);
+  const meta = metaFromPem(certPem);
   const existing = database().prepare(
     'SELECT id FROM ssl_certificates WHERE storage_key = ?',
   ).get(domain);
@@ -397,9 +374,7 @@ async function importPem(opts = {}) {
     source: opts.source || 'imported_pem',
   };
   if (existing) {
-    const cur = getRaw(existing.id);
-    if (cur && cur.managed) throw httpError(400, 'Cannot overwrite panel certificate', 'SSL_MANAGED');
-    return updateRow(existing.id, patch);
+    return updateRow(existing.id, { ...patch, type: 'manual' });
   }
   return insertRow(patch);
 }
@@ -423,7 +398,7 @@ async function importPath(opts = {}) {
   });
 }
 
-async function renew(id) {
+async function renew(id, opts = {}) {
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
   if (row.type !== 'lets_encrypt') {
@@ -431,8 +406,14 @@ async function renew(id) {
   }
   const domain = row.storage_key || row.domain;
   const email = row.email || tlsMaterial.getCertbotEmail();
-  await tlsMaterial.issueLetsEncrypt(domain, email);
-  const meta = await inspectVolumeCert(domain);
+  const force = opts.force !== false;
+  const portPlan = require('./portPlan');
+  if (portPlan.isIpLiteral(domain)) {
+    await tlsMaterial.issueLetsEncryptIp(domain, email, { force });
+  } else {
+    await tlsMaterial.issueLetsEncrypt(domain, email, { force });
+  }
+  const meta = await metaFromVolume(domain);
   return updateRow(id, {
     not_after: meta.notAfter,
     issuer: meta.issuer,
@@ -441,15 +422,47 @@ async function renew(id) {
   });
 }
 
+/**
+ * Assign inventory cert as panel TLS: copy PEM into live/${PANEL_DOMAIN}/ and reload nginx.
+ */
+async function assignPanel(id) {
+  const row = getRaw(id);
+  if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
+  if (row.type === 'reality') {
+    throw httpError(400, 'REALITY keys cannot be used as panel TLS', 'SSL_BAD_TYPE');
+  }
+  const storageKey = row.storage_key || row.domain;
+  if (!storageKey) {
+    throw httpError(400, 'Certificate has no storage key', 'SSL_NO_STORAGE');
+  }
+  const panelKey = tlsMaterial.panelLiveDomain();
+  if (!panelKey) {
+    throw httpError(400, 'PANEL_DOMAIN is not configured', 'SSL_NO_PANEL_DOMAIN');
+  }
+  if (!(await tlsMaterial.certExistsInVolume(storageKey))) {
+    throw httpError(400, `Certificate files missing in volume for ${storageKey}`, 'SSL_MISSING');
+  }
+  if (storageKey !== panelKey) {
+    await tlsMaterial.copyLiveCert(storageKey, panelKey);
+  }
+  clearPanelFlags();
+  const updated = updateRow(id, { is_panel: 1, managed: 1 });
+  const portPlan = require('./portPlan');
+  await portPlan.reloadNginx();
+  return updated;
+}
+
 async function remove(id) {
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
-  if (row.managed || row.type === 'panel') {
+  if (isPanelRow(row)) {
     throw httpError(400, 'Panel certificate cannot be deleted', 'SSL_MANAGED');
   }
-  const panelDomain = tlsMaterial.panelCertDomain();
-  if (row.storage_key && row.type !== 'reality' && panelDomain && row.storage_key === panelDomain) {
-    throw httpError(400, 'Refusing to delete panel domain inventory entry', 'SSL_MANAGED');
+  const panelKey = tlsMaterial.panelLiveDomain();
+  if (row.storage_key && row.type !== 'reality') {
+    if (!panelKey || row.storage_key !== panelKey) {
+      await tlsMaterial.removeLiveCert(row.storage_key).catch(() => false);
+    }
   }
   database().prepare('DELETE FROM ssl_certificates WHERE id = ?').run(id);
   return { success: true, id };
@@ -467,4 +480,6 @@ module.exports = {
   importPath,
   renew,
   remove,
+  assignPanel,
+  parsePemMeta: tlsMaterial.parsePemMeta,
 };
