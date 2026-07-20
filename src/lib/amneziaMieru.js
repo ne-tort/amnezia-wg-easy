@@ -6,7 +6,7 @@
  * Desired state in app_settings; per-client password on clients.mieru_password.
  */
 
-const { spawn, execFile } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -182,29 +182,16 @@ async function ensureMieruImage() {
   if (!fs.existsSync(dockerfilePath)) {
     throw new Error('amnezia-mieru image missing; run deploy.sh');
   }
-  const dockerfile = fs.readFileSync(dockerfilePath, 'utf8');
-  await new Promise((resolve, reject) => {
-    const child = spawn('docker', ['build', '-t', IMAGE_NAME, '-'], {
-      stdio: ['pipe', 'ignore', 'pipe'],
-    });
-    let err = '';
-    const timer = setTimeout(() => {
-      try { child.kill('SIGKILL'); } catch (_) { /* ignore */ }
-      reject(new Error('docker build amnezia-mieru timed out'));
-    }, 600_000);
-    child.stderr.on('data', (d) => { err += String(d); });
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve();
-      else reject(new Error((err || `docker build failed (${code})`).trim().slice(0, 400)));
-    });
-    child.stdin.write(dockerfile);
-    child.stdin.end();
+  const startPath = path.join(DOCKERFILE_FOLDER, 'start.sh');
+  if (!fs.existsSync(startPath)) {
+    throw new Error('amnezia-mieru start.sh missing; run deploy.sh');
+  }
+  const build = await runCmd('docker', ['build', '-t', IMAGE_NAME, DOCKERFILE_FOLDER], {
+    timeout: 600_000,
   });
+  if (!build.ok) {
+    throw new Error((build.stderr || build.stdout || 'docker build amnezia-mieru failed').trim().slice(0, 400));
+  }
 }
 
 /** Slug username from client display name (mita user name). */
