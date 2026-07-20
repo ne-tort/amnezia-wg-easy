@@ -436,6 +436,14 @@ class API {
     return this.call({ method: 'get', path: '/ssl/certs' });
   }
 
+  async getPanelSettings() {
+    return this.call({ method: 'get', path: '/panel/settings' });
+  }
+
+  async savePanelSettings(body = {}) {
+    return this.call({ method: 'post', path: '/panel/settings', body });
+  }
+
   async getSslCert(id) {
     return this.call({ method: 'get', path: `/ssl/certs/${encodeURIComponent(id)}` });
   }
@@ -450,6 +458,10 @@ class API {
 
   async createSslReality(body = {}) {
     return this.call({ method: 'post', path: '/ssl/certs/reality', body });
+  }
+
+  async createSslMasquerade(body = {}) {
+    return this.call({ method: 'post', path: '/ssl/certs/masquerade', body });
   }
 
   async importSslPem(body = {}) {

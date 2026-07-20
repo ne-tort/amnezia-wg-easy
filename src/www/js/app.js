@@ -133,6 +133,16 @@ new Vue({
     createUserCidr: '',
     createUserFieldErrors: { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' },
     createUserSubmitting: false,
+    panelSettingsOpen: false,
+    panelSettingsBusy: false,
+    panelSettingsError: null,
+    panelSettingsRestartHint: false,
+    panelSettingsForm: {
+      panelHttpsPort: 443,
+      webuiPublicPrefix: '/panel',
+      mirrorHost: '',
+      sslCertId: '',
+    },
     sessionAssignedCidrs: [],
     vpnPools: [],
     cidrPoolEdit: null,
@@ -1164,10 +1174,42 @@ new Vue({
         this.closeSniFinder();
         return;
       }
-      // Xray Reality: create/reuse Reality cert in SSL Manager, then select it.
+      // Xray Reality: preflight CDN-SAN / DNS+TLS before creating cert; keep finder open on fail.
       this.sniFinderBusy = true;
       this.sniFinderError = null;
       try {
+        let updated = null;
+        try {
+          updated = await this.api.preflightDomain({ domain: value });
+        } catch (preErr) {
+          updated = { domain: value, alive: false };
+        }
+        if (!updated || updated.alive === false) {
+          const list = this.sniFinderEntries.slice();
+          const idx = list.findIndex((e) => e.domain === value);
+          const deadRow = {
+            ...(idx >= 0 ? list[idx] : { domain: value, source: 'scan' }),
+            ...(updated || {}),
+            domain: value,
+            alive: false,
+          };
+          if (idx >= 0) list.splice(idx, 1, deadRow);
+          else list.push(deadRow);
+          this.sniFinderEntries = list;
+          this.sniFinderAliveCount = list.filter(
+            (e) => e.source === 'scan' && e.alive !== false,
+          ).length;
+          this.sniFinderError = this.$t('sniPreflightDead', { domain: value })
+            || `SNI «${value}» failed DNS/TLS check (CDN-SAN / not suitable for Reality)`;
+          return;
+        }
+        if (updated && updated.domain) {
+          const list = this.sniFinderEntries.slice();
+          const idx = list.findIndex((e) => e.domain === updated.domain);
+          if (idx >= 0) list.splice(idx, 1, updated);
+          else list.push(updated);
+          this.sniFinderEntries = list;
+        }
         const res = await this.api.createSslReality({ sni: value });
         const cert = res && res.cert;
         if (!cert || !cert.id) {
@@ -2451,6 +2493,68 @@ new Vue({
       this.createUserCidr = '';
       this.createUserFieldErrors = { username: '', password: '', passwordConfirm: '', cidr: '', _form: '' };
     },
+    async openPanelSettings() {
+      if (!this.canManageSettings) return;
+      this.userActionsOpen = false;
+      this.panelSettingsOpen = true;
+      this.panelSettingsError = null;
+      this.panelSettingsRestartHint = false;
+      this.panelSettingsBusy = true;
+      try {
+        await Promise.all([
+          this.refreshSslCerts ? this.refreshSslCerts() : Promise.resolve(),
+          this.api.getPanelSettings().then((st) => {
+            this.panelSettingsForm = {
+              panelHttpsPort: (st && st.panelHttpsPort) || 443,
+              webuiPublicPrefix: (st && st.webuiPublicPrefix) || '/panel',
+              mirrorHost: (st && st.mirrorHost) || '',
+              sslCertId: (st && st.sslCertId) || '',
+            };
+          }),
+        ]);
+      } catch (err) {
+        this.panelSettingsError = (err && err.message) || this.$t('panelSettingsLoadFailed');
+      } finally {
+        this.panelSettingsBusy = false;
+      }
+    },
+    closePanelSettings() {
+      this.panelSettingsOpen = false;
+      this.panelSettingsError = null;
+      this.panelSettingsRestartHint = false;
+    },
+    async savePanelSettings() {
+      if (!this.canManageSettings || this.panelSettingsBusy) return;
+      this.panelSettingsBusy = true;
+      this.panelSettingsError = null;
+      try {
+        const body = {
+          panelHttpsPort: Number(this.panelSettingsForm.panelHttpsPort),
+          webuiPublicPrefix: String(this.panelSettingsForm.webuiPublicPrefix || '').trim(),
+          mirrorHost: String(this.panelSettingsForm.mirrorHost || '').trim(),
+          sslCertId: String(this.panelSettingsForm.sslCertId || '').trim(),
+        };
+        const res = await this.api.savePanelSettings(body);
+        if (res && res.settings) {
+          this.panelSettingsForm = {
+            panelHttpsPort: res.settings.panelHttpsPort || body.panelHttpsPort,
+            webuiPublicPrefix: res.settings.webuiPublicPrefix || body.webuiPublicPrefix,
+            mirrorHost: res.settings.mirrorHost || '',
+            sslCertId: res.settings.sslCertId || body.sslCertId,
+          };
+        }
+        if (res && res.restarted) {
+          this.panelSettingsRestartHint = true;
+        } else {
+          this.closePanelSettings();
+          if (this.refreshSslCerts) await this.refreshSslCerts();
+        }
+      } catch (err) {
+        this.panelSettingsError = (err && err.message) || this.$t('panelSettingsSaveFailed');
+      } finally {
+        this.panelSettingsBusy = false;
+      }
+    },
     submitPasswordChange() {
       if (this.passwordChangeSubmitting) return;
       const errors = { password: '', passwordConfirm: '', _form: '' };
@@ -2755,6 +2859,19 @@ new Vue({
     },
     canManageSettings() {
       return this.hasCapability('system.settings');
+    },
+    panelSettingsCertOptions() {
+      const list = (this.sslCerts || []).filter((c) => c
+        && c.type !== 'reality'
+        && c.type !== 'masquerade');
+      const selectedId = this.panelSettingsForm && this.panelSettingsForm.sslCertId;
+      const selected = selectedId
+        ? list.find((c) => c.id === selectedId) || (this.sslCerts || []).find((c) => c.id === selectedId)
+        : null;
+      if (selected && !list.some((c) => c.id === selected.id)) {
+        return [selected, ...list];
+      }
+      return list;
     },
     canCreateClient() {
       return Array.isArray(this.sessionAssignedCidrs) && this.sessionAssignedCidrs.length > 0;

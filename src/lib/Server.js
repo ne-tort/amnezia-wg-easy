@@ -996,6 +996,25 @@ module.exports = class Server {
           throw httpError(500, err.message || 'SSL list failed');
         }
       }))
+      .get('/api/panel/settings', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        try {
+          return await require('./panelSettings').getSettings();
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Panel settings read failed');
+        }
+      }))
+      .post('/api/panel/settings', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return await require('./panelSettings').applySettings(body || {});
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Panel settings apply failed');
+        }
+      }))
       .get('/api/ssl/certs/:id', defineEventHandler(async (event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
         const sslManager = require('./sslManager');
@@ -1038,6 +1057,17 @@ module.exports = class Server {
         } catch (err) {
           if (err && err.status) throw httpError(err.status, err.message);
           throw httpError(500, err.message || 'Reality keys generation failed');
+        }
+      }))
+      .post('/api/ssl/certs/masquerade', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
+        const sslManager = require('./sslManager');
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          return { success: true, cert: await sslManager.createMasquerade(body || {}) };
+        } catch (err) {
+          if (err && err.status) throw httpError(err.status, err.message);
+          throw httpError(500, err.message || 'Masquerade create failed');
         }
       }))
       .post('/api/ssl/certs/import-pem', defineEventHandler(async (event) => {

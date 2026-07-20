@@ -1043,4 +1043,5 @@ module.exports = {
   panelCanJoinDemuxBySni,
   parsePort,
   reloadNginx,
+  recreateNginxForPlan,
 };

@@ -167,11 +167,11 @@ test('sslManager exports inventory API and TYPES without panel type', () => {
   const { sslManager, restore } = loadSslManager({ dbPath: path.join(tmp, 'panel.db') });
   try {
     assert.deepEqual([...sslManager.TYPES].sort(), [
-      'lets_encrypt', 'lets_encrypt_ip', 'manual', 'reality', 'self_signed',
+      'lets_encrypt', 'lets_encrypt_ip', 'manual', 'masquerade', 'reality', 'self_signed',
     ].sort());
     for (const name of [
       'list', 'get', 'syncPanel', 'createSelfSigned', 'createLetsEncrypt',
-      'createReality', 'importPem', 'importPath', 'renew', 'remove', 'assignPanel',
+      'createReality', 'createMasquerade', 'importPem', 'importPath', 'renew', 'remove', 'assignPanel',
       'recheckReality', 'regenerateReality', 'setAutoRenew', 'tickAutoRenew',
     ]) {
       assert.equal(typeof sslManager[name], 'function', name);

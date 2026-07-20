@@ -15,7 +15,7 @@ const tlsMaterial = require('./tlsMaterial');
 
 const execFileAsync = promisify(execFile);
 
-const TYPES = Object.freeze(['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'reality', 'manual']);
+const TYPES = Object.freeze(['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'reality', 'manual', 'masquerade']);
 const LE_TYPES = Object.freeze(['lets_encrypt', 'lets_encrypt_ip']);
 const XRAY_IMAGE = 'amnezia-xray';
 const REALITY_CHECK_TTL_SEC = 24 * 60 * 60;
@@ -25,6 +25,7 @@ const SIDECAR_CERT_FILTERS = Object.freeze({
   hysteria: ['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'manual'],
   xray_reality: ['reality'],
   xray_tls: ['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'manual'],
+  masquerade: ['masquerade'],
 });
 
 function nowSec() {
@@ -92,6 +93,7 @@ function rowToPublic(row, { includeSecrets = false } = {}) {
     realityStatus: row.reality_status || null,
     realityCheckedAt: row.reality_checked_at || null,
     realityCheckDetail: row.reality_check_detail || null,
+    masqueradeUrl: row.masquerade_url || '',
     autoRenew: !!(row.auto_renew),
     source: row.source || '',
     isPanel,
@@ -198,13 +200,13 @@ function insertRow(fields) {
       id, type, label, domain, sni, email, storage_key,
       not_after, issuer, fingerprint_sha256,
       reality_private_key, reality_public_key, reality_short_id, reality_dest,
-      reality_status, reality_checked_at, reality_check_detail,
+      reality_status, reality_checked_at, reality_check_detail, masquerade_url,
       source, managed, is_panel, auto_renew, notes, created_at, updated_at
     ) VALUES (
       @id, @type, @label, @domain, @sni, @email, @storage_key,
       @not_after, @issuer, @fingerprint_sha256,
       @reality_private_key, @reality_public_key, @reality_short_id, @reality_dest,
-      @reality_status, @reality_checked_at, @reality_check_detail,
+      @reality_status, @reality_checked_at, @reality_check_detail, @masquerade_url,
       @source, @managed, @is_panel, @auto_renew, @notes, @created_at, @updated_at
     )
   `).run({
@@ -225,6 +227,7 @@ function insertRow(fields) {
     reality_status: fields.reality_status || null,
     reality_checked_at: fields.reality_checked_at != null ? fields.reality_checked_at : null,
     reality_check_detail: fields.reality_check_detail || null,
+    masquerade_url: fields.masquerade_url || null,
     source: fields.source || null,
     managed: isPanel || fields.managed ? 1 : 0,
     is_panel: isPanel,
@@ -258,7 +261,7 @@ function updateRow(id, patch) {
       reality_private_key=@reality_private_key, reality_public_key=@reality_public_key,
       reality_short_id=@reality_short_id, reality_dest=@reality_dest,
       reality_status=@reality_status, reality_checked_at=@reality_checked_at,
-      reality_check_detail=@reality_check_detail,
+      reality_check_detail=@reality_check_detail, masquerade_url=@masquerade_url,
       source=@source, managed=@managed, is_panel=@is_panel, auto_renew=@auto_renew,
       notes=@notes, updated_at=@updated_at
     WHERE id=@id
@@ -280,6 +283,7 @@ function updateRow(id, patch) {
     reality_status: next.reality_status || null,
     reality_checked_at: next.reality_checked_at != null ? next.reality_checked_at : null,
     reality_check_detail: next.reality_check_detail || null,
+    masquerade_url: next.masquerade_url || null,
     source: next.source,
     managed: next.is_panel ? 1 : (next.managed ? 1 : 0),
     is_panel: next.is_panel ? 1 : 0,
@@ -369,7 +373,7 @@ async function list() {
   ).all();
   // Refresh expiry/fingerprint from live PEM so UI matches volume after renew/assign.
   for (const row of rows) {
-    if (row.type === 'reality' || !row.storage_key) continue;
+    if (row.type === 'reality' || row.type === 'masquerade' || !row.storage_key) continue;
     await refreshRowMetaFromVolume(row).catch(() => null);
   }
   // Lazy Reality recheck for stale TTL — do not block list response.
@@ -636,6 +640,41 @@ async function importPem(opts = {}) {
   return insertRow(patch);
 }
 
+async function createMasquerade(opts = {}) {
+  let url = String(opts.url || opts.masqueradeUrl || opts.masquerade_url || '').trim();
+  if (!url) throw httpError(400, 'Masquerade URL is required', 'SSL_MASQUERADE_URL');
+  try {
+    const u = new URL(url);
+    if (u.protocol !== 'https:') {
+      throw httpError(400, 'Masquerade URL must use https://', 'SSL_MASQUERADE_URL');
+    }
+    url = u.toString();
+  } catch (err) {
+    if (err && err.code === 'SSL_MASQUERADE_URL') throw err;
+    throw httpError(400, 'Invalid masquerade URL', 'SSL_MASQUERADE_URL');
+  }
+  const host = new URL(url).hostname.toLowerCase();
+  const existing = database().prepare(
+    'SELECT * FROM ssl_certificates WHERE type = ? AND (masquerade_url = ? OR domain = ?) LIMIT 1',
+  ).get('masquerade', url, host);
+  if (existing && opts.reuse !== false) {
+    return updateRow(existing.id, {
+      masquerade_url: url,
+      domain: host,
+      sni: host,
+      label: opts.label != null ? String(opts.label).trim() : (existing.label || host),
+    });
+  }
+  return insertRow({
+    type: 'masquerade',
+    label: opts.label != null ? String(opts.label).trim() : host,
+    domain: host,
+    sni: host,
+    masquerade_url: url,
+    source: opts.source || 'manual',
+  });
+}
+
 async function importPath(opts = {}) {
   const domain = normalizeDomainInput(opts.domain);
   const certPath = String(opts.certPath || opts.cert_path || '').trim();
@@ -779,8 +818,8 @@ function peekCert(id) {
 async function assignPanel(id) {
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
-  if (row.type === 'reality') {
-    throw httpError(400, 'REALITY keys cannot be used as panel TLS', 'SSL_BAD_TYPE');
+  if (row.type === 'reality' || row.type === 'masquerade') {
+    throw httpError(400, 'This certificate type cannot be used as panel TLS', 'SSL_BAD_TYPE');
   }
   const storageKey = row.storage_key || row.domain;
   if (!storageKey) {
@@ -818,7 +857,7 @@ async function remove(id) {
     throw httpError(400, 'Panel certificate cannot be deleted', 'SSL_MANAGED');
   }
   const panelKey = tlsMaterial.panelLiveDomain();
-  if (row.storage_key && row.type !== 'reality') {
+  if (row.storage_key && row.type !== 'reality' && row.type !== 'masquerade') {
     if (!panelKey || row.storage_key !== panelKey) {
       await tlsMaterial.removeLiveCert(row.storage_key).catch(() => false);
     }
@@ -841,6 +880,7 @@ module.exports = {
   createSelfSigned,
   createLetsEncrypt,
   createReality,
+  createMasquerade,
   recheckReality,
   regenerateReality,
   setAutoRenew,

@@ -65,7 +65,7 @@ const SslManagerPanel = {
     },
     sslCanAssignPanel(cert) {
       if (!cert || this.sslIsPanel(cert)) return false;
-      if (cert.type === 'reality') return false;
+      if (cert.type === 'reality' || cert.type === 'masquerade') return false;
       return true;
     },
     sslCanAutoRenew(cert) {
@@ -103,6 +103,7 @@ const SslManagerPanel = {
         keyPem: '',
         certPath: '',
         keyPath: '',
+        masqueradeUrl: '',
       };
     },
     async openSslManager() {
@@ -220,6 +221,12 @@ const SslManagerPanel = {
             res = await this.api.createSslReality({
               sni: f.sni || f.domain,
               dest: f.dest || undefined,
+              label: f.label || undefined,
+            });
+            break;
+          case 'masquerade':
+            res = await this.api.createSslMasquerade({
+              url: f.masqueradeUrl || f.domain,
               label: f.label || undefined,
             });
             break;

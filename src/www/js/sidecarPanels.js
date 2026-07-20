@@ -69,6 +69,7 @@ window.SidecarPanels = {
       amneziaHysteriaSni: '',
       amneziaHysteriaPublicPort: 443,
       amneziaHysteriaMasqueradeUrl: '',
+      amneziaHysteriaMasqueradeId: '',
       amneziaHysteriaObfsType: '',
       amneziaHysteriaObfsTypes: ['', 'salamander'],
       amneziaHysteriaObfsPassword: '',
@@ -147,10 +148,20 @@ window.SidecarPanels = {
       return true;
     },
     hysteriaSslCertOptions() {
-      const list = (this.sslCerts || []).filter((c) => c && c.type !== 'reality');
+      const list = (this.sslCerts || []).filter((c) => c && c.type !== 'reality' && c.type !== 'masquerade');
       const selected = this.sslFindCertById
         ? this.sslFindCertById(this.amneziaHysteriaSslCertId)
         : (this.sslCerts || []).find((c) => c.id === this.amneziaHysteriaSslCertId);
+      if (selected && !list.some((c) => c.id === selected.id)) {
+        return [selected, ...list];
+      }
+      return list;
+    },
+    hysteriaMasqueradeOptions() {
+      const list = (this.sslCerts || []).filter((c) => c && c.type === 'masquerade');
+      const selected = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaHysteriaMasqueradeId)
+        : (this.sslCerts || []).find((c) => c.id === this.amneziaHysteriaMasqueradeId);
       if (selected && !list.some((c) => c.id === selected.id)) {
         return [selected, ...list];
       }
@@ -214,6 +225,30 @@ window.SidecarPanels = {
         this.amneziaNaiveSni = this.normalizeHostnameInput(c.sni || c.domain || '');
       }
     },
+    onHysteriaMasqueradeChange() {
+      const c = this.sslFindCertById
+        ? this.sslFindCertById(this.amneziaHysteriaMasqueradeId)
+        : (this.sslCerts || []).find((x) => x.id === this.amneziaHysteriaMasqueradeId);
+      this.amneziaHysteriaMasqueradeUrl = c
+        ? (c.masqueradeUrl || (c.domain ? `https://${c.domain}/` : ''))
+        : '';
+    },
+    syncHysteriaMasqueradeIdFromUrl() {
+      const url = String(this.amneziaHysteriaMasqueradeUrl || '').trim().toLowerCase().replace(/\/+$/, '');
+      if (!url) {
+        this.amneziaHysteriaMasqueradeId = '';
+        return;
+      }
+      const match = (this.sslCerts || []).find((c) => {
+        if (!c || c.type !== 'masquerade') return false;
+        const u = String(c.masqueradeUrl || '').trim().toLowerCase().replace(/\/+$/, '');
+        const d = String(c.domain || '').trim().toLowerCase();
+        if (u && u === url) return true;
+        if (d && (url === `https://${d}` || url === `http://${d}`)) return true;
+        return false;
+      });
+      this.amneziaHysteriaMasqueradeId = match ? match.id : '';
+    },
     async openMasqueradeBank() {
       this.masqueradeBankOpen = true;
       this.masqueradeBankBusy = true;
@@ -229,11 +264,32 @@ window.SidecarPanels = {
     closeMasqueradeBank() {
       this.masqueradeBankOpen = false;
     },
-    pickMasqueradeUrl(entry) {
+    async pickMasqueradeUrl(entry) {
       const url = entry && (entry.url || (entry.domain ? `https://${entry.domain}/` : ''));
       if (!url) return;
-      this.amneziaHysteriaMasqueradeUrl = url;
-      this.closeMasqueradeBank();
+      this.masqueradeBankBusy = true;
+      try {
+        const res = await this.api.createSslMasquerade({
+          url,
+          label: (entry && entry.domain) || undefined,
+          source: 'bank',
+        });
+        if (this.refreshSslCerts) await this.refreshSslCerts();
+        const cert = res && res.cert;
+        if (cert && cert.id) {
+          this.amneziaHysteriaMasqueradeId = cert.id;
+          this.amneziaHysteriaMasqueradeUrl = cert.masqueradeUrl || url;
+        } else {
+          this.amneziaHysteriaMasqueradeUrl = url;
+        }
+        this.closeMasqueradeBank();
+      } catch (err) {
+        this.amneziaHysteriaFieldErrors = {
+          masqueradeUrl: (err && err.message) || this.$t('sslActionFailed'),
+        };
+      } finally {
+        this.masqueradeBankBusy = false;
+      }
     },
     clearSidecarFieldErrors(service) {
       if (service === 'mieru') this.amneziaMieruFieldErrors = {};
@@ -501,6 +557,7 @@ window.SidecarPanels = {
         else if (st.masqueradeUrl && !this.amneziaHysteriaMasqueradeUrl) {
           this.amneziaHysteriaMasqueradeUrl = st.masqueradeUrl;
         }
+        this.syncHysteriaMasqueradeIdFromUrl();
         if (st.obfsType) this.amneziaHysteriaObfsType = st.obfsType;
         if (st.bandwidthUp) this.amneziaHysteriaBandwidthUp = st.bandwidthUp;
         if (st.bandwidthDown) this.amneziaHysteriaBandwidthDown = st.bandwidthDown;
@@ -563,6 +620,7 @@ window.SidecarPanels = {
           this.amneziaHysteriaAddress = sidecarDefaultAddress();
         }
         if (this.amneziaHysteriaSslCertId) this.onHysteriaSslCertChange();
+        this.syncHysteriaMasqueradeIdFromUrl();
         this.amneziaHysteriaInstallOpen = true;
       });
     },
