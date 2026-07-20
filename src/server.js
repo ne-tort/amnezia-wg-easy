@@ -9,6 +9,9 @@ const WireGuard = require('./lib/WireGuard');
 const { applyFirewall } = require('./lib/firewall');
 const { bootAmneziaDns, stopAmneziaDns, startDnsProfileProbes } = require('./lib/amneziaDns');
 const { bootAmneziaXray, stopAmneziaXray } = require('./lib/amneziaXray');
+const { bootAmneziaMieru, stopAmneziaMieru } = require('./lib/amneziaMieru');
+const { bootAmneziaHysteria, stopAmneziaHysteria } = require('./lib/amneziaHysteria');
+const { bootAmneziaNaive, stopAmneziaNaive } = require('./lib/amneziaNaive');
 const { startTrafficRecorder, stopTrafficRecorder } = require('./lib/trafficRecorder');
 const { stopProbeScheduler } = require('./lib/dnsProfileProbe');
 
@@ -68,6 +71,18 @@ async function main() {
     // eslint-disable-next-line no-console
     console.error('Amnezia Xray boot:', err && err.message ? err.message : err);
   });
+  bootAmneziaMieru().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Amnezia Mieru boot:', err && err.message ? err.message : err);
+  });
+  bootAmneziaHysteria().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Amnezia Hysteria boot:', err && err.message ? err.message : err);
+  });
+  bootAmneziaNaive().catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('Amnezia Naive boot:', err && err.message ? err.message : err);
+  });
 }
 
 main().catch((err) => {
@@ -83,6 +98,9 @@ process.on('SIGTERM', async () => {
   stopProbeScheduler();
   stopAmneziaDns();
   stopAmneziaXray();
+  stopAmneziaMieru();
+  stopAmneziaHysteria();
+  stopAmneziaNaive();
   await WireGuard.Shutdown();
   process.exit(0);
 });

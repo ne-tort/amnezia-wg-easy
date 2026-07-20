@@ -41,6 +41,9 @@ PANEL_DOMAIN_VAL=""
 CERTBOT_EMAIL_VAL=""
 ENABLE_DNS=1
 ENABLE_XRAY=1
+ENABLE_MIERU=0
+ENABLE_HYSTERIA=0
+ENABLE_NAIVE=0
 WG_PORT_VAL=""
 PANEL_HTTPS_PORT_VAL=""
 XRAY_PORT_VAL=""
@@ -1923,6 +1926,9 @@ SUB_PUBLIC_PREFIX=${SUB_PUBLIC_PREFIX_VAL}
 NGINX_MIRROR_HOST=${NGINX_MIRROR_HOST_VAL}
 ENABLE_DNS=${ENABLE_DNS}
 ENABLE_XRAY=${ENABLE_XRAY}
+ENABLE_MIERU=${ENABLE_MIERU}
+ENABLE_HYSTERIA=${ENABLE_HYSTERIA}
+ENABLE_NAIVE=${ENABLE_NAIVE}
 ADMIN_USERNAME=${ADMIN_USER}
 INSTALLED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
@@ -2124,6 +2130,47 @@ base24_from_ip() {
   echo "${a}.${b}.${c}.0/24"
 }
 
+enable_mieru() {
+  logi "Подготовка Mieru..."
+  local address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
+  local pub
+  pub=$(grep -E '^MIERU_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
+  pub="${pub:-3080}"
+  local body resp
+  body=$(printf '{"address":"%s","publicPort":%s,"protocol":"TCP"}' "$address" "$pub")
+  resp=$(api_curl POST /api/amnezia-mieru/enable "$body" || true)
+  logi "Mieru enable: ${resp:0:300}"
+}
+
+enable_hysteria() {
+  logi "Подготовка Hysteria2..."
+  local address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
+  local pub sni body resp
+  pub=$(grep -E '^HYSTERIA_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
+  pub="${pub:-443}"
+  sni=$(grep -E '^NGINX_MIRROR_HOST=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
+  sni="${sni:-www.sbb.ch}"
+  body=$(printf '{"address":"%s","publicPort":%s,"sni":"%s"}' "$address" "$pub" "$sni")
+  resp=$(api_curl POST /api/amnezia-hysteria/enable "$body" || true)
+  logi "Hysteria enable: ${resp:0:300}"
+}
+
+enable_naive() {
+  logi "Подготовка Naive (требуется отдельный FQDN/SNI)..."
+  local address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
+  local pub sni body resp
+  pub=$(grep -E '^NAIVE_PUBLIC_PORT=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
+  pub="${pub:-443}"
+  sni=$(grep -E '^PANEL_DOMAIN=' "${INSTALL_DIR}/.env" 2>/dev/null | cut -d= -f2- || true)
+  if [[ -z "$sni" || "$sni" == "$address" ]]; then
+    logw "Naive: задайте отдельный FQDN в UI (SNI ≠ panel IP)"
+    return 1
+  fi
+  body=$(printf '{"address":"%s","publicPort":%s,"sni":"%s"}' "$address" "$pub" "$sni")
+  resp=$(api_curl POST /api/amnezia-naive/enable "$body" || true)
+  logi "Naive enable: ${resp:0:300}"
+}
+
 enable_xray() {
   logi "Подготовка Xray..."
   local sni="" address="${SERVER_IP:-$PANEL_DOMAIN_VAL}"
@@ -2265,6 +2312,15 @@ post_configure() {
   if [[ "$ENABLE_XRAY" -eq 1 ]]; then
     enable_xray || logw "Xray enable не удался"
   fi
+  if [[ "$ENABLE_MIERU" -eq 1 ]]; then
+    enable_mieru || logw "Mieru enable не удался"
+  fi
+  if [[ "$ENABLE_HYSTERIA" -eq 1 ]]; then
+    enable_hysteria || logw "Hysteria enable не удался"
+  fi
+  if [[ "$ENABLE_NAIVE" -eq 1 ]]; then
+    enable_naive || logw "Naive enable не удался"
+  fi
   apply_mirror_from_sni_if_requested || true
 }
 
@@ -2335,6 +2391,12 @@ main() {
     ENABLE_DNS=$CONFIRM_RESULT
     confirm_yn "Xray (VLESS Reality)?" y AWG_ENABLE_XRAY
     ENABLE_XRAY=$CONFIRM_RESULT
+    confirm_yn "Mieru (mita TCP)?" n AWG_ENABLE_MIERU
+    ENABLE_MIERU=$CONFIRM_RESULT
+    confirm_yn "Hysteria2 (UDP/QUIC)?" n AWG_ENABLE_HYSTERIA
+    ENABLE_HYSTERIA=$CONFIRM_RESULT
+    confirm_yn "NaiveProxy (Caddy demux SNI)?" n AWG_ENABLE_NAIVE
+    ENABLE_NAIVE=$CONFIRM_RESULT
   fi
   write_env
   run_deploy

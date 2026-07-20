@@ -386,6 +386,11 @@ function clientsSetNaivePassword(id, password) {
   getDb().prepare('UPDATE clients SET naive_password = ?, updated_at = ? WHERE id = ?').run(password || null, now, id);
 }
 
+function clientsSetMieruPassword(id, password) {
+  const now = Math.floor(Date.now() / 1000);
+  getDb().prepare('UPDATE clients SET mieru_password = ?, updated_at = ? WHERE id = ?').run(password || null, now, id);
+}
+
 function clientsGetByName(name) {
   return getDb().prepare('SELECT * FROM clients WHERE name = ? AND deleted_at IS NULL').get(name);
 }
@@ -406,8 +411,8 @@ function clientsReplaceAll(rows) {
   const database = getDb();
   database.prepare('DELETE FROM clients WHERE deleted_at IS NULL').run();
   const stmt = database.prepare(
-    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_signature, default_level, use_server_dns, junk_pins, mtu_profile, created_by, xray_uuid, naive_password, hysteria_password)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO clients (id, name, address, public_key, private_key, pre_shared_key, enabled, note, created_at, updated_at, expires_at, rule_profile_id, default_profile, default_signature, default_level, use_server_dns, junk_pins, mtu_profile, created_by, xray_uuid, naive_password, hysteria_password, mieru_password)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
   for (const row of rows) {
     stmt.run(
@@ -421,7 +426,8 @@ function clientsReplaceAll(rows) {
       row.created_by ?? null,
       row.xray_uuid ?? null,
       row.naive_password ?? null,
-      row.hysteria_password ?? null
+      row.hysteria_password ?? null,
+      row.mieru_password ?? null
     );
   }
 }
@@ -1114,6 +1120,7 @@ module.exports = {
     setXrayUuid: clientsSetXrayUuid,
     setNaivePassword: clientsSetNaivePassword,
     setHysteriaPassword: clientsSetHysteriaPassword,
+    setMieruPassword: clientsSetMieruPassword,
     getByName: clientsGetByName,
   },
   vpnPools: {

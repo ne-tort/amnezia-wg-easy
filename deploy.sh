@@ -176,6 +176,12 @@ if ! docker build -t amnezia-xray ./amnezia-xray; then
   exit 1
 fi
 
+echo "[deploy] Building amnezia-mieru image (mita; container not started)..."
+if ! docker build -t amnezia-mieru ./amnezia-mieru; then
+  echo "[deploy] ERROR: amnezia-mieru image build failed (required for Mieru toggle from the panel)" >&2
+  exit 1
+fi
+
 echo "[deploy] Building amnezia-hysteria image (Hysteria2; container not started)..."
 if ! docker build -t amnezia-hysteria ./amnezia-hysteria; then
   echo "[deploy] ERROR: amnezia-hysteria image build failed (required for Hysteria toggle from the panel)" >&2

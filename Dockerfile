@@ -79,6 +79,8 @@ COPY amnezia-dns/Dockerfile /opt/amnezia/amnezia-dns/Dockerfile
 # Xray VLESS Reality image sources (stdin docker build from panel; deploy.sh also pre-builds).
 COPY amnezia-xray/Dockerfile amnezia-xray/start.sh /opt/amnezia/xray/
 COPY amnezia-hysteria/Dockerfile /opt/amnezia/hysteria/
+COPY amnezia-naive/Dockerfile amnezia-naive/start.sh /opt/amnezia/naive/
+COPY amnezia-mieru/Dockerfile amnezia-mieru/start.sh /opt/amnezia/mieru/
 
 WORKDIR /app
 CMD ["/entrypoint.sh"]

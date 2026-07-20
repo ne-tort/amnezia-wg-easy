@@ -855,6 +855,54 @@
               </svg>
               <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">DNS</span>
             </button>
+            <!-- Amnezia Mieru -->
+            <button v-if="canManageMieru" type="button" @click="toggleAmneziaMieru()"
+              :disabled="amneziaMieruBusy"
+              class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              :class="{
+                'is-warn': amneziaMieruPhase === 'error' || amneziaMieruPhase === 'degraded' || (amneziaMieruPhase === 'running' && !amneziaMieruHealthy),
+                'is-on': amneziaMieruHealthy && amneziaMieruPhase === 'running',
+              }"
+              :title="amneziaMieruHeaderTitle()">
+              <svg v-if="amneziaMieruBusy || amneziaMieruPhase === 'installing' || amneziaMieruPhase === 'removing'"
+                class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">Mieru</span>
+            </button>
+            <!-- Amnezia Hysteria2 -->
+            <button v-if="canManageHysteria" type="button" @click="toggleAmneziaHysteria()"
+              :disabled="amneziaHysteriaBusy"
+              class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              :class="{
+                'is-warn': amneziaHysteriaPhase === 'error' || amneziaHysteriaPhase === 'degraded' || (amneziaHysteriaPhase === 'running' && !amneziaHysteriaHealthy),
+                'is-on': amneziaHysteriaHealthy && amneziaHysteriaPhase === 'running',
+              }"
+              :title="amneziaHysteriaHeaderTitle()">
+              <svg v-if="amneziaHysteriaBusy || amneziaHysteriaPhase === 'installing' || amneziaHysteriaPhase === 'removing'"
+                class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">Hy2</span>
+            </button>
+            <!-- Amnezia Naive -->
+            <button v-if="canManageNaive" type="button" @click="toggleAmneziaNaive()"
+              :disabled="amneziaNaiveBusy"
+              class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
+              :class="{
+                'is-warn': amneziaNaivePhase === 'error' || amneziaNaivePhase === 'degraded' || (amneziaNaivePhase === 'running' && !amneziaNaiveHealthy),
+                'is-on': amneziaNaiveHealthy && amneziaNaivePhase === 'running',
+              }"
+              :title="amneziaNaiveHeaderTitle()">
+              <svg v-if="amneziaNaiveBusy || amneziaNaivePhase === 'installing' || amneziaNaivePhase === 'removing'"
+                class="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <span v-else class="text-[10px] font-semibold tracking-tight leading-none select-none">Naive</span>
+            </button>
             <!-- Language -->
             <select v-model="currentLocale" @change="setLocale(currentLocale)"
               class="select-no-arrow h-8 min-w-[3rem] w-16 flex-shrink-0 rounded-full bg-gray-200 dark:bg-neutral-700 text-gray-800 dark:text-neutral-200 text-sm font-medium px-1 border-0 cursor-pointer hover:bg-gray-300 dark:hover:bg-neutral-600 transition focus:ring-2 focus:ring-red-800 dark:focus:ring-red-600 focus:outline-none text-center">
@@ -1464,9 +1512,13 @@
         <div v-if="amneziaDnsInstallOpen" class="modal-root">
           <div class="modal-backdrop" @click="closeAmneziaDnsInstall"></div>
           <div class="modal-panel modal-panel-dns" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-dns-install-title">
-            <h3 id="modal-dns-install-title" class="modal-title">{{ $t('dnsInstallTitle') }}</h3>
+            <h3 id="modal-dns-install-title" class="modal-title">{{ amneziaDnsModalMode === 'manage' ? $t('dnsManageTitle') : $t('dnsInstallTitle') }}</h3>
             <div class="modal-body">
-              <ul class="dns-profile-list thin-scroll" role="listbox" :aria-activedescendant="'dns-profile-' + amneziaDnsInstallSelected">
+              <div v-if="amneziaDnsModalMode === 'manage' && amneziaDnsProfile" class="text-sm text-gray-700 dark:text-neutral-300 space-y-2">
+                <p><span class="text-gray-500 dark:text-neutral-400">{{ $t('dnsManageProfile') }}:</span> {{ amneziaDnsProfile.name }}</p>
+                <p class="text-xs text-gray-500 dark:text-neutral-400">{{ formatDnsProfileEndpoints(amneziaDnsProfile) }}</p>
+              </div>
+              <ul v-else class="dns-profile-list thin-scroll" role="listbox" :aria-activedescendant="'dns-profile-' + amneziaDnsInstallSelected">
                 <li v-for="p in amneziaDnsProfiles" :key="p.id" :id="'dns-profile-' + p.id" role="option"
                   :aria-selected="amneziaDnsInstallSelected === p.id"
                   :aria-disabled="p.available === false">
@@ -1504,7 +1556,11 @@
               </ul>
             </div>
             <div class="modal-footer">
-              <button type="button" @click="confirmAmneziaDnsInstall" :disabled="!amneziaDnsInstallSelected || amneziaDnsBusy"
+              <button v-if="amneziaDnsModalMode === 'manage'" type="button" @click="confirmAmneziaDnsDisable" :disabled="amneziaDnsBusy"
+                class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
+                {{ $t('dnsUninstall') }}
+              </button>
+              <button v-else type="button" @click="confirmAmneziaDnsInstall" :disabled="!amneziaDnsInstallSelected || amneziaDnsBusy"
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
                 {{ $t('dnsInstallConfirm') }}
               </button>
@@ -1521,8 +1577,8 @@
           <div class="modal-backdrop" @click="closeAmneziaXrayInstall"></div>
           <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-xray-install-title">
             <div class="modal-title-row">
-              <h3 id="modal-xray-install-title" class="modal-title modal-title-inline">{{ $t('xrayInstallTitle') }}</h3>
-              <button type="button" class="icon-btn-sm" :title="$t('xrayResetKeys')"
+              <h3 id="modal-xray-install-title" class="modal-title modal-title-inline">{{ amneziaXrayModalMode === 'manage' ? $t('xrayManageTitle') : $t('xrayInstallTitle') }}</h3>
+              <button v-if="amneziaXrayModalMode !== 'manage'" type="button" class="icon-btn-sm" :title="$t('xrayResetKeys')"
                 @click="confirmAmneziaXrayReset" :disabled="amneziaXrayBusy">
                 <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -1532,14 +1588,14 @@
             <div class="modal-body">
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayAddress') }}</label>
-                <input v-model.trim="amneziaXrayAddress" type="text"
+                <input v-model.trim="amneziaXrayAddress" type="text" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
                   :placeholder="$t('xrayAddressPlaceholder')" />
               </div>
               <div>
                 <div class="flex items-center justify-between gap-2 mb-1">
                   <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ $t('xraySni') }}</label>
-                  <button type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
+                  <button v-if="amneziaXrayModalMode !== 'manage'" type="button" class="icon-btn-sm icon-btn-badge" :title="$t('xraySniFind')"
                     @click="openSniFinder()" :disabled="amneziaXrayBusy">
                     <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -1547,36 +1603,41 @@
                     <span v-if="sniFinderAliveCount > 0" class="icon-btn-badge-count">{{ sniFinderAliveCount }}</span>
                   </button>
                 </div>
-                <input v-model.trim="amneziaXraySni" type="text" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <input v-model.trim="amneziaXraySni" type="text" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayFingerprint') }}</label>
-                <select v-model="amneziaXrayFingerprint" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                <select v-model="amneziaXrayFingerprint" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
                   <option v-for="fp in amneziaXrayFingerprints" :key="fp" :value="fp">{{ fp }}</option>
                 </select>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayFlow') }}</label>
-                <select v-model="amneziaXrayFlow" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                <select v-model="amneziaXrayFlow" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
                   <option v-for="f in amneziaXrayFlows" :key="String(f.value)" :value="f.value">{{ f.label }}</option>
                 </select>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPublicPort') }}</label>
-                <input v-model="amneziaXrayPublicPort" type="number" min="1" max="65535" inputmode="numeric"
+                <input v-model="amneziaXrayPublicPort" type="number" min="1" max="65535" inputmode="numeric" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
                 <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('xrayPublicPortHint') }}</p>
               </div>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayPort') }}</label>
-                <input v-model="amneziaXrayPort" type="text" inputmode="numeric"
+                <input v-model="amneziaXrayPort" type="text" inputmode="numeric" :readonly="amneziaXrayModalMode === 'manage'" :disabled="amneziaXrayModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
                   placeholder="auto" />
                 <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('xrayPortHint') }}</p>
               </div>
             </div>
             <div class="modal-footer flex-wrap">
-              <button type="button" @click="confirmAmneziaXrayInstall"
+              <button v-if="amneziaXrayModalMode === 'manage'" type="button" @click="confirmAmneziaXrayDisable"
+                :disabled="amneziaXrayBusy"
+                class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
+                {{ $t('xrayUninstall') }}
+              </button>
+              <button v-else type="button" @click="confirmAmneziaXrayInstall"
                 :disabled="!amneziaXraySni || !amneziaXrayAddress || amneziaXrayBusy || !isValidAmneziaXrayPort || !isValidAmneziaXrayPublicPort"
                 class="bg-red-800 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 px-4 rounded transition">
                 {{ $t('xrayInstallConfirm') }}
@@ -1585,6 +1646,118 @@
                 class="bg-gray-200 dark:bg-neutral-600 hover:bg-gray-300 dark:hover:bg-neutral-500 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">
                 {{ $t('xrayInstallCancel') }}
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mieru install/manage modal -->
+        <div v-if="amneziaMieruInstallOpen" class="modal-root">
+          <div class="modal-backdrop" @click="closeAmneziaMieruInstall"></div>
+          <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true">
+            <h3 class="modal-title">{{ amneziaMieruModalMode === 'manage' ? $t('mieruManageTitle') : $t('mieruInstallTitle') }}</h3>
+            <div class="modal-body">
+              <div v-if="amneziaMieruClockWarning" class="text-xs text-amber-700 dark:text-amber-300 mb-2">{{ amneziaMieruClockWarning }}</div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruAddress') }}</label>
+                <input v-model.trim="amneziaMieruAddress" type="text" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruProtocol') }}</label>
+                <select v-model="amneziaMieruProtocol" :disabled="amneziaMieruModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                  <option v-for="p in amneziaMieruProtocols" :key="p" :value="p">{{ p }}</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruPublicPort') }}</label>
+                <input v-model="amneziaMieruPublicPort" type="number" min="1" max="65535" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+            </div>
+            <div class="modal-footer flex-wrap">
+              <button v-if="amneziaMieruModalMode === 'manage'" type="button" @click="confirmAmneziaMieruDisable" :disabled="amneziaMieruBusy"
+                class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('mieruUninstall') }}</button>
+              <button v-else type="button" @click="confirmAmneziaMieruInstall"
+                :disabled="!amneziaMieruAddress || amneziaMieruBusy || !isValidAmneziaMieruPublicPort"
+                class="bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white py-2 px-4 rounded transition">{{ $t('mieruInstallConfirm') }}</button>
+              <button type="button" @click="closeAmneziaMieruInstall"
+                class="bg-gray-200 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('dnsInstallCancel') }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hysteria install/manage modal -->
+        <div v-if="amneziaHysteriaInstallOpen" class="modal-root">
+          <div class="modal-backdrop" @click="closeAmneziaHysteriaInstall"></div>
+          <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true">
+            <h3 class="modal-title">{{ amneziaHysteriaModalMode === 'manage' ? $t('hysteriaManageTitle') : $t('hysteriaInstallTitle') }}</h3>
+            <div class="modal-body">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaAddress') }}</label>
+                <input v-model.trim="amneziaHysteriaAddress" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaSni') }}</label>
+                <input v-model.trim="amneziaHysteriaSni" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaPublicPort') }}</label>
+                <input v-model="amneziaHysteriaPublicPort" type="number" min="1" max="65535" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('hysteriaPublicPortHint') }}</p>
+              </div>
+            </div>
+            <div class="modal-footer flex-wrap">
+              <button v-if="amneziaHysteriaModalMode === 'manage'" type="button" @click="confirmAmneziaHysteriaDisable" :disabled="amneziaHysteriaBusy"
+                class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('hysteriaUninstall') }}</button>
+              <button v-else type="button" @click="confirmAmneziaHysteriaInstall"
+                :disabled="!amneziaHysteriaSni || !amneziaHysteriaAddress || amneziaHysteriaBusy || !isValidAmneziaHysteriaPublicPort"
+                class="bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white py-2 px-4 rounded transition">{{ $t('hysteriaInstallConfirm') }}</button>
+              <button type="button" @click="closeAmneziaHysteriaInstall"
+                class="bg-gray-200 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('dnsInstallCancel') }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Naive install/manage modal -->
+        <div v-if="amneziaNaiveInstallOpen" class="modal-root">
+          <div class="modal-backdrop" @click="closeAmneziaNaiveInstall"></div>
+          <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true">
+            <h3 class="modal-title">{{ amneziaNaiveModalMode === 'manage' ? $t('naiveManageTitle') : $t('naiveInstallTitle') }}</h3>
+            <div class="modal-body">
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naiveAddress') }}</label>
+                <input v-model.trim="amneziaNaiveAddress" type="text" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naiveSni') }}</label>
+                <input v-model.trim="amneziaNaiveSni" type="text" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('naiveSniHint') }}</p>
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naivePublicPort') }}</label>
+                <input v-model="amneziaNaivePublicPort" type="number" min="1" max="65535" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+              </div>
+              <div>
+                <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naiveProbeDomain') }}</label>
+                <input v-model.trim="amneziaNaiveProbeDomain" type="text" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="optional" />
+              </div>
+            </div>
+            <div class="modal-footer flex-wrap">
+              <button v-if="amneziaNaiveModalMode === 'manage'" type="button" @click="confirmAmneziaNaiveDisable" :disabled="amneziaNaiveBusy"
+                class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('naiveUninstall') }}</button>
+              <button v-else type="button" @click="confirmAmneziaNaiveInstall"
+                :disabled="!amneziaNaiveSni || !amneziaNaiveAddress || amneziaNaiveBusy || !isValidAmneziaNaivePublicPort"
+                class="bg-red-800 hover:bg-red-700 disabled:opacity-50 text-white py-2 px-4 rounded transition">{{ $t('naiveInstallConfirm') }}</button>
+              <button type="button" @click="closeAmneziaNaiveInstall"
+                class="bg-gray-200 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('dnsInstallCancel') }}</button>
             </div>
           </div>
         </div>
@@ -2308,9 +2481,10 @@
   <script src="./js/vendor/vue-apexcharts.min.js"></script>
   <script src="./js/vendor/sha256.min.js"></script>
   <script src="./js/vendor/timeago.full.min.js"></script>
-  <script src="./js/api.js?v=7"></script>
-  <script src="./js/i18n.js?v=8"></script>
-  <script src="./js/app.js?v=7"></script>
+  <script src="./js/api.js?v=8"></script>
+  <script src="./js/i18n.js?v=9"></script>
+  <script src="./js/sidecarPanels.js?v=1"></script>
+  <script src="./js/app.js?v=8"></script>
 </body>
 
 </html>

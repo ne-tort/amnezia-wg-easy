@@ -448,6 +448,66 @@ class API {
     return this.call({ method: 'post', path: '/amnezia-xray/reset' });
   }
 
+  async getAmneziaMieruStatus() {
+    return this.call({ method: 'get', path: '/amnezia-mieru' });
+  }
+
+  async enableAmneziaMieru(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-mieru/enable', body });
+  }
+
+  async disableAmneziaMieru() {
+    return this.call({ method: 'post', path: '/amnezia-mieru/disable' });
+  }
+
+  async forceCleanupAmneziaMieru() {
+    return this.call({ method: 'post', path: '/amnezia-mieru/force-cleanup' });
+  }
+
+  async getClientMieru(clientId) {
+    return this.call({ method: 'get', path: `/wireguard/client/${clientId}/mieru` });
+  }
+
+  async getAmneziaHysteriaStatus() {
+    return this.call({ method: 'get', path: '/amnezia-hysteria' });
+  }
+
+  async enableAmneziaHysteria(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-hysteria/enable', body });
+  }
+
+  async disableAmneziaHysteria() {
+    return this.call({ method: 'post', path: '/amnezia-hysteria/disable' });
+  }
+
+  async forceCleanupAmneziaHysteria() {
+    return this.call({ method: 'post', path: '/amnezia-hysteria/force-cleanup' });
+  }
+
+  async getClientHysteria(clientId) {
+    return this.call({ method: 'get', path: `/wireguard/client/${clientId}/hysteria` });
+  }
+
+  async getAmneziaNaiveStatus() {
+    return this.call({ method: 'get', path: '/amnezia-naive' });
+  }
+
+  async enableAmneziaNaive(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-naive/enable', body });
+  }
+
+  async disableAmneziaNaive() {
+    return this.call({ method: 'post', path: '/amnezia-naive/disable' });
+  }
+
+  async forceCleanupAmneziaNaive() {
+    return this.call({ method: 'post', path: '/amnezia-naive/force-cleanup' });
+  }
+
+  async getClientNaive(clientId) {
+    return this.call({ method: 'get', path: `/wireguard/client/${clientId}/naive` });
+  }
+
   async getXraySniCache({ ensureBg } = {}) {
     const qs = ensureBg ? '?ensureBg=1' : '';
     return this.call({ method: 'get', path: `/amnezia-xray/sni-cache${qs}` });

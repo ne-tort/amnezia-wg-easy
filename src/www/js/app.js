@@ -199,6 +199,7 @@ new Vue({
     amneziaDnsProfilesError: null,
     amneziaDnsInstallOpen: false,
     amneziaDnsInstallSelected: null,
+    amneziaDnsModalMode: 'install',
     amneziaXrayAvailable: false,
     amneziaXrayHealthy: false,
     amneziaXraySmokeOk: false,
@@ -215,12 +216,14 @@ new Vue({
     amneziaXrayMode: null,
     amneziaXrayDemuxPeers: [],
     amneziaXrayInstallOpen: false,
+    amneziaXrayModalMode: 'install',
     amneziaXrayFingerprints: ['chrome', 'firefox', 'safari', 'ios', 'android', 'edge', 'random'],
     amneziaXrayFlows: [
       { value: 'xtls-rprx-vision', label: 'xtls-rprx-vision' },
       { value: 'xtls-rprx-vision-udp443', label: 'xtls-rprx-vision-udp443' },
       { value: '', label: '(none)' },
     ],
+    ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.initialState() : {}),
     sniFinderDefaultSni: null,
     sniFinderOpen: false,
     sniFinderPublicIp: null,
@@ -720,8 +723,8 @@ new Vue({
       if (phase === 'running') {
         const name = this.amneziaDnsProfile && this.amneziaDnsProfile.name;
         return name
-          ? `${this.$t('dnsHeaderDisable')} (${name})`
-          : this.$t('dnsHeaderDisable');
+          ? `${this.$t('dnsHeaderManage')} (${name})`
+          : this.$t('dnsHeaderManage');
       }
       return this.$t('dnsHeaderEnable');
     },
@@ -761,8 +764,10 @@ new Vue({
     closeAmneziaDnsInstall() {
       this.amneziaDnsInstallOpen = false;
       this.amneziaDnsInstallSelected = null;
+      this.amneziaDnsModalMode = 'install';
     },
-    async openAmneziaDnsInstall() {
+    async openAmneziaDnsInstall({ mode = 'install' } = {}) {
+      this.amneziaDnsModalMode = mode;
       this.amneziaDnsProfilesError = null;
       try {
         // Cached server-side probes (5 min TTL) — no blocking wait on open.
@@ -811,26 +816,32 @@ new Vue({
         }
       }
     },
+    async confirmAmneziaDnsDisable() {
+      if (this.amneziaDnsBusy) return;
+      if (!window.confirm(this.$t('dnsUninstallConfirm'))) return;
+      this.closeAmneziaDnsInstall();
+      this.amneziaDnsBusy = true;
+      this.ensureAmneziaDnsPoll();
+      try {
+        await this.withAmneziaDnsTimeout(this.api.disableAmneziaDns(), 60000);
+        await this.refreshAmneziaDnsStatus();
+        await this.refresh();
+      } catch (err) {
+        this.amneziaDnsError = (err && err.message) || this.$t('dnsToggleFailed');
+        alert(this.amneziaDnsError);
+        await this.refreshAmneziaDnsStatus();
+      } finally {
+        this.amneziaDnsBusy = false;
+        if (!['installing', 'removing'].includes(this.amneziaDnsPhase)) {
+          this.stopAmneziaDnsPoll();
+        }
+      }
+    },
     async toggleAmneziaDns() {
       if (this.amneziaDnsBusy) return;
       const phase = this.amneziaDnsPhase;
       if (phase === 'running' || phase === 'degraded') {
-        this.amneziaDnsBusy = true;
-        this.ensureAmneziaDnsPoll();
-        try {
-          await this.withAmneziaDnsTimeout(this.api.disableAmneziaDns(), 60000);
-          await this.refreshAmneziaDnsStatus();
-          await this.refresh();
-        } catch (err) {
-          this.amneziaDnsError = (err && err.message) || this.$t('dnsToggleFailed');
-          alert(this.amneziaDnsError);
-          await this.refreshAmneziaDnsStatus();
-        } finally {
-          this.amneziaDnsBusy = false;
-          if (!['installing', 'removing'].includes(this.amneziaDnsPhase)) {
-            this.stopAmneziaDnsPoll();
-          }
-        }
+        await this.openAmneziaDnsInstall({ mode: 'manage' });
         return;
       }
       if (phase === 'error') {
@@ -850,7 +861,7 @@ new Vue({
         }
         return;
       }
-      await this.openAmneziaDnsInstall();
+      await this.openAmneziaDnsInstall({ mode: 'install' });
     },
     applyAmneziaXrayCapability(caps) {
       const c = caps || {};
@@ -867,8 +878,8 @@ new Vue({
         || st.phase === 'installing'
         || st.phase === 'removing';
       this.amneziaXrayError = st.lastError || null;
-      // While install modal is open, keep the user's draft — status/clients poll must not clobber fields.
-      if (!this.amneziaXrayInstallOpen) {
+      // While install/manage modal is open, keep draft — poll must not clobber fields.
+      if (!this.amneziaXrayInstallOpen && this.amneziaXrayModalMode !== 'manage') {
         if (st.sniStored) this.amneziaXraySni = st.sniStored;
         else if (st.sni && !this.amneziaXraySni) this.amneziaXraySni = st.sni;
         if (st.addressStored) this.amneziaXrayAddress = st.addressStored;
@@ -928,13 +939,15 @@ new Vue({
       if (phase === 'degraded' || (phase === 'running' && !this.amneziaXrayHealthy)) {
         return this.$t('xrayHeaderDegraded');
       }
-      if (phase === 'running' && this.amneziaXrayHealthy) return this.$t('xrayHeaderDisable');
+      if (phase === 'running' && this.amneziaXrayHealthy) return this.$t('xrayHeaderManage');
       return this.$t('xrayHeaderEnable');
     },
     closeAmneziaXrayInstall() {
       this.amneziaXrayInstallOpen = false;
+      this.amneziaXrayModalMode = 'install';
     },
-    openAmneziaXrayInstall() {
+    openAmneziaXrayInstall({ mode = 'install' } = {}) {
+      this.amneziaXrayModalMode = mode;
       // Prefill from persisted status; address defaults to how the panel was opened.
       Promise.all([
         this.refreshAmneziaXrayStatus(),
@@ -1174,26 +1187,32 @@ new Vue({
         this.sniFinderError = code ? `[${code}] ${msg}` : msg;
       }
     },
+    async confirmAmneziaXrayDisable() {
+      if (!this.canManageXray || this.amneziaXrayBusy) return;
+      if (!window.confirm(this.$t('xrayUninstallConfirm'))) return;
+      this.closeAmneziaXrayInstall();
+      this.amneziaXrayBusy = true;
+      this.ensureAmneziaXrayPoll();
+      try {
+        await this.withAmneziaDnsTimeout(this.api.disableAmneziaXray(), 60000);
+        await this.refreshAmneziaXrayStatus();
+        await this.refresh();
+      } catch (err) {
+        this.amneziaXrayError = (err && err.message) || this.$t('xrayToggleFailed');
+        alert(this.amneziaXrayError);
+        await this.refreshAmneziaXrayStatus();
+      } finally {
+        this.amneziaXrayBusy = false;
+        if (!['installing', 'removing'].includes(this.amneziaXrayPhase)) {
+          this.stopAmneziaXrayPoll();
+        }
+      }
+    },
     async toggleAmneziaXray() {
       if (!this.canManageXray || this.amneziaXrayBusy) return;
       const phase = this.amneziaXrayPhase;
       if (phase === 'running' || phase === 'degraded') {
-        this.amneziaXrayBusy = true;
-        this.ensureAmneziaXrayPoll();
-        try {
-          await this.withAmneziaDnsTimeout(this.api.disableAmneziaXray(), 60000);
-          await this.refreshAmneziaXrayStatus();
-          await this.refresh();
-        } catch (err) {
-          this.amneziaXrayError = (err && err.message) || this.$t('xrayToggleFailed');
-          alert(this.amneziaXrayError);
-          await this.refreshAmneziaXrayStatus();
-        } finally {
-          this.amneziaXrayBusy = false;
-          if (!['installing', 'removing'].includes(this.amneziaXrayPhase)) {
-            this.stopAmneziaXrayPoll();
-          }
-        }
+        await this.openAmneziaXrayInstall({ mode: 'manage' });
         return;
       }
       if (phase === 'error') {
@@ -1213,7 +1232,7 @@ new Vue({
         }
         return;
       }
-      this.openAmneziaXrayInstall();
+      this.openAmneziaXrayInstall({ mode: 'install' });
     },
     getClientUseServerDns(client) {
       return this.clientUseServerDns[client.id] !== false;
@@ -1449,6 +1468,9 @@ new Vue({
         this.refreshError = null;
         this.applyAmneziaDnsCapability(res.serverCapabilities);
         this.applyAmneziaXrayCapability(res.serverCapabilities);
+        if (typeof this.applySidecarCapabilities === 'function') {
+          this.applySidecarCapabilities(res.serverCapabilities);
+        }
         if (res.serverJunk) this.serverJunk = res.serverJunk;
         const list = Array.isArray(res.clients) ? res.clients : [];
         this.clients = list.map((client) => {
@@ -2408,6 +2430,7 @@ new Vue({
     timeago: (value) => {
       return timeago.format(value, i18n.locale);
     },
+    ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.methods : {}),
   },
   created() {
     if (this.clientDownloadFormat == null || typeof this.clientDownloadFormat !== 'object') {
@@ -2499,6 +2522,7 @@ new Vue({
     canManageXray() {
       return this.hasCapability('system.xray');
     },
+    ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.computed : {}),
     isValidAmneziaXrayPort() {
       const raw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
       if (raw === '') return true;

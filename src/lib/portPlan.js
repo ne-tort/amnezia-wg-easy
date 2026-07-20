@@ -151,6 +151,22 @@ function collectServices() {
     });
   }
 
+  if (desired('amnezia_mieru_desired')) {
+    const pub = parsePort(
+      setting('amnezia_mieru_public_port', '') || process.env.MIERU_PUBLIC_PORT || '3080',
+      3080,
+    );
+    const listen = parsePort(setting('amnezia_mieru_port', ''), 0);
+    services.push({
+      id: 'mieru',
+      publicPort: pub,
+      listenPort: listen,
+      sni: '',
+      upstream: listen ? `amnezia-mieru:${listen}` : null,
+      alwaysOn: false,
+    });
+  }
+
   return services;
 }
 

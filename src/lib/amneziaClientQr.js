@@ -180,6 +180,24 @@ function buildAmneziaRoot(iniText, description, options = {}) {
       /* optional */
     }
   }
+  if (options.includeAmneziaHysteria && options.hysteriaClient) {
+    try {
+      const { buildAmneziaHysteriaContainer } = require('./amneziaHysteria');
+      const el = buildAmneziaHysteriaContainer(options.hysteriaClient);
+      if (el) containers.push(el);
+    } catch {
+      /* optional */
+    }
+  }
+  if (options.includeAmneziaNaive && options.naiveClient) {
+    try {
+      const { buildAmneziaNaiveContainer } = require('./amneziaNaive');
+      const el = buildAmneziaNaiveContainer(options.naiveClient);
+      if (el) containers.push(el);
+    } catch {
+      /* optional */
+    }
+  }
 
   /** @type {Record<string, unknown>} */
   const root = {

@@ -235,3 +235,38 @@ test('writeStreamConfigs: demux server includes Docker DNS resolver', () => {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('computePlan: mieru high port → direct TCP', () => {
+  const { portPlan, settings } = loadPortPlan();
+  settings.amnezia_mieru_desired = '1';
+  settings.amnezia_mieru_public_port = '3080';
+  settings.amnezia_mieru_port = '35001';
+  const plan = portPlan.computePlan();
+  assert.equal(plan.modes.mieru, 'direct');
+  assert.ok(plan.direct.some((d) => d.service === 'mieru' && d.publicPort === 3080));
+});
+
+test('computePlan: naive + xray on 443 → demux', () => {
+  const { portPlan, settings } = loadPortPlan({ PANEL_HTTPS_PORT: '443' });
+  settings.amnezia_xray_desired = '1';
+  settings.amnezia_xray_sni = 'www.gov.uk';
+  settings.amnezia_xray_public_port = '443';
+  settings.amnezia_naive_desired = '1';
+  settings.amnezia_naive_sni = 'naive.example.com';
+  settings.amnezia_naive_public_port = '443';
+  const plan = portPlan.computePlan();
+  assert.equal(plan.modes.naive, 'demux');
+  assert.equal(plan.modes.xray, 'demux');
+  const block = plan.demuxPorts.find((d) => d.port === 443);
+  assert.ok(block);
+  assert.ok(block.routes.some((r) => r.service === 'naive' && r.upstream === 'amnezia-naive:8443'));
+});
+
+test('computePlan: hysteria → udpDirect', () => {
+  const { portPlan, settings } = loadPortPlan();
+  settings.amnezia_hysteria_desired = '1';
+  settings.amnezia_hysteria_public_port = '443';
+  const plan = portPlan.computePlan();
+  assert.ok(Array.isArray(plan.udpDirect));
+  assert.ok(plan.udpDirect.some((u) => u.id === 'hysteria' && u.publicPort === 443 && u.protocol === 'udp'));
+});

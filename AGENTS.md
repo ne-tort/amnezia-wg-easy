@@ -36,3 +36,17 @@ Nginx: `WEBUI_PUBLIC_PREFIX=/panel` (UI+API), `SUB_PUBLIC_PREFIX=/sub`, `NGINX_R
 - Export: `src/lib/amneziaClientQr.js`
 - Port plan: `src/lib/portPlan.js`
 - Nginx: `nginx/entrypoint.sh`, `nginx/panel-subpath.conf.template`
+
+## Epic: Mieru / Hysteria2 / Naive sidecars
+
+Panel orchestrates Docker sidecars (like Xray/DNS): `docker run` from `amneziaMieru.js`, `amneziaHysteria.js`, `amneziaNaive.js`. Shared helpers: `src/lib/sidecarOrchestrator.js`. Header buttons: green → **manage modal** (readonly + Delete), not instant disable.
+
+| Protocol | Image | Transport | Port plan |
+|----------|-------|-----------|-----------|
+| **Mieru** | `amnezia-mieru` (mita) | TCP direct | high port 20000–50000 or `MIERU_PUBLIC_PORT` |
+| **Hysteria2** | `amnezia-hysteria` | UDP/QUIC | `portPlan.udpDirect` → `-p 443:443/udp` |
+| **Naive** | `amnezia-naive` (Caddy forwardproxy) | TCP TLS demux | dedicated FQDN SNI → internal `:8443` |
+
+Per-client: `clients.mieru_password`, `hysteria_password`, `naive_password`. Links: `mierus://`, `hy2://`, `naive+json://`. `install.sh`: `ENABLE_MIERU/HYSTERIA/NAIVE=0` default; interactive default **n**.
+
+Deploy builds: `amnezia-mieru`, `amnezia-hysteria`, `amnezia-naive` (+ existing xray/dns). Open host UDP for `HYSTERIA_PUBLIC_PORT` via `scripts/open-ports.sh`.

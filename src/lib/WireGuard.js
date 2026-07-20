@@ -27,6 +27,18 @@ const {
   syncClientsFromDb: syncAmneziaXrayClients,
   ensureClientUuids: ensureAmneziaXrayClientUuids,
 } = require('./amneziaXray');
+const {
+  isAmneziaMieruAvailable,
+  getStatus: getAmneziaMieruStatus,
+} = require('./amneziaMieru');
+const {
+  isAmneziaHysteriaAvailable,
+  getStatus: getAmneziaHysteriaStatus,
+} = require('./amneziaHysteria');
+const {
+  isAmneziaNaiveAvailable,
+  getStatus: getAmneziaNaiveStatus,
+} = require('./amneziaNaive');
 const { computeClientPresence } = require('./clientPresence');
 const { CLIENT_ONLINE_WINDOW_MS } = require('../config');
 
@@ -331,6 +343,7 @@ const WireGuard = class {
         xrayUuid: c.xray_uuid || null,
         hysteriaPassword: c.hysteria_password || null,
         naivePassword: c.naive_password || null,
+        mieruPassword: c.mieru_password || null,
       };
     }
     return { server, clients };
@@ -637,6 +650,7 @@ PersistentKeepalive = ${WG_PERSISTENT_KEEPALIVE}
       xray_uuid: c.xrayUuid || null,
       hysteria_password: c.hysteriaPassword || null,
       naive_password: c.naivePassword || null,
+      mieru_password: c.mieruPassword || null,
     }));
     db.clients.replaceAll(clientRows);
 
@@ -718,6 +732,12 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
     const amneziaDnsAvailable = amneziaDnsStatus.available === true;
     const amneziaXrayStatus = getAmneziaXrayStatus();
     const amneziaXrayAvailable = amneziaXrayStatus.available === true;
+    const amneziaMieruStatus = getAmneziaMieruStatus();
+    const amneziaMieruAvailable = amneziaMieruStatus.available === true;
+    const amneziaHysteriaStatus = getAmneziaHysteriaStatus();
+    const amneziaHysteriaAvailable = amneziaHysteriaStatus.available === true;
+    const amneziaNaiveStatus = getAmneziaNaiveStatus();
+    const amneziaNaiveAvailable = amneziaNaiveStatus.available === true;
     const poolCidrs = db.vpnPools.list().map((p) => p.cidr);
     const clients = Object.entries(config.clients).map(([clientId, client]) => ({
       id: clientId,
@@ -840,6 +860,56 @@ ${client.preSharedKey ? `PresharedKey = ${client.preSharedKey}\n` : ''}AllowedIP
           demuxPeers: amneziaXrayStatus.demuxPeers,
           healthy: amneziaXrayStatus.healthy === true,
           smoke: amneziaXrayStatus.smoke || null,
+        },
+        mieruAvailable: amneziaMieruAvailable,
+        mieru: {
+          phase: amneziaMieruStatus.phase,
+          desired: amneziaMieruStatus.desired,
+          lastError: amneziaMieruStatus.lastError,
+          busy: amneziaMieruStatus.busy,
+          updatedAt: amneziaMieruStatus.updatedAt,
+          address: amneziaMieruStatus.address,
+          addressStored: amneziaMieruStatus.addressStored,
+          protocol: amneziaMieruStatus.protocol,
+          port: amneziaMieruStatus.port,
+          publicPort: amneziaMieruStatus.publicPort,
+          healthy: amneziaMieruStatus.healthy === true,
+          clockWarning: amneziaMieruStatus.clockWarning || null,
+          smoke: amneziaMieruStatus.smoke || null,
+        },
+        hysteriaAvailable: amneziaHysteriaAvailable,
+        hysteria: {
+          phase: amneziaHysteriaStatus.phase,
+          desired: amneziaHysteriaStatus.desired,
+          lastError: amneziaHysteriaStatus.lastError,
+          busy: amneziaHysteriaStatus.busy,
+          updatedAt: amneziaHysteriaStatus.updatedAt,
+          address: amneziaHysteriaStatus.address,
+          addressStored: amneziaHysteriaStatus.addressStored,
+          sni: amneziaHysteriaStatus.sni,
+          sniStored: amneziaHysteriaStatus.sniStored,
+          publicPort: amneziaHysteriaStatus.publicPort,
+          masqueradeUrl: amneziaHysteriaStatus.masqueradeUrl,
+          healthy: amneziaHysteriaStatus.healthy === true,
+          smoke: amneziaHysteriaStatus.smoke || null,
+        },
+        naiveAvailable: amneziaNaiveAvailable,
+        naive: {
+          phase: amneziaNaiveStatus.phase,
+          desired: amneziaNaiveStatus.desired,
+          lastError: amneziaNaiveStatus.lastError,
+          busy: amneziaNaiveStatus.busy,
+          updatedAt: amneziaNaiveStatus.updatedAt,
+          address: amneziaNaiveStatus.address,
+          addressStored: amneziaNaiveStatus.addressStored,
+          sni: amneziaNaiveStatus.sni,
+          sniStored: amneziaNaiveStatus.sniStored,
+          probeResistanceDomain: amneziaNaiveStatus.probeResistanceDomain,
+          publicPort: amneziaNaiveStatus.publicPort,
+          mode: amneziaNaiveStatus.mode,
+          demuxPeers: amneziaNaiveStatus.demuxPeers,
+          healthy: amneziaNaiveStatus.healthy === true,
+          smoke: amneziaNaiveStatus.smoke || null,
         },
       },
       serverJunk,
@@ -1149,6 +1219,10 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       includeAmneziaDns: dnsAvailable && useServerDns,
       includeAmneziaXray: isAmneziaXrayAvailable(),
       xrayClient: db.clients.getById(clientId) || null,
+      includeAmneziaHysteria: isAmneziaHysteriaAvailable(),
+      hysteriaClient: db.clients.getById(clientId) || null,
+      includeAmneziaNaive: isAmneziaNaiveAvailable(),
+      naiveClient: db.clients.getById(clientId) || null,
     };
 
     const { requested, attempts } = this.__buildQrCapacityAttempts(level);
@@ -1210,6 +1284,10 @@ Endpoint = ${await this.__getClientEndpointLine()}`;
       includeAmneziaDns: dnsAvailable && useServerDns,
       includeAmneziaXray: isAmneziaXrayAvailable(),
       xrayClient: db.clients.getById(clientId) || null,
+      includeAmneziaHysteria: isAmneziaHysteriaAvailable(),
+      hysteriaClient: db.clients.getById(clientId) || null,
+      includeAmneziaNaive: isAmneziaNaiveAvailable(),
+      naiveClient: db.clients.getById(clientId) || null,
     });
   }
 

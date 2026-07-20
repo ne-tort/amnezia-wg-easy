@@ -37,6 +37,9 @@ const {
 const { BankError } = require('./signaturesBank');
 const amneziaDns = require('./amneziaDns');
 const amneziaXray = require('./amneziaXray');
+const amneziaMieru = require('./amneziaMieru');
+const amneziaHysteria = require('./amneziaHysteria');
+const amneziaNaive = require('./amneziaNaive');
 const sniFinder = require('./sniFinder');
 const mtuProfiles = require('./mtuProfiles');
 const { applyFirewall } = require('./firewall');
@@ -1137,6 +1140,137 @@ module.exports = class Server {
           throw sniHttpError(err);
         }
       }))
+      .get('/api/amnezia-mieru', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MIERU);
+        return amneziaMieru.getStatus();
+      }))
+      .post('/api/amnezia-mieru/enable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MIERU);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const status = await amneziaMieru.enable({
+            address: body && body.address,
+            port: body && body.port,
+            publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
+            protocol: body && body.protocol,
+          });
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          if (err && err.status === 409) throw httpError(409, err.message);
+          if (err && err.status === 400) throw httpError(400, err.message);
+          if (err && err.status === 504) throw httpError(504, err.message);
+          throw httpError(500, err.message || 'Amnezia Mieru enable failed');
+        }
+      }))
+      .post('/api/amnezia-mieru/disable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MIERU);
+        try {
+          const status = await amneziaMieru.disable();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Mieru disable failed');
+        }
+      }))
+      .post('/api/amnezia-mieru/force-cleanup', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_MIERU);
+        try {
+          const status = await amneziaMieru.forceCleanup();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Mieru cleanup failed');
+        }
+      }))
+      .get('/api/amnezia-hysteria', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_HYSTERIA);
+        return amneziaHysteria.getStatus();
+      }))
+      .post('/api/amnezia-hysteria/enable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_HYSTERIA);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const status = await amneziaHysteria.enable({
+            address: body && body.address,
+            sni: body && body.sni,
+            publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
+            masqueradeUrl: body && (body.masqueradeUrl != null ? body.masqueradeUrl : body.masquerade_url),
+          });
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          if (err && err.status === 409) throw httpError(409, err.message);
+          if (err && err.status === 400) throw httpError(400, err.message);
+          if (err && err.status === 504) throw httpError(504, err.message);
+          throw httpError(500, err.message || 'Amnezia Hysteria enable failed');
+        }
+      }))
+      .post('/api/amnezia-hysteria/disable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_HYSTERIA);
+        try {
+          const status = await amneziaHysteria.disable();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Hysteria disable failed');
+        }
+      }))
+      .post('/api/amnezia-hysteria/force-cleanup', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_HYSTERIA);
+        try {
+          const status = await amneziaHysteria.forceCleanup();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Hysteria cleanup failed');
+        }
+      }))
+      .get('/api/amnezia-naive', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_NAIVE);
+        return amneziaNaive.getStatus();
+      }))
+      .post('/api/amnezia-naive/enable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_NAIVE);
+        try {
+          const body = await readBody(event).catch(() => ({}));
+          const status = await amneziaNaive.enable({
+            address: body && body.address,
+            sni: body && body.sni,
+            publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
+            probeResistanceDomain: body && (body.probeResistanceDomain != null
+              ? body.probeResistanceDomain
+              : body.probe_resistance_domain),
+          });
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.statusCode) throw err;
+          if (err && err.status === 409) throw httpError(409, err.message);
+          if (err && err.status === 400) throw httpError(400, err.message);
+          if (err && err.status === 504) throw httpError(504, err.message);
+          throw httpError(500, err.message || 'Amnezia Naive enable failed');
+        }
+      }))
+      .post('/api/amnezia-naive/disable', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_NAIVE);
+        try {
+          const status = await amneziaNaive.disable();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Naive disable failed');
+        }
+      }))
+      .post('/api/amnezia-naive/force-cleanup', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_NAIVE);
+        try {
+          const status = await amneziaNaive.forceCleanup();
+          return { success: true, ...status };
+        } catch (err) {
+          if (err && err.status === 409) throw httpError(409, err.message);
+          throw httpError(500, err.message || 'Amnezia Naive cleanup failed');
+        }
+      }))
       .get('/api/port-plan', defineEventHandler((event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_SETTINGS);
         return require('./portPlan').getStatusSummary();
@@ -1192,6 +1326,81 @@ module.exports = class Server {
           clientJson: payload.clientJson,
           subQrSvg,
         };
+      }))
+      .get('/api/wireguard/client/:clientId/mieru', defineEventHandler(async (event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        if (!amneziaMieru.isAmneziaMieruAvailable()) {
+          throw httpError(503, 'Amnezia Mieru is not running');
+        }
+        const client = db.clients.getById(clientId);
+        if (!client) throw httpError(404, 'Client Not Found');
+        amneziaMieru.ensureClientPasswords();
+        const refreshed = db.clients.getById(clientId);
+        const payload = amneziaMieru.getClientMieruPayload(refreshed);
+        if (!payload) throw httpError(503, 'Mieru credentials not ready');
+        let linkQrSvg = null;
+        try {
+          const QRCode = require('qrcode');
+          linkQrSvg = await QRCode.toString(payload.mieruUrl, {
+            type: 'svg',
+            width: 512,
+            errorCorrectionLevel: 'M',
+          });
+        } catch {
+          linkQrSvg = null;
+        }
+        return { ...payload, linkQrSvg };
+      }))
+      .get('/api/wireguard/client/:clientId/hysteria', defineEventHandler(async (event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        if (!amneziaHysteria.isAmneziaHysteriaAvailable()) {
+          throw httpError(503, 'Amnezia Hysteria is not running');
+        }
+        const client = db.clients.getById(clientId);
+        if (!client) throw httpError(404, 'Client Not Found');
+        amneziaHysteria.ensureClientPasswords();
+        const refreshed = db.clients.getById(clientId);
+        const payload = amneziaHysteria.getClientHysteriaPayload(refreshed);
+        if (!payload) throw httpError(503, 'Hysteria credentials not ready');
+        let linkQrSvg = null;
+        try {
+          const QRCode = require('qrcode');
+          linkQrSvg = await QRCode.toString(payload.hy2Url, {
+            type: 'svg',
+            width: 512,
+            errorCorrectionLevel: 'M',
+          });
+        } catch {
+          linkQrSvg = null;
+        }
+        return { ...payload, linkQrSvg };
+      }))
+      .get('/api/wireguard/client/:clientId/naive', defineEventHandler(async (event) => {
+        const clientId = getRouterParam(event, 'clientId');
+        acl.assertClientAccess(event, clientId);
+        if (!amneziaNaive.isAmneziaNaiveAvailable()) {
+          throw httpError(503, 'Amnezia Naive is not running');
+        }
+        const client = db.clients.getById(clientId);
+        if (!client) throw httpError(404, 'Client Not Found');
+        amneziaNaive.ensureClientPasswords();
+        const refreshed = db.clients.getById(clientId);
+        const payload = amneziaNaive.getClientNaivePayload(refreshed);
+        if (!payload) throw httpError(503, 'Naive credentials not ready');
+        let linkQrSvg = null;
+        try {
+          const QRCode = require('qrcode');
+          linkQrSvg = await QRCode.toString(payload.shareUrl, {
+            type: 'svg',
+            width: 512,
+            errorCorrectionLevel: 'M',
+          });
+        } catch {
+          linkQrSvg = null;
+        }
+        return { ...payload, linkQrSvg };
       }))
       .put('/api/wireguard/client/:clientId/firewall-profile', defineEventHandler(async (event) => {
         acl.requireCapability(event, acl.CAP.SYSTEM_FIREWALL);
