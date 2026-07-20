@@ -15,6 +15,16 @@ function sidecarBusyFromPhase(phase, busy) {
   return busy === true || phase === 'installing' || phase === 'removing';
 }
 
+/** Extract human-readable warning from API status objects. */
+function formatSidecarWarning(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value.trim() || null;
+  if (typeof value === 'object' && value.warning && value.message) {
+    return String(value.message).trim() || null;
+  }
+  return null;
+}
+
 function sidecarValidPort(n) {
   const p = Number(n);
   return Number.isInteger(p) && p >= 1 && p <= 65535;
@@ -64,8 +74,8 @@ window.SidecarPanels = {
       amneziaHysteriaObfsPassword: '',
       amneziaHysteriaBandwidthUp: '',
       amneziaHysteriaBandwidthDown: '',
-      amneziaHysteriaCertSource: 'panel',
-      amneziaHysteriaCertSources: ['panel', 'manual_pem', 'manual_path', 'issue_le'],
+      amneziaHysteriaCertSource: 'self_signed',
+      amneziaHysteriaCertSources: ['self_signed', 'issue_le', 'panel', 'manual_pem', 'manual_path'],
       amneziaHysteriaAdvancedOpen: false,
       amneziaHysteriaFieldErrors: {},
 
@@ -126,6 +136,11 @@ window.SidecarPanels = {
       const key = `fieldError_${field}`;
       const translated = this.$t(key);
       return translated !== key ? translated : raw;
+    },
+    certSourceLabel(src) {
+      const key = `certSource_${src}`;
+      const t = this.$t(key);
+      return (t && t !== key) ? t : src;
     },
     clearSidecarFieldErrors(service) {
       if (service === 'mieru') this.amneziaMieruFieldErrors = {};
@@ -221,7 +236,7 @@ window.SidecarPanels = {
       if (st.phase) this.amneziaMieruPhase = st.phase;
       this.amneziaMieruBusy = sidecarBusyFromPhase(st.phase, st.busy);
       this.amneziaMieruError = st.lastError || null;
-      this.amneziaMieruClockWarning = st.clockWarning || null;
+      this.amneziaMieruClockWarning = formatSidecarWarning(st.clockWarning);
       if (!this.amneziaMieruInstallOpen) {
         if (st.addressStored) this.amneziaMieruAddress = st.addressStored;
         else if (st.address && !this.amneziaMieruAddress) this.amneziaMieruAddress = st.address;

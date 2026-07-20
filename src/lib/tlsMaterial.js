@@ -14,7 +14,7 @@ const config = require('../config');
 const execFileAsync = promisify(execFile);
 const NGINX_CONTAINER = 'nginx';
 
-const CERT_SOURCES = Object.freeze(['panel', 'manual_pem', 'manual_path', 'issue_le']);
+const CERT_SOURCES = Object.freeze(['self_signed', 'panel', 'manual_pem', 'manual_path', 'issue_le']);
 
 function runCmd(bin, args, { timeout = 60_000 } = {}) {
   return execFileAsync(bin, args, { timeout, maxBuffer: 4 * 1024 * 1024 })
@@ -179,11 +179,71 @@ async function injectManualPem(domain, certPem, keyPem) {
 }
 
 /**
+ * Generate a self-signed TLS cert and store it in the certbot volume (live/{domain}/).
+ */
+async function ensureSelfSignedCert(domain) {
+  const d = String(domain || 'localhost').trim().toLowerCase();
+  if (!d) {
+    const err = new Error('Certificate domain is required for self-signed cert');
+    err.status = 400;
+    err.code = 'CERT_BAD_DOMAIN';
+    throw err;
+  }
+  if (await certExistsInVolume(d)) {
+    return certPathsForDomain(d);
+  }
+
+  const tmpDir = path.join(config.WG_PATH || '/tmp', '_tls_selfsigned');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const certFile = path.join(tmpDir, 'fullchain.pem');
+  const keyFile = path.join(tmpDir, 'privkey.pem');
+
+  const localOpenssl = await runCmd('openssl', [
+    'req', '-x509', '-nodes', '-days', '825', '-newkey', 'rsa:2048',
+    '-keyout', keyFile,
+    '-out', certFile,
+    '-subj', `/CN=${d}`,
+  ], { timeout: 30_000 });
+
+  if (!localOpenssl.ok) {
+    const r = await runCmd('docker', [
+      'run', '--rm',
+      '-v', `${tmpDir}:/out`,
+      'alpine:3.20',
+      'sh', '-c', `apk add --no-cache openssl >/dev/null
+openssl req -x509 -nodes -days 825 -newkey rsa:2048 \
+  -keyout /out/privkey.pem -out /out/fullchain.pem \
+  -subj "/CN=${d}"`,
+    ], { timeout: 120_000 });
+    if (!r.ok) {
+      const err = new Error((r.stderr || 'self-signed cert generation failed').trim().slice(0, 300));
+      err.status = 400;
+      err.code = 'CERT_SELF_SIGNED_FAILED';
+      throw err;
+    }
+  }
+
+  if (!fs.existsSync(certFile) || !fs.existsSync(keyFile)) {
+    const err = new Error('Self-signed certificate files were not created');
+    err.status = 400;
+    err.code = 'CERT_SELF_SIGNED_FAILED';
+    throw err;
+  }
+
+  const certPem = fs.readFileSync(certFile, 'utf8');
+  const keyPem = fs.readFileSync(keyFile, 'utf8');
+  try {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  } catch { /* ignore */ }
+  return injectManualPem(d, certPem, keyPem);
+}
+
+/**
  * Resolve cert paths for a service enable request.
  * @param {{ certSource?: string, domain: string, certPem?: string, keyPem?: string, certPath?: string, keyPath?: string, issueIfMissing?: boolean }} opts
  */
 async function resolveCertMaterial(opts = {}) {
-  const source = String(opts.certSource || 'panel').trim().toLowerCase();
+  const source = String(opts.certSource || 'self_signed').trim().toLowerCase();
   const domain = String(opts.domain || '').trim().toLowerCase();
 
   if (source === 'manual_path') {
@@ -202,6 +262,11 @@ async function resolveCertMaterial(opts = {}) {
     return injectManualPem(domain, opts.certPem, opts.keyPem).then((p) => ({ ...p, source }));
   }
 
+  if (source === 'self_signed') {
+    const certDomain = domain || 'hysteria.local';
+    return ensureSelfSignedCert(certDomain).then((p) => ({ ...p, source: 'self_signed' }));
+  }
+
   let certDomain = domain;
   if (source === 'panel') {
     certDomain = panelCertDomain() || domain;
@@ -214,7 +279,9 @@ async function resolveCertMaterial(opts = {}) {
   }
 
   if (!(await certExistsInVolume(certDomain))) {
-    if (source === 'issue_le' || opts.issueIfMissing) {
+    if (source === 'issue_le') {
+      await issueLetsEncrypt(certDomain);
+    } else if (opts.issueIfMissing) {
       await issueLetsEncrypt(certDomain);
     } else {
       const err = new Error(`Certificate not found for ${certDomain} in certbot volume`);
@@ -248,6 +315,7 @@ module.exports = {
   certExistsInVolume,
   issueLetsEncrypt,
   injectManualPem,
+  ensureSelfSignedCert,
   resolveCertMaterial,
   assertPanelCertReuseAllowed,
   getCertbotEmail,

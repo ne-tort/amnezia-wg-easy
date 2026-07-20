@@ -187,8 +187,8 @@ function getIgnoreClientBandwidth() {
 
 function getCertSource() {
   const tlsMaterial = require('./tlsMaterial');
-  const s = getSetting(CERT_SOURCE_KEY, 'issue_le').trim().toLowerCase();
-  return tlsMaterial.CERT_SOURCES.includes(s) ? s : 'issue_le';
+  const s = getSetting(CERT_SOURCE_KEY, 'self_signed').trim().toLowerCase();
+  return tlsMaterial.CERT_SOURCES.includes(s) ? s : 'self_signed';
 }
 
 function getCertDomainStored() {
@@ -197,7 +197,9 @@ function getCertDomainStored() {
 
 function getTlsInsecureClient() {
   const raw = getSetting(TLS_INSECURE_CLIENT_KEY, '');
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+  if (raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on') return true;
+  if (raw === '0' || raw === 'false' || raw === 'no' || raw === 'off') return false;
+  return getCertSource() === 'self_signed';
 }
 
 /**
@@ -869,10 +871,13 @@ async function enableInternal(opts = {}) {
       ? String(opts.certSource).trim().toLowerCase()
       : getCertSource();
     const certDomainOverride = opts.certDomain != null ? String(opts.certDomain).trim().toLowerCase() : '';
-    const tlsInsecure = opts.tlsInsecureClient != null
+    let tlsInsecure = opts.tlsInsecureClient != null
       ? (opts.tlsInsecureClient === true || opts.tlsInsecureClient === '1'
         || opts.tlsInsecureClient === 'true')
       : getTlsInsecureClient();
+    if (certSource === 'self_signed' && opts.tlsInsecureClient == null) {
+      tlsInsecure = true;
+    }
 
     setSetting(SNI_KEY, sni);
     setSetting(ADDRESS_KEY, address);
@@ -891,8 +896,7 @@ async function enableInternal(opts = {}) {
     if (certSource === 'panel') {
       tlsMaterial.assertPanelCertReuseAllowed('hysteria', publicPort);
     }
-    const certDomainForIssue = certDomainOverride
-      || ((certSource === 'issue_le' || certSource !== 'panel') ? sni : (tlsMaterial.panelCertDomain() || sni));
+    const certDomainForIssue = certDomainOverride || sni || 'hysteria.local';
     await tlsMaterial.resolveCertMaterial({
       certSource,
       domain: certDomainForIssue,
@@ -900,7 +904,7 @@ async function enableInternal(opts = {}) {
       keyPem: opts.keyPem,
       certPath: opts.certPath,
       keyPath: opts.keyPath,
-      issueIfMissing: certSource === 'issue_le',
+      issueIfMissing: false,
     });
     if (!(await tlsMaterial.certExistsInVolume(resolveCertDomain()))) {
       throw Object.assign(
