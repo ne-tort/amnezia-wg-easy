@@ -3,6 +3,9 @@
 /**
  * Hysteria2 inbound for Xray-core (protocol: hysteria + network: hysteria).
  * Shared with VLESS in the same server.json / process.
+ *
+ * Obfuscation: Xray maps official Hy2 salamander/gecko to finalmask.
+ * Gecko (Hy2 2.9.2+) = salamander + packetSize (Xray ≥ ~v26.5 / finalmask #6198).
  */
 
 /**
@@ -18,6 +21,9 @@
  * @param {number} [opts.udpIdleTimeout]
  * @param {object} [opts.masquerade]
  * @param {string} [opts.salamanderPassword]
+ * @param {string} [opts.obfsType] - '' | salamander | gecko
+ * @param {number|string} [opts.obfsGeckoMin]
+ * @param {number|string} [opts.obfsGeckoMax]
  */
 function buildHysteriaInbound(opts = {}) {
   const port = Number(opts.port);
@@ -63,12 +69,30 @@ function buildHysteriaInbound(opts = {}) {
       keyFile: opts.tlsKey,
     }];
   }
-  if (opts.salamanderPassword) {
+
+  const obfsType = String(opts.obfsType || '').trim().toLowerCase();
+  const password = String(
+    opts.salamanderPassword
+    || opts.obfsPassword
+    || '',
+  ).trim();
+  if (password && (obfsType === 'salamander' || obfsType === 'gecko' || !obfsType)) {
+    /** @type {Record<string, unknown>} */
+    const settings = { password };
+    if (obfsType === 'gecko') {
+      const min = Number(opts.obfsGeckoMin != null ? opts.obfsGeckoMin : 512);
+      const max = Number(opts.obfsGeckoMax != null ? opts.obfsGeckoMax : 1200);
+      const lo = Number.isFinite(min) && min > 0 ? Math.floor(min) : 512;
+      const hi = Number.isFinite(max) && max >= lo ? Math.min(2048, Math.floor(max)) : 1200;
+      // Non-empty packetSize enables Gecko on top of Salamander (Xray finalmask docs).
+      settings.packetSize = `${lo}-${hi}`;
+    }
     streamSettings.finalmask = {
-      udp: [{
-        type: 'salamander',
-        settings: { password: String(opts.salamanderPassword) },
-      }],
+      udp: [{ type: 'salamander', settings }],
+    };
+  } else if (password) {
+    streamSettings.finalmask = {
+      udp: [{ type: 'salamander', settings: { password } }],
     };
   }
 

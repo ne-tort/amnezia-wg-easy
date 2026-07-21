@@ -73,7 +73,7 @@ test('buildStreamSettings supports ws grpc xhttp kcp', () => {
   assert.deepEqual(hy.tlsSettings.alpn, ['h3']);
 });
 
-test('hysteria transport builds protocol:hysteria inbound (not vless)', () => {
+test('hysteria transport builds VLESS inbound with required auth', () => {
   const inbound = xrayVless.buildServerInbound({
     security: 'tls',
     network: 'hysteria',
@@ -81,12 +81,21 @@ test('hysteria transport builds protocol:hysteria inbound (not vless)', () => {
     sni: 'cdn.example.com',
     tlsCert: '/cert.pem',
     tlsKey: '/key.pem',
+    hysteriaAuth: 'shared-secret',
     clients: [{ xray_uuid: '11111111-1111-4111-8111-111111111111', name: 'alice' }],
   });
-  assert.equal(inbound.protocol, 'hysteria');
-  assert.equal(inbound.settings.users[0].auth, '11111111-1111-4111-8111-111111111111');
+  assert.equal(inbound.protocol, 'vless');
+  assert.equal(inbound.streamSettings.network, 'hysteria');
+  assert.equal(inbound.streamSettings.hysteriaSettings.auth, 'shared-secret');
   assert.deepEqual(inbound.streamSettings.tlsSettings.alpn, ['h3']);
-  assert.ok(inbound.streamSettings.tlsSettings.certificates);
+  assert.equal(inbound.settings.clients[0].id, '11111111-1111-4111-8111-111111111111');
+
+  assert.throws(() => xrayVless.buildServerInbound({
+    security: 'tls',
+    network: 'hysteria',
+    port: 24443,
+    clients: [],
+  }), /hysteriaAuth/);
 
   const url = xrayVless.buildVlessUrl({
     uuid: '11111111-1111-4111-8111-111111111111',
@@ -95,8 +104,11 @@ test('hysteria transport builds protocol:hysteria inbound (not vless)', () => {
     security: 'tls',
     network: 'hysteria',
     sni: 'cdn.example.com',
+    hysteriaAuth: 'shared-secret',
   });
-  assert.match(url, /^hy2:\/\//);
+  assert.match(url, /^vless:\/\//);
+  assert.match(url, /type=hysteria/);
+  assert.match(url, /auth=shared-secret/);
   assert.match(url, /alpn=h3/);
 
   const client = xrayVless.buildClientJson({
@@ -106,9 +118,29 @@ test('hysteria transport builds protocol:hysteria inbound (not vless)', () => {
     security: 'tls',
     network: 'hysteria',
     sni: 'cdn.example.com',
+    hysteriaAuth: 'shared-secret',
   });
-  assert.equal(client.outbounds[0].protocol, 'hysteria');
-  assert.equal(client.outbounds[0].streamSettings.hysteriaSettings.auth, '11111111-1111-4111-8111-111111111111');
+  assert.equal(client.outbounds[0].protocol, 'vless');
+  assert.equal(client.outbounds[0].streamSettings.hysteriaSettings.auth, 'shared-secret');
+});
+
+test('xrayHysteriaInbound maps gecko to salamander packetSize', () => {
+  const { buildHysteriaInbound } = require('../../src/lib/xrayHysteriaInbound');
+  const inbound = buildHysteriaInbound({
+    port: 34443,
+    users: [{ auth: 'p', email: 'u' }],
+    sni: 't.example',
+    tlsCert: '/c',
+    tlsKey: '/k',
+    obfsType: 'gecko',
+    obfsPassword: 'secret',
+    obfsGeckoMin: 512,
+    obfsGeckoMax: 1200,
+  });
+  assert.equal(inbound.protocol, 'hysteria');
+  assert.equal(inbound.streamSettings.finalmask.udp[0].type, 'salamander');
+  assert.equal(inbound.streamSettings.finalmask.udp[0].settings.password, 'secret');
+  assert.equal(inbound.streamSettings.finalmask.udp[0].settings.packetSize, '512-1200');
 });
 
 test('buildVlessUrl encodes transport params', () => {

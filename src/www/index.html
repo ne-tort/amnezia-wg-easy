@@ -2367,12 +2367,12 @@
               </div>
               <p v-else-if="amneziaHysteriaObfsType && amneziaHysteriaModalMode !== 'manage'"
                 class="text-xs text-gray-500 dark:text-neutral-400">{{ $t('hysteriaObfsPasswordAutoHint') }}</p>
-              <div v-if="amneziaHysteriaCore !== 'xray' && amneziaHysteriaObfsType === 'gecko'">
+              <div v-if="amneziaHysteriaObfsType === 'gecko'">
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaObfsGeckoMin') }}</label>
                 <input v-model="amneziaHysteriaObfsGeckoMin" type="number" min="0" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="512" />
               </div>
-              <div v-if="amneziaHysteriaCore !== 'xray' && amneziaHysteriaObfsType === 'gecko'">
+              <div v-if="amneziaHysteriaObfsType === 'gecko'">
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaObfsGeckoMax') }}</label>
                 <input v-model="amneziaHysteriaObfsGeckoMax" type="number" min="0" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="1200" />

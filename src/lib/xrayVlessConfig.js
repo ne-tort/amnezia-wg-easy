@@ -281,51 +281,24 @@ function effectiveFlow(opts) {
  * Client JSON for Amnezia .vpn / subscription (SOCKS 10808 inbound).
  */
 function buildClientJson(opts) {
-  const security = normalizeSecurity(opts.security);
-  const network = normalizeNetwork(opts.network);
   const flow = effectiveFlow(opts);
+  /** @type {Record<string, unknown>} */
+  const user = { id: opts.uuid };
+  if (flow) user.flow = flow;
+  user.encryption = 'none';
 
   /** @type {Record<string, unknown>} */
-  let outbound;
-  if (network === 'hysteria') {
-    // Xray 26: VLESS+hysteria inbound is broken (validator is nil). Clients speak
-    // native hysteria outbound against protocol:hysteria inbound.
-    const auth = String(opts.hysteriaAuth || opts.uuid || '').trim();
-    outbound = {
-      protocol: 'hysteria',
-      settings: {
-        version: 2,
+  const outbound = {
+    protocol: 'vless',
+    settings: {
+      vnext: [{
         address: opts.host,
         port: Number(opts.port),
-      },
-      streamSettings: buildStreamSettings({
-        ...opts,
-        forClient: true,
-        network: 'hysteria',
-        security: 'tls',
-        hysteriaAuth: auth,
-        alpn: opts.alpn && (Array.isArray(opts.alpn) ? opts.alpn.length : String(opts.alpn).trim())
-          ? opts.alpn
-          : ['h3'],
-      }),
-    };
-  } else {
-    /** @type {Record<string, unknown>} */
-    const user = { id: opts.uuid };
-    if (flow) user.flow = flow;
-    user.encryption = 'none';
-    outbound = {
-      protocol: 'vless',
-      settings: {
-        vnext: [{
-          address: opts.host,
-          port: Number(opts.port),
-          users: [user],
-        }],
-      },
-      streamSettings: buildStreamSettings({ ...opts, forClient: true }),
-    };
-  }
+        users: [user],
+      }],
+    },
+    streamSettings: buildStreamSettings({ ...opts, forClient: true }),
+  };
   if (opts.remark) outbound.tag = opts.remark;
 
   return {
@@ -355,6 +328,9 @@ function appendVlessTransportParams(params, network, opts) {
     if (opts.xhttpHost) params.set('host', opts.xhttpHost);
     if (opts.xhttpMode) params.set('mode', opts.xhttpMode);
     if (opts.xhttpExtra) params.set('extra', opts.xhttpExtra);
+  } else if (network === 'hysteria') {
+    // Required by Xray when hysteria transport is paired with non-hysteria proxy (VLESS).
+    if (opts.hysteriaAuth) params.set('auth', opts.hysteriaAuth);
   } else if (network === 'tcp') {
     const ht = opts.headerType || opts.tcpHeaderType;
     if (ht && ht !== 'none') params.set('headerType', ht);
@@ -362,14 +338,11 @@ function appendVlessTransportParams(params, network, opts) {
 }
 
 /**
- * Build share link (vless:// or hy2:// for hysteria transport).
+ * Build vless:// share link (including VLESS + hysteria transport).
  */
 function buildVlessUrl(opts) {
   const security = normalizeSecurity(opts.security);
   const network = normalizeNetwork(opts.network);
-  if (network === 'hysteria') {
-    return buildHysteriaShareUrl(opts);
-  }
   const flow = effectiveFlow(opts);
   const params = new URLSearchParams();
   params.set('encryption', 'none');
@@ -394,36 +367,18 @@ function buildVlessUrl(opts) {
 }
 
 /**
- * hy2:// link for Xray protocol:hysteria inbound (auth = client UUID).
- */
-function buildHysteriaShareUrl(opts) {
-  const auth = String(opts.hysteriaAuth || opts.uuid || '').trim();
-  const params = new URLSearchParams();
-  if (opts.sni) params.set('sni', opts.sni);
-  params.set('insecure', opts.allowInsecure ? '1' : '0');
-  const alpn = normalizeAlpnList(opts.alpn, { network: 'hysteria', forClient: true }) || ['h3'];
-  params.set('alpn', alpn.join(','));
-  if (opts.fingerprint) params.set('fp', opts.fingerprint);
-  let url = `hy2://${encodeURIComponent(auth)}@${opts.host}:${Number(opts.port)}/?${params.toString()}`;
-  if (opts.remark) url += `#${encodeURIComponent(opts.remark)}`;
-  return url;
-}
-
-/**
  * Server inbound for Xray server.json.
- * Hysteria transport uses protocol:hysteria — VLESS+network=hysteria panics on Xray 26
- * ("validator is nil" / bogus TCP listen).
+ * VLESS + network=hysteria requires hysteriaSettings.auth (Xray maintainers: not optional).
  */
 function buildServerInbound(opts) {
   const security = normalizeSecurity(opts.security);
   const network = normalizeNetwork(opts.network);
-
-  if (network === 'hysteria') {
-    return buildHysteriaServerInbound(opts);
-  }
-
   const tag = security === 'reality' ? 'vless-reality' : `vless-${security}-${network}`;
   const flow = effectiveFlow({ ...opts, security, network });
+
+  if (network === 'hysteria' && !String(opts.hysteriaAuth || '').trim()) {
+    throw new Error('hysteriaAuth is required for VLESS + hysteria transport');
+  }
 
   /** @type {Array<Record<string, unknown>>} */
   const clients = (opts.clients || []).map((c) => {
@@ -461,43 +416,6 @@ function buildServerInbound(opts) {
   return inbound;
 }
 
-function buildHysteriaServerInbound(opts) {
-  const users = (opts.clients || []).map((c) => ({
-    auth: String(c.xray_uuid || c.id || ''),
-    email: String(c.name || c.email || ''),
-  })).filter((u) => u.auth);
-
-  const streamOpts = {
-    ...opts,
-    network: 'hysteria',
-    security: 'tls',
-    forClient: false,
-    alpn: opts.alpn && (Array.isArray(opts.alpn) ? opts.alpn.length : String(opts.alpn).trim())
-      ? opts.alpn
-      : ['h3'],
-  };
-  /** @type {Record<string, unknown>} */
-  const streamSettings = buildStreamSettings(streamOpts);
-  if (opts.tlsCert && opts.tlsKey) {
-    streamSettings.tlsSettings = {
-      ...(streamSettings.tlsSettings || {}),
-      certificates: [{ certificateFile: opts.tlsCert, keyFile: opts.tlsKey }],
-    };
-  }
-
-  return {
-    tag: 'vless-hysteria',
-    listen: '0.0.0.0',
-    port: opts.port,
-    protocol: 'hysteria',
-    settings: {
-      version: 2,
-      users,
-    },
-    streamSettings,
-  };
-}
-
 module.exports = {
   SECURITY_MODES,
   NETWORK_MODES,
@@ -507,9 +425,7 @@ module.exports = {
   buildStreamSettings,
   buildClientJson,
   buildVlessUrl,
-  buildHysteriaShareUrl,
   buildServerInbound,
-  buildHysteriaServerInbound,
   effectiveFlow,
   normalizeAlpnList,
 };

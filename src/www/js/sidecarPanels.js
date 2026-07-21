@@ -189,9 +189,7 @@ window.SidecarPanels = {
     },
     hysteriaObfsTypesFiltered() {
       const all = (this.amneziaHysteriaObfsTypes || []).filter(Boolean);
-      if (this.amneziaHysteriaCore === 'xray') {
-        return all.filter((t) => t === 'salamander');
-      }
+      // Xray finalmask: salamander + optional gecko (packetSize). Same choices as original core.
       return all;
     },
     naiveSslCertOptions() {
@@ -239,9 +237,7 @@ window.SidecarPanels = {
       return s.replace(/\.$/, '');
     },
     onHysteriaCoreChange() {
-      if (this.amneziaHysteriaCore === 'xray' && this.amneziaHysteriaObfsType === 'gecko') {
-        this.amneziaHysteriaObfsType = '';
-      }
+      // salamander/gecko available for both original and xray cores (xray: finalmask)
     },
     onHysteriaSslCertChange() {
       const c = this.sslFindCertById
@@ -383,23 +379,21 @@ window.SidecarPanels = {
       const masq = String(this.amneziaHysteriaMasqueradeUrl || '').trim();
       body.masqueradeUrl = masq;
       const obfsType = String(this.amneziaHysteriaObfsType || '').trim();
-      const core = body.core;
-      if (obfsType && !(core === 'xray' && obfsType === 'gecko')) {
-        body.obfsType = core === 'xray' ? (obfsType === 'salamander' ? 'salamander' : '') : obfsType;
-        if (body.obfsType) {
-          // Password is auto-generated on the server when empty.
-          if (body.obfsType === 'gecko') {
-            const gmin = String(this.amneziaHysteriaObfsGeckoMin || '').trim();
-            const gmax = String(this.amneziaHysteriaObfsGeckoMax || '').trim();
-            if (gmin) body.obfsGeckoMin = Number(gmin);
-            if (gmax) body.obfsGeckoMax = Number(gmax);
-          }
+      if (obfsType === 'salamander' || obfsType === 'gecko') {
+        body.obfsType = obfsType;
+        // Password is auto-generated on the server when empty.
+        if (obfsType === 'gecko') {
+          const gmin = String(this.amneziaHysteriaObfsGeckoMin || '').trim();
+          const gmax = String(this.amneziaHysteriaObfsGeckoMax || '').trim();
+          if (gmin) body.obfsGeckoMin = Number(gmin);
+          if (gmax) body.obfsGeckoMax = Number(gmax);
         }
       }
       const up = String(this.amneziaHysteriaBandwidthUp || '').trim();
       const down = String(this.amneziaHysteriaBandwidthDown || '').trim();
       if (up) body.bandwidthUp = up;
       if (down) body.bandwidthDown = down;
+      const core = body.core;
       if (core !== 'xray') {
         if (this.amneziaHysteriaCongestionType) {
           body.congestionType = this.amneziaHysteriaCongestionType;

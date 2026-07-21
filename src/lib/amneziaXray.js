@@ -724,7 +724,6 @@ function getClientXrayPayload(client, opts = {}) {
     remark: client.name,
     publicKey,
     shortId,
-    hysteriaAuth: client.xray_uuid,
     ...stream,
   };
 
@@ -1360,7 +1359,12 @@ async function enableInternal(opts = {}) {
 
     const transportRaw = opts.transportSettings != null ? opts.transportSettings : null;
     if (opts.transportSettings != null || opts.network != null) {
-      const ts = transportRaw != null ? transportRaw : getTransportSettings();
+      let ts = transportRaw != null ? { ...transportRaw } : { ...getTransportSettings() };
+      // Xray: hysteria transport + VLESS requires shared hysteriaSettings.auth
+      // (maintainers closed #5973 as config error, not a core bug).
+      if (network === 'hysteria' && !String(ts.hysteriaAuth || '').trim()) {
+        ts.hysteriaAuth = crypto.randomBytes(16).toString('base64url');
+      }
       const transportCheckEarly = xrayTransportSchema.validateTransportSettings(network, ts);
       if (!transportCheckEarly.ok) {
         const msg = Object.values(transportCheckEarly.fieldErrors || {}).join('; ') || 'Invalid transport settings';
@@ -1377,6 +1381,15 @@ async function enableInternal(opts = {}) {
       if (opts.grpcServiceName != null) setSetting(GRPC_SERVICE_KEY, String(opts.grpcServiceName).trim());
       if (opts.grpcMultiMode != null) {
         setSetting(GRPC_MULTI_KEY, (opts.grpcMultiMode === true || opts.grpcMultiMode === '1') ? '1' : '0');
+      }
+      if (network === 'hysteria') {
+        const cur = getTransportSettings();
+        if (!String(cur.hysteriaAuth || '').trim()) {
+          setTransportSettings(network, {
+            ...cur,
+            hysteriaAuth: crypto.randomBytes(16).toString('base64url'),
+          });
+        }
       }
     }
     const transportCheck = xrayTransportSchema.validateTransportSettings(

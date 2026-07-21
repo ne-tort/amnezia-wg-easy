@@ -145,7 +145,9 @@ function buildXrayInboundConfig(opts = {}) {
   }
   const obfsType = getObfsType();
   const obfsPassword = getObfsPassword();
-  const salamanderPassword = (obfsType === 'salamander' && obfsPassword) ? obfsPassword : '';
+  const salamanderPassword = (
+    (obfsType === 'salamander' || obfsType === 'gecko') && obfsPassword
+  ) ? obfsPassword : '';
   const up = getBandwidthUp();
   const down = getBandwidthDown();
   return buildHysteriaInbound({
@@ -157,7 +159,11 @@ function buildXrayInboundConfig(opts = {}) {
     up: up || undefined,
     down: down || undefined,
     masquerade,
+    obfsType: obfsType || undefined,
     salamanderPassword: salamanderPassword || undefined,
+    obfsPassword: salamanderPassword || undefined,
+    obfsGeckoMin: getObfsGeckoMin(),
+    obfsGeckoMax: getObfsGeckoMax(),
     udpIdleTimeout: 60,
   });
 }
@@ -1187,14 +1193,8 @@ async function enableInternal(opts = {}) {
     fs.mkdirSync(hysteriaHostDir(), { recursive: true });
 
     if (getCore() === 'xray') {
-      // Shared amnezia-xray process: no amnezia-hysteria container / gecko / ECH.
+      // Shared amnezia-xray process (salamander/gecko via finalmask; no ECH/Hy2 YAML).
       await removeHysteriaContainer();
-      if (obfsType === 'gecko') {
-        throw Object.assign(
-          new Error('Gecko obfuscation is only available with the original Hysteria core'),
-          { status: 400, code: 'HYSTERIA_GECKO_XRAY', fieldErrors: { obfsType: 'Gecko requires original core' } },
-        );
-      }
       const amneziaXray = require('./amneziaXray');
       await amneziaXray.syncClientsFromDb();
       await amneziaXray.ensureXrayContainer();

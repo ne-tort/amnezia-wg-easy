@@ -1,7 +1,7 @@
 FROM alpine:3.15
 LABEL maintainer="AmneziaVPN / amnezia-wg-easy"
 
-ARG XRAY_RELEASE="v26.3.27"
+ARG XRAY_RELEASE="v26.7.11"
 
 RUN apk add --no-cache curl unzip bash openssl netcat-openbsd dumb-init rng-tools xz \
   && apk --update upgrade --no-cache
