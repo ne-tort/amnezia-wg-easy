@@ -145,18 +145,24 @@ root_block_exit_local() {
 EOF
 }
 
-root_block_entry_redirect() {
-  pf="${WEBUI_PUBLIC_PREFIX}"
+# Panel path is a secret: never redirect strangers to WEBUI_PUBLIC_PREFIX.
+# Unknown paths → close without response (nginx 444).
+root_block_entry_stealth() {
   cat <<EOF
-    location = / {
-        return 302 https://${PANEL_HTTPS_REDIRECT_HOST}${pf}/;
+    location / {
+        return 444;
     }
 EOF
 }
 
+# Deprecated alias — old "redirect to /panel" leaked the path.
+root_block_entry_redirect() {
+  root_block_entry_stealth
+}
+
 root_block_entry_mirror() {
   if [ -z "$NGINX_MIRROR_HOST" ]; then
-    root_block_entry_redirect
+    root_block_entry_stealth
     return
   fi
   cat <<EOF
@@ -168,7 +174,7 @@ EOF
 
 root_block_entry_local() {
   if [ -z "$NGINX_LOCAL_URL" ]; then
-    root_block_entry_redirect
+    root_block_entry_stealth
     return
   fi
   cat <<EOF
@@ -210,14 +216,16 @@ EOF
 }
 
 pick_entry_root_block() {
+  # Split ports: panel listener must not expose/mirror — only exact prefix/sub.
+  # Shared port: everything except prefix/sub is the stub (mirror) or stealth.
   if mirror_ports_split; then
-    root_block_entry_redirect
+    root_block_entry_stealth
     return
   fi
   case "$NGINX_ROOT_BEHAVIOR" in
     mirror) root_block_entry_mirror ;;
     local) root_block_entry_local ;;
-    redirect) root_block_entry_redirect ;;
+    redirect|stealth) root_block_entry_stealth ;;
     *) root_block_entry_mirror ;;
   esac
 }

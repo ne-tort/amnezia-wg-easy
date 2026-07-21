@@ -1,4 +1,6 @@
-# WEBUI_PUBLIC_PREFIX set (e.g. /panel): UI+API under prefix; SUB_PUBLIC_PREFIX (e.g. /sub) for subscriptions; root = __ROOT_BLOCK__.
+# WEBUI_PUBLIC_PREFIX set (e.g. /panel): secret UI+API path; SUB_PUBLIC_PREFIX for subscriptions.
+# Root (__ROOT_BLOCK__): mirror stub when same port as panel, or stealth 444 when mirror is on a separate port.
+# Never redirect / → prefix — the path is protection, not a public bookmark.
 server {
     listen 80 default_server;
     server_name _;
