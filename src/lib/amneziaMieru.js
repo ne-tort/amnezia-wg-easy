@@ -35,10 +35,18 @@ const TCP_PORT_KEY = 'amnezia_mieru_tcp_port';
 const UDP_PORT_KEY = 'amnezia_mieru_udp_port';
 const MTU_KEY = 'amnezia_mieru_mtu';
 const LOGGING_LEVEL_KEY = 'amnezia_mieru_logging_level';
+const MULTIPLEXING_KEY = 'amnezia_mieru_multiplexing';
+const HANDSHAKE_MODE_KEY = 'amnezia_mieru_handshake_mode';
 
 const DEFAULT_PROTOCOL = 'TCP';
 const PROTOCOLS = Object.freeze(['TCP', 'UDP']);
 const LOGGING_LEVELS = Object.freeze(['ERROR', 'WARN', 'INFO', 'DEBUG']);
+const MULTIPLEXING_LEVELS = Object.freeze(['OFF', 'LOW', 'MIDDLE', 'HIGH']);
+const HANDSHAKE_MODES = Object.freeze(['HANDSHAKE_STANDARD', 'HANDSHAKE_NO_WAIT']);
+const DEFAULT_MULTIPLEXING = 'LOW';
+const DEFAULT_HANDSHAKE_MODE = 'HANDSHAKE_STANDARD';
+const MTU_MIN = 1280;
+const MTU_MAX = 1400;
 const DEFAULT_INTERNAL_PORT = 35000;
 const DEFAULT_PUBLIC_PORT = 3080;
 const CLOCK_SKEW_WARN_SEC = 30;
@@ -150,8 +158,18 @@ function getMtu() {
   const raw = getSetting(MTU_KEY, '');
   if (!raw || !/^\d+$/.test(raw)) return null;
   const n = parseInt(raw, 10);
-  if (n < 576 || n > 9000) return null;
+  if (n < MTU_MIN || n > MTU_MAX) return null;
   return n;
+}
+
+function getMultiplexing() {
+  const m = (getSetting(MULTIPLEXING_KEY, DEFAULT_MULTIPLEXING) || DEFAULT_MULTIPLEXING).toUpperCase();
+  return MULTIPLEXING_LEVELS.includes(m) ? m : DEFAULT_MULTIPLEXING;
+}
+
+function getHandshakeMode() {
+  const m = (getSetting(HANDSHAKE_MODE_KEY, DEFAULT_HANDSHAKE_MODE) || DEFAULT_HANDSHAKE_MODE).toUpperCase();
+  return HANDSHAKE_MODES.includes(m) ? m : DEFAULT_HANDSHAKE_MODE;
 }
 
 function getTcpListenPort() {
@@ -372,6 +390,9 @@ function buildServerConfigObject({ portBindings, loggingLevel, mtu } = {}) {
       name: c.username,
       password: c.mieru_password,
     })),
+    advancedSettings: {
+      userHintIsMandatory: true,
+    },
   };
   const mtuVal = mtu != null ? mtu : getMtu();
   if (mtuVal) obj.mtu = mtuVal;
@@ -399,12 +420,21 @@ function getAddress() {
 
 /**
  * Build mierus:// share link.
- * @param {{ username: string, password: string, host: string, port: number, protocol: string }} p
+ * @param {{ username: string, password: string, host: string, port: number, protocol: string, mtu?: number|null, multiplexing?: string, handshakeMode?: string }} p
  */
-function buildMieruUrl({ username, password, host, port, protocol }) {
+function buildMieruUrl({
+  username, password, host, port, protocol, mtu, multiplexing, handshakeMode,
+}) {
   const params = new URLSearchParams();
   params.set('port', String(Number(port)));
   params.set('protocol', protocol || DEFAULT_PROTOCOL);
+  const proto = String(protocol || DEFAULT_PROTOCOL).toUpperCase();
+  const mtuVal = mtu != null ? mtu : (proto === 'UDP' ? getMtu() : null);
+  if (mtuVal != null) params.set('mtu', String(mtuVal));
+  const mux = multiplexing != null ? multiplexing : getMultiplexing();
+  if (mux && mux !== 'OFF') params.set('multiplexing', mux);
+  const hs = handshakeMode != null ? handshakeMode : getHandshakeMode();
+  if (hs === 'HANDSHAKE_NO_WAIT') params.set('handshake-mode', hs);
   const userinfo = `${encodeURIComponent(username)}:${encodeURIComponent(password)}`;
   return `mierus://${userinfo}@${host}?${params.toString()}`;
 }
@@ -450,6 +480,9 @@ function getClientMieruPayload(client) {
     udpEnabled: isUdpEnabled(),
     tcpPublicPort: isTcpEnabled() ? getTcpPublicPort() : null,
     udpPublicPort: isUdpEnabled() ? getUdpPublicPort() : null,
+    mtu: getMtu(),
+    multiplexing: getMultiplexing(),
+    handshakeMode: getHandshakeMode(),
   };
 }
 
@@ -465,6 +498,9 @@ function buildAmneziaMieruContainer(client) {
       port: String(payload.port),
       subnet_address: AMNEZIA_MIERU_SUBNET,
       transport_proto: String(payload.protocol || 'TCP').toLowerCase(),
+      mtu: payload.mtu != null ? String(payload.mtu) : '',
+      multiplexing: payload.multiplexing || DEFAULT_MULTIPLEXING,
+      handshake_mode: payload.handshakeMode || DEFAULT_HANDSHAKE_MODE,
     },
   };
 }
@@ -768,6 +804,8 @@ function getStatus() {
     udpPublicPort: isUdpEnabled() ? getUdpPublicPort() : null,
     mtu: getMtu(),
     loggingLevel: getLoggingLevel(),
+    multiplexing: getMultiplexing(),
+    handshakeMode: getHandshakeMode(),
     mode: 'direct',
     updatedAt,
     busy: Boolean(activeJob),
@@ -861,8 +899,8 @@ async function enableInternal(opts = {}) {
     let mtu = null;
     if (opts.mtu != null && String(opts.mtu).trim() !== '') {
       mtu = parseInt(String(opts.mtu).trim(), 10);
-      if (!Number.isFinite(mtu) || mtu < 576 || mtu > 9000) {
-        throw Object.assign(new Error('Invalid Mieru MTU (576–9000)'), {
+      if (!Number.isFinite(mtu) || mtu < MTU_MIN || mtu > MTU_MAX) {
+        throw Object.assign(new Error(`Invalid Mieru MTU (${MTU_MIN}–${MTU_MAX})`), {
           status: 400,
           code: 'MIERU_BAD_MTU',
         });
@@ -871,6 +909,20 @@ async function enableInternal(opts = {}) {
     } else {
       setSetting(MTU_KEY, '');
     }
+
+    let multiplexing = opts.multiplexing != null
+      ? String(opts.multiplexing).trim().toUpperCase()
+      : getMultiplexing();
+    if (!MULTIPLEXING_LEVELS.includes(multiplexing)) multiplexing = DEFAULT_MULTIPLEXING;
+    setSetting(MULTIPLEXING_KEY, multiplexing);
+
+    let handshakeMode = opts.handshakeMode != null
+      ? String(opts.handshakeMode).trim().toUpperCase()
+      : (opts.handshakeNoWait === true || opts.handshakeNoWait === '1' || opts.handshakeNoWait === 'true'
+        ? 'HANDSHAKE_NO_WAIT'
+        : getHandshakeMode());
+    if (!HANDSHAKE_MODES.includes(handshakeMode)) handshakeMode = DEFAULT_HANDSHAKE_MODE;
+    setSetting(HANDSHAKE_MODE_KEY, handshakeMode);
 
     const addressRaw = opts.address != null ? String(opts.address).trim() : '';
     const address = addressRaw || getAddress() || getPublicHost();

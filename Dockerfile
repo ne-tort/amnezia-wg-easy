@@ -46,6 +46,20 @@ done
 RUN apk add --no-cache docker-cli-compose 2>/dev/null \
   || echo "[panel] docker-cli-compose unavailable — portPlan will use docker-run fallback"
 
+# sing-box CLI for Hysteria ECH key generation (hysteria docs recommend sing-box generate ech-keypair).
+ARG SING_BOX_VERSION=1.12.12
+RUN set -eux; \
+  arch="$(dpkg --print-architecture 2>/dev/null || uname -m)"; \
+  case "$arch" in \
+    amd64|x86_64) sb_arch="amd64" ;; \
+    arm64|aarch64) sb_arch="arm64" ;; \
+    *) echo "[panel] unsupported arch for sing-box: $arch" >&2; exit 1 ;; \
+  esac; \
+  url="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-${sb_arch}.tar.gz"; \
+  curl -fsSL "$url" | tar -xz -C /tmp; \
+  install -m 0755 "/tmp/sing-box-${SING_BOX_VERSION}-linux-${sb_arch}/sing-box" /usr/local/bin/sing-box; \
+  rm -rf "/tmp/sing-box-${SING_BOX_VERSION}-linux-${sb_arch}"
+
 ENV DEBUG=Server,WireGuard
 
 RUN mkdir -p /var/run/amneziawg && \

@@ -95,6 +95,7 @@ test('buildServerConfigObject writes portBindings array + loggingLevel + mtu', (
   assert.equal(obj.users[0].password, 'secret1234567890');
   assert.equal(!('port' in obj), true);
   assert.equal(!('protocol' in obj), true);
+  assert.deepEqual(obj.advancedSettings, { userHintIsMandatory: true });
 });
 
 test('buildPortBindings respects legacy protocol=UDP only', () => {
@@ -104,6 +105,37 @@ test('buildPortBindings respects legacy protocol=UDP only', () => {
   });
   const bindings = amneziaMieru.buildPortBindings();
   assert.deepEqual(bindings, [{ port: 35002, protocol: 'UDP' }]);
+});
+
+test('buildMieruUrl includes multiplexing and handshake-mode', () => {
+  const { amneziaMieru } = loadAmneziaMieru({
+    amnezia_mieru_multiplexing: 'MIDDLE',
+    amnezia_mieru_handshake_mode: 'HANDSHAKE_NO_WAIT',
+  });
+  const url = amneziaMieru.buildMieruUrl({
+    username: 'bob',
+    password: 'pw12345678901234',
+    host: '1.2.3.4',
+    port: 3080,
+    protocol: 'TCP',
+  });
+  assert.match(url, /multiplexing=MIDDLE/);
+  assert.match(url, /handshake-mode=HANDSHAKE_NO_WAIT/);
+});
+
+test('buildMieruUrl includes mtu for UDP', () => {
+  const { amneziaMieru } = loadAmneziaMieru({
+    amnezia_mieru_mtu: '1400',
+  });
+  const url = amneziaMieru.buildMieruUrl({
+    username: 'bob',
+    password: 'pw12345678901234',
+    host: 'vpn.example.com',
+    port: 3081,
+    protocol: 'UDP',
+  });
+  assert.match(url, /mtu=1400/);
+  assert.match(url, /multiplexing=LOW/);
 });
 
 test('getClientMieruPayload returns mieruUrls for dual TCP+UDP', () => {
@@ -159,7 +191,7 @@ test('getStatus exposes tcp/udp flags and ports from settings', () => {
     amnezia_mieru_udp_enabled: '1',
     amnezia_mieru_tcp_public_port: '3080',
     amnezia_mieru_udp_public_port: '3081',
-    amnezia_mieru_mtu: '1420',
+    amnezia_mieru_mtu: '1400',
     amnezia_mieru_logging_level: 'WARN',
   });
 
@@ -168,6 +200,6 @@ test('getStatus exposes tcp/udp flags and ports from settings', () => {
   assert.equal(st.udpEnabled, true);
   assert.equal(st.tcpPublicPort, 3080);
   assert.equal(st.udpPublicPort, 3081);
-  assert.equal(st.mtu, 1420);
+  assert.equal(st.mtu, 1400);
   assert.equal(st.loggingLevel, 'WARN');
 });

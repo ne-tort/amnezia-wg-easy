@@ -53,6 +53,9 @@ window.SidecarPanels = {
       amneziaMieruMtu: '',
       amneziaMieruLoggingLevel: 'INFO',
       amneziaMieruLoggingLevels: ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'],
+      amneziaMieruMultiplexing: 'LOW',
+      amneziaMieruMultiplexingLevels: ['OFF', 'LOW', 'MIDDLE', 'HIGH'],
+      amneziaMieruHandshakeNoWait: false,
       amneziaMieruAdvancedOpen: false,
       amneziaMieruFieldErrors: {},
       amneziaMieruClockWarning: null,
@@ -82,6 +85,7 @@ window.SidecarPanels = {
       amneziaHysteriaBbrProfile: 'standard',
       amneziaHysteriaEchEnabled: false,
       amneziaHysteriaEchConfigList: '',
+      amneziaHysteriaEchTechOpen: false,
       amneziaHysteriaListenMode: 'direct',
       amneziaHysteriaPortRange: '',
       amneziaHysteriaRealmUri: '',
@@ -336,6 +340,8 @@ window.SidecarPanels = {
         tcpPublicPort: Number(this.amneziaMieruTcpPublicPort) || 3080,
         udpPublicPort: Number(this.amneziaMieruUdpPublicPort) || 3080,
         loggingLevel: this.amneziaMieruLoggingLevel || 'INFO',
+        multiplexing: this.amneziaMieruMultiplexing || 'LOW',
+        handshakeNoWait: this.amneziaMieruHandshakeNoWait === true,
       };
       const mtuRaw = String(this.amneziaMieruMtu == null ? '' : this.amneziaMieruMtu).trim();
       if (mtuRaw !== '') body.mtu = Number(mtuRaw);
@@ -440,6 +446,10 @@ window.SidecarPanels = {
         if (st.port) this.amneziaMieruPort = st.port;
         if (st.mtu != null && st.mtu !== '') this.amneziaMieruMtu = st.mtu;
         if (st.loggingLevel) this.amneziaMieruLoggingLevel = st.loggingLevel;
+        if (st.multiplexing) this.amneziaMieruMultiplexing = st.multiplexing;
+        if (st.handshakeMode) {
+          this.amneziaMieruHandshakeNoWait = st.handshakeMode === 'HANDSHAKE_NO_WAIT';
+        }
       }
       if (this.amneziaMieruBusy) this.ensureAmneziaMieruPoll();
       else this.stopAmneziaMieruPoll();

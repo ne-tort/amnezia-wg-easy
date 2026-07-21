@@ -39,6 +39,7 @@ const CONGESTION_TYPE_KEY = 'amnezia_hysteria_congestion_type';
 const BBR_PROFILE_KEY = 'amnezia_hysteria_bbr_profile';
 const ECH_ENABLED_KEY = 'amnezia_hysteria_ech_enabled';
 const ECH_CONFIG_LIST_KEY = 'amnezia_hysteria_ech_config_list';
+const echKeygen = require('./echKeygen');
 const LISTEN_MODE_KEY = 'amnezia_hysteria_listen_mode';
 const PORT_RANGE_KEY = 'amnezia_hysteria_port_range';
 const REALM_URI_KEY = 'amnezia_hysteria_realm_uri';
@@ -1116,6 +1117,19 @@ async function enableInternal(opts = {}) {
 
     const enabled = ensureClientPasswords();
     fs.mkdirSync(hysteriaHostDir(), { recursive: true });
+
+    if (echEnabled) {
+      await echKeygen.ensureEchMaterial({
+        enabled: true,
+        outPath: echKeyPathHost(),
+        excludeSni: sni,
+        getSetting,
+        setSetting,
+        runCmd,
+        resolveVolume: resolveAwgVolumeName,
+      });
+    }
+
     const obj = buildServerYamlObject({
       userpass: buildUserpassMap(enabled),
       masqueradeUrl,
@@ -1170,6 +1184,12 @@ async function enableInternal(opts = {}) {
         ),
         { code: 'HYSTERIA_TIMEOUT', status: 504 },
       );
+    }
+
+    if (echEnabled && !getEchConfigList()) {
+      const logs = await runCmd('docker', ['logs', '--tail', '80', CONTAINER_NAME], { timeout: 15_000 });
+      const fromLog = echKeygen.extractConfigListFromLog(logs.ok ? logs.stdout : '');
+      if (fromLog) setSetting(ECH_CONFIG_LIST_KEY, fromLog);
     }
 
     setPhase('running');

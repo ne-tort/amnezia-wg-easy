@@ -141,3 +141,29 @@ test('hysteria buildHy2Url includes ech param', () => {
   });
   assert.match(url, /ech=AEz/);
 });
+
+test('hysteria buildServerYamlObject adds ech when ech.pem exists on volume', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hy-ech-'));
+  process.env.WG_PATH = `${dir}${path.sep}`;
+  delete require.cache[require.resolve('../../src/config')];
+  delete require.cache[require.resolve('../../src/lib/amneziaHysteria')];
+  const hy = require('../../src/lib/amneziaHysteria');
+  const pemPath = path.join(dir, 'hysteria', 'ech.pem');
+  fs.mkdirSync(path.dirname(pemPath), { recursive: true });
+  fs.writeFileSync(pemPath, `-----BEGIN ECH CONFIGS-----\nABC\n-----END ECH CONFIGS-----\n`, 'utf8');
+  const obj = hy.buildServerYamlObject({
+    userpass: { u: 'p' },
+    certDomain: 'test.local',
+    sni: 'test.local',
+    echEnabled: true,
+  });
+  assert.ok(obj.tls.ech);
+  assert.equal(obj.tls.ech.keyPath, '/opt/amnezia/awg/hysteria/ech.pem');
+  fs.rmSync(dir, { recursive: true, force: true });
+  delete process.env.WG_PATH;
+  delete require.cache[require.resolve('../../src/config')];
+  delete require.cache[require.resolve('../../src/lib/amneziaHysteria')];
+});

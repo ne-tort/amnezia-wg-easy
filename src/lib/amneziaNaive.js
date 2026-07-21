@@ -153,6 +153,50 @@ function naiveHostDir() {
   return path.join(config.WG_PATH, NAIVE_REL);
 }
 
+function naiveWwwHostDir() {
+  return path.join(naiveHostDir(), 'www');
+}
+
+const NAIVE_WWW_CONTAINER = '/opt/amnezia/awg/naive/www';
+
+function pickDecoySiteTitle() {
+  try {
+    const domains = require('./masqueradeBank').loadMirrorBankDomains();
+    if (domains && domains.length) {
+      const pick = domains[Math.floor(Math.random() * domains.length)];
+      const host = String(pick).replace(/^www\./, '');
+      if (host) return host.charAt(0).toUpperCase() + host.slice(1);
+    }
+  } catch {
+    /* optional */
+  }
+  return 'Welcome';
+}
+
+/** Minimal decoy site for Naive preambles / probe resistance (v147+). */
+function ensureNaiveDecoySite() {
+  const dir = naiveWwwHostDir();
+  fs.mkdirSync(dir, { recursive: true });
+  const indexPath = path.join(dir, 'index.html');
+  if (fs.existsSync(indexPath)) return indexPath;
+  const title = pickDecoySiteTitle();
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title}</title>
+</head>
+<body>
+  <h1>${title}</h1>
+  <p>Site under maintenance. Please check back later.</p>
+</body>
+</html>
+`;
+  fs.writeFileSync(indexPath, html, 'utf8');
+  return indexPath;
+}
+
 function caddyfilePath() {
   return path.join(naiveHostDir(), CADDYFILE_NAME);
 }
@@ -272,10 +316,14 @@ function buildCaddyfileObject(opts) {
   const lines = [
     '{',
     '  order forward_proxy before file_server',
+    '  log {',
+    '    exclude http.log.error',
+    '  }',
     '}',
     '',
     `:${port}, ${sni} {`,
     `  tls ${certBase}/fullchain.pem ${certBase}/privkey.pem`,
+    '  encode',
     '  forward_proxy {',
   ];
   for (const c of opts.clients || []) {
@@ -292,7 +340,7 @@ function buildCaddyfileObject(opts) {
   }
   lines.push('  }');
   lines.push('  file_server {');
-  lines.push('    root /var/www/html');
+  lines.push(`    root ${NAIVE_WWW_CONTAINER}`);
   lines.push('  }');
   lines.push('}');
   lines.push('');
@@ -538,6 +586,7 @@ async function syncClientsFromDb() {
     throw new Error('Naive SNI (FQDN) is required');
   }
   const clients = ensureClientPasswords();
+  ensureNaiveDecoySite();
   const text = buildCaddyfileObject({
     port: getPort(),
     sni,
@@ -692,6 +741,7 @@ async function enableInternal(opts = {}) {
     }
 
     ensureClientPasswords();
+    ensureNaiveDecoySite();
     const text = buildCaddyfileObject({
       port: getPort(),
       sni,
@@ -816,6 +866,7 @@ async function resetCredentialsInternal() {
   } else {
     const sni = getSni();
     if (sni) {
+      ensureNaiveDecoySite();
       writeCaddyfile(buildCaddyfileObject({
         port: getPort(),
         sni,
@@ -928,6 +979,8 @@ module.exports = {
   buildNaiveShareUrl,
   buildClientJson,
   buildCaddyfileObject,
+  ensureNaiveDecoySite,
+  NAIVE_WWW_CONTAINER,
   basicAuthUser,
   normalizePort,
   getPublicHost,

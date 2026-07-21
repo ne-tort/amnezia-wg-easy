@@ -2186,8 +2186,23 @@
                 </div>
                 <div v-if="amneziaMieruEnableUdp">
                   <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruMtu') }}</label>
-                  <input v-model="amneziaMieruMtu" type="number" min="576" max="9000" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
-                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="optional" />
+                  <input v-model="amneziaMieruMtu" type="number" min="1280" max="1400" :readonly="amneziaMieruModalMode === 'manage'" :disabled="amneziaMieruModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" placeholder="1400" />
+                </div>
+                <div>
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('mieruMultiplexing') }}</label>
+                  <select v-model="amneziaMieruMultiplexing" :disabled="amneziaMieruModalMode === 'manage'"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                    <option v-for="lvl in amneziaMieruMultiplexingLevels" :key="lvl" :value="lvl">{{ lvl }}</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="inline-flex items-center gap-2 cursor-pointer">
+                    <input v-model="amneziaMieruHandshakeNoWait" type="checkbox" class="rounded border-gray-300 dark:border-neutral-500"
+                      :disabled="amneziaMieruModalMode === 'manage'" />
+                    <span class="text-sm text-gray-600 dark:text-neutral-400">{{ $t('mieruHandshakeNoWait') }}</span>
+                  </label>
+                  <p class="text-xs text-amber-700 dark:text-amber-300 mt-1">{{ $t('mieruHandshakeNoWaitHint') }}</p>
                 </div>
               </div>
               <p v-if="amneziaMieruFieldErrors._form" class="field-error">{{ amneziaMieruFieldErrors._form }}</p>
@@ -2313,10 +2328,15 @@
                     <span class="text-sm text-gray-600 dark:text-neutral-400">{{ $t('hysteriaEchEnabled') }}</span>
                   </label>
                 </div>
-                <div v-if="amneziaHysteriaEchConfigList">
-                  <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaEchConfigList') }}</label>
-                  <input :value="amneziaHysteriaEchConfigList" type="text" readonly
-                    class="w-full rounded p-2 border-2 dark:bg-neutral-700 dark:text-neutral-300 border-gray-200 dark:border-neutral-500 text-xs font-mono" />
+                <div v-if="amneziaHysteriaModalMode === 'manage' && amneziaHysteriaEchConfigList" class="mt-1">
+                  <button type="button" class="text-xs text-gray-500 dark:text-neutral-400 hover:underline"
+                    @click="amneziaHysteriaEchTechOpen = !amneziaHysteriaEchTechOpen">
+                    {{ $t('hysteriaEchTechInfo') }}
+                  </button>
+                  <div v-if="amneziaHysteriaEchTechOpen" class="mt-1">
+                    <input :value="amneziaHysteriaEchConfigList" type="text" readonly
+                      class="w-full rounded p-2 border-2 dark:bg-neutral-700 dark:text-neutral-300 border-gray-200 dark:border-neutral-500 text-xs font-mono" />
+                  </div>
                 </div>
                 <div>
                   <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaListenMode') }}</label>

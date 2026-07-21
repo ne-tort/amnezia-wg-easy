@@ -1,4 +1,4 @@
-FROM ghcr.io/enfein/mita:latest
+FROM ghcr.io/enfein/mita:v3.34.0
 LABEL maintainer="AmneziaVPN / amnezia-wg-easy"
 
 RUN apk add --no-cache dumb-init bash netcat-openbsd jq \
