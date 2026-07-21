@@ -317,13 +317,20 @@ function mergeStreamOpts(overrides = {}) {
   );
   let flow = overrides.flow != null ? String(overrides.flow) : getFlow();
   if (!xrayTransportSchema.flowSupported(network)) flow = '';
+  let alpn = overrides.alpn != null ? overrides.alpn : getTlsAlpn();
+  if (network === 'hysteria') {
+    const list = Array.isArray(alpn)
+      ? alpn.map((s) => String(s).trim()).filter(Boolean)
+      : String(alpn || '').split(',').map((s) => s.trim()).filter(Boolean);
+    alpn = list.length ? list : ['h3'];
+  }
   return {
     security,
     network,
     sni,
     fingerprint: overrides.fingerprint != null ? overrides.fingerprint : getFingerprint(),
     flow,
-    alpn: overrides.alpn != null ? overrides.alpn : getTlsAlpn(),
+    alpn,
     allowInsecure: overrides.allowInsecure != null ? overrides.allowInsecure : getAllowInsecure(),
     ...inherited,
     ...overrides,
@@ -331,6 +338,7 @@ function mergeStreamOpts(overrides = {}) {
     network,
     sni,
     flow,
+    alpn,
   };
 }
 
@@ -716,6 +724,7 @@ function getClientXrayPayload(client, opts = {}) {
     remark: client.name,
     publicKey,
     shortId,
+    hysteriaAuth: client.xray_uuid,
     ...stream,
   };
 
@@ -1157,10 +1166,12 @@ async function syncClientsFromDb() {
     }
     await reloadXrayConfig();
   }
-  const inbound = obj.inbounds.find((i) => i.protocol === 'vless');
-  const clientCount = inbound && inbound.settings && inbound.settings.clients
-    ? inbound.settings.clients.length
-    : 0;
+  const inbound = obj.inbounds.find((i) => i.protocol === 'vless' || i.protocol === 'hysteria');
+  let clientCount = 0;
+  if (inbound && inbound.settings) {
+    if (Array.isArray(inbound.settings.clients)) clientCount = inbound.settings.clients.length;
+    else if (Array.isArray(inbound.settings.users)) clientCount = inbound.settings.users.length;
+  }
   return { ok: true, clients: clientCount };
 }
 
@@ -1389,6 +1400,8 @@ async function enableInternal(opts = {}) {
     if (opts.alpn != null) {
       const alpnVal = Array.isArray(opts.alpn) ? opts.alpn.join(',') : String(opts.alpn).trim();
       setSetting(ALPN_KEY, alpnVal);
+    } else if (network === 'hysteria' && !getSetting(ALPN_KEY, '').trim()) {
+      setSetting(ALPN_KEY, 'h3');
     }
     let allowInsecure = opts.allowInsecure != null
       ? (opts.allowInsecure === true || opts.allowInsecure === '1' || opts.allowInsecure === 'true')

@@ -70,6 +70,45 @@ test('buildStreamSettings supports ws grpc xhttp kcp', () => {
   });
   assert.equal(hy.network, 'hysteria');
   assert.equal(hy.hysteriaSettings.auth, 'secret');
+  assert.deepEqual(hy.tlsSettings.alpn, ['h3']);
+});
+
+test('hysteria transport builds protocol:hysteria inbound (not vless)', () => {
+  const inbound = xrayVless.buildServerInbound({
+    security: 'tls',
+    network: 'hysteria',
+    port: 24443,
+    sni: 'cdn.example.com',
+    tlsCert: '/cert.pem',
+    tlsKey: '/key.pem',
+    clients: [{ xray_uuid: '11111111-1111-4111-8111-111111111111', name: 'alice' }],
+  });
+  assert.equal(inbound.protocol, 'hysteria');
+  assert.equal(inbound.settings.users[0].auth, '11111111-1111-4111-8111-111111111111');
+  assert.deepEqual(inbound.streamSettings.tlsSettings.alpn, ['h3']);
+  assert.ok(inbound.streamSettings.tlsSettings.certificates);
+
+  const url = xrayVless.buildVlessUrl({
+    uuid: '11111111-1111-4111-8111-111111111111',
+    host: '1.2.3.4',
+    port: 4433,
+    security: 'tls',
+    network: 'hysteria',
+    sni: 'cdn.example.com',
+  });
+  assert.match(url, /^hy2:\/\//);
+  assert.match(url, /alpn=h3/);
+
+  const client = xrayVless.buildClientJson({
+    uuid: '11111111-1111-4111-8111-111111111111',
+    host: '1.2.3.4',
+    port: 4433,
+    security: 'tls',
+    network: 'hysteria',
+    sni: 'cdn.example.com',
+  });
+  assert.equal(client.outbounds[0].protocol, 'hysteria');
+  assert.equal(client.outbounds[0].streamSettings.hysteriaSettings.auth, '11111111-1111-4111-8111-111111111111');
 });
 
 test('buildVlessUrl encodes transport params', () => {

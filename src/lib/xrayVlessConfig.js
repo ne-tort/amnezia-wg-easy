@@ -201,6 +201,18 @@ function buildHysteriaSettings(opts) {
   return h;
 }
 
+function normalizeAlpnList(alpn, { network, forClient } = {}) {
+  let list = [];
+  if (Array.isArray(alpn)) list = alpn.map((s) => String(s).trim()).filter(Boolean);
+  else if (alpn != null && String(alpn).trim() !== '') {
+    list = String(alpn).split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  // Hysteria/QUIC requires h3; empty alpn [] breaks the TLS stack.
+  if (network === 'hysteria' && !list.length) list = ['h3'];
+  if (network === 'hysteria' && !list.includes('h3')) list = ['h3', ...list];
+  return list.length ? list : undefined;
+}
+
 function buildStreamSettings(opts) {
   const security = normalizeSecurity(opts.security);
   const network = normalizeNetwork(opts.network);
@@ -218,16 +230,16 @@ function buildStreamSettings(opts) {
   } else if (security === 'tls') {
     // Server-side tlsSettings must NOT include allowInsecure (removed in Xray 26+;
     // that flag is client-only via pinnedPeerCertSha256 / URI allowInsecure).
-    stream.tlsSettings = {
-      fingerprint: opts.fingerprint || '',
-      alpn: opts.alpn ? (Array.isArray(opts.alpn) ? opts.alpn : String(opts.alpn).split(',')) : undefined,
-    };
+    const alpn = normalizeAlpnList(opts.alpn, { network, forClient: opts.forClient === true });
+    stream.tlsSettings = {};
+    if (opts.forClient === true && opts.fingerprint) {
+      stream.tlsSettings.fingerprint = opts.fingerprint;
+    }
+    if (alpn) stream.tlsSettings.alpn = alpn;
     if (opts.forClient === true && opts.allowInsecure === true) {
       stream.tlsSettings.allowInsecure = true;
     }
     if (opts.sni) stream.tlsSettings.serverName = opts.sni;
-    if (stream.tlsSettings.alpn == null) delete stream.tlsSettings.alpn;
-    if (!stream.tlsSettings.fingerprint) delete stream.tlsSettings.fingerprint;
   }
 
   if (network === 'tcp') {
@@ -270,24 +282,50 @@ function effectiveFlow(opts) {
  */
 function buildClientJson(opts) {
   const security = normalizeSecurity(opts.security);
+  const network = normalizeNetwork(opts.network);
   const flow = effectiveFlow(opts);
-  /** @type {Record<string, unknown>} */
-  const user = { id: opts.uuid };
-  if (flow) user.flow = flow;
-  user.encryption = 'none';
 
   /** @type {Record<string, unknown>} */
-  const outbound = {
-    protocol: 'vless',
-    settings: {
-      vnext: [{
+  let outbound;
+  if (network === 'hysteria') {
+    // Xray 26: VLESS+hysteria inbound is broken (validator is nil). Clients speak
+    // native hysteria outbound against protocol:hysteria inbound.
+    const auth = String(opts.hysteriaAuth || opts.uuid || '').trim();
+    outbound = {
+      protocol: 'hysteria',
+      settings: {
+        version: 2,
         address: opts.host,
         port: Number(opts.port),
-        users: [user],
-      }],
-    },
-    streamSettings: buildStreamSettings({ ...opts, forClient: true }),
-  };
+      },
+      streamSettings: buildStreamSettings({
+        ...opts,
+        forClient: true,
+        network: 'hysteria',
+        security: 'tls',
+        hysteriaAuth: auth,
+        alpn: opts.alpn && (Array.isArray(opts.alpn) ? opts.alpn.length : String(opts.alpn).trim())
+          ? opts.alpn
+          : ['h3'],
+      }),
+    };
+  } else {
+    /** @type {Record<string, unknown>} */
+    const user = { id: opts.uuid };
+    if (flow) user.flow = flow;
+    user.encryption = 'none';
+    outbound = {
+      protocol: 'vless',
+      settings: {
+        vnext: [{
+          address: opts.host,
+          port: Number(opts.port),
+          users: [user],
+        }],
+      },
+      streamSettings: buildStreamSettings({ ...opts, forClient: true }),
+    };
+  }
   if (opts.remark) outbound.tag = opts.remark;
 
   return {
@@ -324,11 +362,14 @@ function appendVlessTransportParams(params, network, opts) {
 }
 
 /**
- * Build vless:// share link.
+ * Build share link (vless:// or hy2:// for hysteria transport).
  */
 function buildVlessUrl(opts) {
   const security = normalizeSecurity(opts.security);
   const network = normalizeNetwork(opts.network);
+  if (network === 'hysteria') {
+    return buildHysteriaShareUrl(opts);
+  }
   const flow = effectiveFlow(opts);
   const params = new URLSearchParams();
   params.set('encryption', 'none');
@@ -343,7 +384,8 @@ function buildVlessUrl(opts) {
   }
   if (security === 'tls') {
     if (opts.allowInsecure) params.set('allowInsecure', '1');
-    if (opts.alpn) params.set('alpn', Array.isArray(opts.alpn) ? opts.alpn.join(',') : opts.alpn);
+    const alpn = normalizeAlpnList(opts.alpn, { network, forClient: true });
+    if (alpn) params.set('alpn', alpn.join(','));
   }
   appendVlessTransportParams(params, network, opts);
   let url = `vless://${opts.uuid}@${opts.host}:${Number(opts.port)}?${params.toString()}`;
@@ -352,11 +394,34 @@ function buildVlessUrl(opts) {
 }
 
 /**
+ * hy2:// link for Xray protocol:hysteria inbound (auth = client UUID).
+ */
+function buildHysteriaShareUrl(opts) {
+  const auth = String(opts.hysteriaAuth || opts.uuid || '').trim();
+  const params = new URLSearchParams();
+  if (opts.sni) params.set('sni', opts.sni);
+  params.set('insecure', opts.allowInsecure ? '1' : '0');
+  const alpn = normalizeAlpnList(opts.alpn, { network: 'hysteria', forClient: true }) || ['h3'];
+  params.set('alpn', alpn.join(','));
+  if (opts.fingerprint) params.set('fp', opts.fingerprint);
+  let url = `hy2://${encodeURIComponent(auth)}@${opts.host}:${Number(opts.port)}/?${params.toString()}`;
+  if (opts.remark) url += `#${encodeURIComponent(opts.remark)}`;
+  return url;
+}
+
+/**
  * Server inbound for Xray server.json.
+ * Hysteria transport uses protocol:hysteria — VLESS+network=hysteria panics on Xray 26
+ * ("validator is nil" / bogus TCP listen).
  */
 function buildServerInbound(opts) {
   const security = normalizeSecurity(opts.security);
   const network = normalizeNetwork(opts.network);
+
+  if (network === 'hysteria') {
+    return buildHysteriaServerInbound(opts);
+  }
+
   const tag = security === 'reality' ? 'vless-reality' : `vless-${security}-${network}`;
   const flow = effectiveFlow({ ...opts, security, network });
 
@@ -396,6 +461,43 @@ function buildServerInbound(opts) {
   return inbound;
 }
 
+function buildHysteriaServerInbound(opts) {
+  const users = (opts.clients || []).map((c) => ({
+    auth: String(c.xray_uuid || c.id || ''),
+    email: String(c.name || c.email || ''),
+  })).filter((u) => u.auth);
+
+  const streamOpts = {
+    ...opts,
+    network: 'hysteria',
+    security: 'tls',
+    forClient: false,
+    alpn: opts.alpn && (Array.isArray(opts.alpn) ? opts.alpn.length : String(opts.alpn).trim())
+      ? opts.alpn
+      : ['h3'],
+  };
+  /** @type {Record<string, unknown>} */
+  const streamSettings = buildStreamSettings(streamOpts);
+  if (opts.tlsCert && opts.tlsKey) {
+    streamSettings.tlsSettings = {
+      ...(streamSettings.tlsSettings || {}),
+      certificates: [{ certificateFile: opts.tlsCert, keyFile: opts.tlsKey }],
+    };
+  }
+
+  return {
+    tag: 'vless-hysteria',
+    listen: '0.0.0.0',
+    port: opts.port,
+    protocol: 'hysteria',
+    settings: {
+      version: 2,
+      users,
+    },
+    streamSettings,
+  };
+}
+
 module.exports = {
   SECURITY_MODES,
   NETWORK_MODES,
@@ -405,6 +507,9 @@ module.exports = {
   buildStreamSettings,
   buildClientJson,
   buildVlessUrl,
+  buildHysteriaShareUrl,
   buildServerInbound,
+  buildHysteriaServerInbound,
   effectiveFlow,
+  normalizeAlpnList,
 };
