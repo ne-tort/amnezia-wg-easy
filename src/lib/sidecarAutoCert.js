@@ -14,28 +14,18 @@ function isAutoCertId(id) {
  * @param {{ service: 'xray'|'hysteria', security?: string, sni?: string, address?: string, email?: string }} opts
  * @returns {Promise<{ id: string, sni?: string, type?: string }>}
  */
-/** Same neutral default as Reality/Hysteria (SNI bank → www.sbb.ch). */
-function neutralAutoHostname() {
-  try {
-    const picked = require('./sniFinder').pickDefaultSni();
-    if (picked) return String(picked).trim().toLowerCase();
-  } catch {
-    /* ignore */
-  }
-  return 'www.sbb.ch';
-}
+/** Neutral mDNS-style label for auto self-signed (no protocol brand in CN/SNI). */
+const AUTO_SELF_SIGNED_HOST = 'server.local';
 
 /**
- * Pick a demux-friendly cert CN/SNI. Bare IPs work for TLS verify with allowInsecure,
- * but nginx stream demux matches ClientHello SNI — use a common public hostname.
+ * Pick a demux-friendly cert CN/SNI. Bare IPs need a hostname for stream demux.
  */
 function autoCertDomain(sni, address) {
   const tlsMaterial = require('./tlsMaterial');
   const portPlan = require('./portPlan');
-  const fallback = neutralAutoHostname();
-  let domain = sni || tlsMaterial.normalizeHostname(address) || fallback;
+  let domain = sni || tlsMaterial.normalizeHostname(address) || AUTO_SELF_SIGNED_HOST;
   if (portPlan.isIpLiteral(domain) || domain === 'localhost') {
-    domain = fallback;
+    domain = AUTO_SELF_SIGNED_HOST;
   }
   return domain;
 }
@@ -101,6 +91,7 @@ async function resolveOptsSslCert(opts, service) {
 
 module.exports = {
   SSL_CERT_AUTO,
+  AUTO_SELF_SIGNED_HOST,
   isAutoCertId,
   resolveAutoCert,
   resolveOptsSslCert,

@@ -695,7 +695,7 @@ async function resolveCertMaterial(opts = {}) {
   }
 
   if (source === 'self_signed') {
-    const certDomain = domain || require('./sniFinder').pickDefaultSni() || 'www.sbb.ch';
+    const certDomain = domain || require('./sidecarAutoCert').AUTO_SELF_SIGNED_HOST;
     return ensureSelfSignedCert(certDomain).then((p) => ({ ...p, source: 'self_signed' }));
   }
 

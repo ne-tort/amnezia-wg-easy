@@ -1422,7 +1422,7 @@ async function enableInternal(opts = {}) {
           } else if (certSource === 'issue_le') {
             certDomain = sni;
           } else {
-            certDomain = sni || getSni() || DEFAULT_SNI;
+            certDomain = sni || require('./sidecarAutoCert').AUTO_SELF_SIGNED_HOST;
           }
         }
         await tlsMaterial.resolveCertMaterial({

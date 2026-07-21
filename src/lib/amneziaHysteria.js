@@ -1160,7 +1160,7 @@ async function enableInternal(opts = {}) {
         } else if (certSource === 'issue_le') {
           certDomainForIssue = sni;
         } else {
-          certDomainForIssue = sni || getSni() || DEFAULT_SNI;
+          certDomainForIssue = sni || require('./sidecarAutoCert').AUTO_SELF_SIGNED_HOST;
         }
       }
       await tlsMaterial.resolveCertMaterial({
