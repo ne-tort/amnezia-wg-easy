@@ -225,7 +225,7 @@ new Vue({
     amneziaXrayPort: '',
     amneziaXrayPublicPort: 443,
     amneziaXraySecurity: 'reality',
-    amneziaXraySslCertId: '',
+    amneziaXraySslCertId: '__auto__',
     amneziaXraySecurities: ['reality', 'tls', 'none'],
     amneziaXrayFieldErrors: {},
     amneziaXrayMode: null,
@@ -239,6 +239,7 @@ new Vue({
       { value: '', label: '(none)' },
     ],
     ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.initialState() : {}),
+    ...(typeof XrayTransportUi !== 'undefined' ? XrayTransportUi.initialState() : {}),
     ...(typeof SslManagerPanel !== 'undefined' ? SslManagerPanel.initialState() : {}),
     sniFinderDefaultSni: null,
     sniFinderTarget: null,
@@ -907,6 +908,10 @@ new Vue({
         if (st.publicPort) this.amneziaXrayPublicPort = st.publicPort;
         if (st.security) this.amneziaXraySecurity = st.security;
         if (st.sslCertId) this.amneziaXraySslCertId = st.sslCertId;
+        else if (!this.amneziaXraySslCertId) this.amneziaXraySslCertId = '__auto__';
+        if (typeof this.hydrateXrayTransportFromStatus === 'function') {
+          this.hydrateXrayTransportFromStatus(st);
+        }
       }
       if (c.panelHttpsPort != null) this.panelHttpsPort = Number(c.panelHttpsPort) || 443;
       if (c.panelDomain != null) this.panelDomain = String(c.panelDomain || '');
@@ -988,10 +993,14 @@ new Vue({
         if (this.amneziaXraySecurity === 'reality'
           && !String(this.amneziaXraySni || '').trim()
           && this.sniFinderDefaultSni
-          && !this.amneziaXraySslCertId) {
+          && (this.amneziaXraySslCertId === '__auto__' || !this.amneziaXraySslCertId)) {
           this.amneziaXraySni = this.sniFinderDefaultSni;
         }
-        if (this.amneziaXraySslCertId) this.onXraySslCertChange();
+        if (!this.amneziaXraySslCertId) this.amneziaXraySslCertId = '__auto__';
+        if (typeof this.onXrayNetworkChange === 'function') this.onXrayNetworkChange();
+        if (this.amneziaXraySslCertId && this.amneziaXraySslCertId !== '__auto__') {
+          this.onXraySslCertChange();
+        }
         this.amneziaXrayInstallOpen = true;
       });
     },
@@ -1003,9 +1012,13 @@ new Vue({
         flow: this.amneziaXrayFlow,
         publicPort: Number(this.amneziaXrayPublicPort) || 443,
         security: this.amneziaXraySecurity,
+        network: this.amneziaXrayNetwork || 'tcp',
+        transportSettings: typeof this.buildXrayTransportSettingsPayload === 'function'
+          ? this.buildXrayTransportSettingsPayload()
+          : (this.amneziaXrayTransportSettings || {}),
       };
       if (this.amneziaXraySecurity === 'reality' || this.amneziaXraySecurity === 'tls') {
-        body.sslCertId = String(this.amneziaXraySslCertId || '').trim();
+        body.sslCertId = String(this.amneziaXraySslCertId || '__auto__').trim();
       }
       const portRaw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
       if (portRaw !== '') body.port = Number(portRaw);
@@ -1029,7 +1042,8 @@ new Vue({
       this.amneziaXrayBusy = true;
       this.ensureAmneziaXrayPoll();
       try {
-        const needSniPreflight = body.sni && this.amneziaXraySecurity === 'reality' && !body.sslCertId;
+        const needSniPreflight = body.sni && this.amneziaXraySecurity === 'reality'
+          && body.sslCertId === '__auto__';
         if (needSniPreflight) {
           await this.preflightSniForInstall(body.sni);
         }
@@ -1228,12 +1242,13 @@ new Vue({
       }
     },
     onXraySecurityChange() {
-      this.amneziaXraySslCertId = '';
+      this.amneziaXraySslCertId = '__auto__';
       if (this.amneziaXraySecurity === 'none') {
         this.amneziaXraySni = '';
       }
     },
     onXraySslCertChange() {
+      if (this.amneziaXraySslCertId === '__auto__') return;
       if (this.amneziaXraySecurity !== 'reality') return;
       const c = this.sslFindCertById
         ? this.sslFindCertById(this.amneziaXraySslCertId)
@@ -2706,6 +2721,7 @@ new Vue({
         });
     },
     ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.methods : {}),
+    ...(typeof XrayTransportUi !== 'undefined' ? XrayTransportUi.methods : {}),
     ...(typeof SslManagerPanel !== 'undefined' ? SslManagerPanel.methods : {}),
   },
   filters: {
@@ -2805,6 +2821,7 @@ new Vue({
       return this.hasCapability('system.xray');
     },
     ...(typeof SidecarPanels !== 'undefined' ? SidecarPanels.computed : {}),
+    ...(typeof XrayTransportUi !== 'undefined' ? XrayTransportUi.computed : {}),
     ...(typeof SslManagerPanel !== 'undefined' ? SslManagerPanel.computed : {}),
     isValidAmneziaXrayPort() {
       const raw = String(this.amneziaXrayPort == null ? '' : this.amneziaXrayPort).trim();
@@ -2828,21 +2845,25 @@ new Vue({
     },
     xraySslCertOptions() {
       const list = this.sslCerts || [];
+      const autoOpt = { id: '__auto__', type: '_auto', label: this.$t('sslCreateAuto') || 'Create automatically' };
       let filtered;
+      const net = String(this.amneziaXrayNetwork || 'tcp').toLowerCase();
+      const supportsReality = ['tcp', 'xhttp', 'grpc'].includes(net);
       if (this.amneziaXraySecurity === 'reality') {
-        filtered = list.filter((c) => c && c.type === 'reality');
+        filtered = supportsReality ? list.filter((c) => c && c.type === 'reality') : [];
       } else if (this.amneziaXraySecurity === 'tls') {
-        filtered = list.filter((c) => c && c.type !== 'reality');
+        filtered = list.filter((c) => c && c.type !== 'reality' && c.type !== 'masquerade');
       } else {
         filtered = [];
       }
       const selected = this.sslFindCertById
         ? this.sslFindCertById(this.amneziaXraySslCertId)
         : list.find((c) => c.id === this.amneziaXraySslCertId);
-      if (selected && !filtered.some((c) => c.id === selected.id)) {
-        return [selected, ...filtered];
+      let out = [autoOpt, ...filtered];
+      if (selected && selected.id !== '__auto__' && !filtered.some((c) => c.id === selected.id)) {
+        out = [autoOpt, selected, ...filtered];
       }
-      return filtered;
+      return out;
     },
     xraySniReadonly() {
       return this.amneziaXrayModalMode === 'manage';
@@ -2851,7 +2872,12 @@ new Vue({
       if (!String(this.amneziaXrayAddress || '').trim()) return false;
       if (!this.isValidAmneziaXrayPort || !this.isValidAmneziaXrayPublicPort) return false;
       if (this.amneziaXraySecurity === 'reality' || this.amneziaXraySecurity === 'tls') {
-        if (!String(this.amneziaXraySslCertId || '').trim()) return false;
+        const certId = String(this.amneziaXraySslCertId || '__auto__').trim();
+        if (!certId) return false;
+        if (this.amneziaXraySecurity === 'reality') {
+          const net = String(this.amneziaXrayNetwork || 'tcp').toLowerCase();
+          if (!['tcp', 'xhttp', 'grpc'].includes(net)) return false;
+        }
       }
       return true;
     },

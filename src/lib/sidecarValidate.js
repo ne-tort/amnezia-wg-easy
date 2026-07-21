@@ -8,6 +8,8 @@
 const config = require('../config');
 const portPlan = require('./portPlan');
 const tlsMaterial = require('./tlsMaterial');
+const xrayTransportSchema = require('./xrayTransportSchema');
+const { SSL_CERT_AUTO } = require('./sidecarAutoCert');
 
 const PANEL_CERT_CONFLICT_MSG = 'Cannot reuse panel certificate on the same public port as panel HTTPS';
 
@@ -127,6 +129,9 @@ function validateSslCertId(body, filterKey) {
   if (!id) {
     return errField('sslCertId', 'Certificate is required', 'SSL_CERT_REQUIRED');
   }
+  if (id === SSL_CERT_AUTO) {
+    return { ok: true, cert: null, auto: true };
+  }
   const sslManager = require('./sslManager');
   const row = sslManager.getRaw(id);
   if (!row) {
@@ -169,6 +174,12 @@ function validateHysteria(body = {}) {
   const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
   const masq = body.masqueradeUrl != null ? body.masqueradeUrl : body.masquerade_url;
   if (sslId) {
+    if (sslId === SSL_CERT_AUTO) {
+      return mergeErrors(
+        { ok: true, publicPort, sslCertId: SSL_CERT_AUTO, autoCert: true },
+        validateMasqueradeUrl(masq),
+      );
+    }
     const certCheck = validateSslCertId(body, 'hysteria');
     if (!certCheck.ok) return certCheck;
     return mergeErrors(
@@ -197,17 +208,37 @@ function validateHysteria(body = {}) {
 }
 
 function validateXray(body = {}) {
-  const security = String(body.security || 'reality').toLowerCase();
+  const xrayVlessConfig = require('./xrayVlessConfig');
+  const security = xrayVlessConfig.normalizeSecurity(body.security || 'reality');
+  const network = xrayVlessConfig.normalizeNetwork(body.network || 'tcp');
   const publicPort = parseInt(String(body.publicPort != null ? body.publicPort : '443'), 10);
   if (!Number.isFinite(publicPort) || publicPort < 1 || publicPort > 65535) {
     return errField('publicPort', 'Invalid public port (1–65535)', 'XRAY_BAD_PUBLIC_PORT');
   }
+  if (!xrayTransportSchema.allowedSecurities(network).includes(security)) {
+    return errField('network', `Security «${security}» is not allowed for transport «${network}»`, 'XRAY_TRANSPORT_SECURITY');
+  }
+  const transportSettings = body.transportSettings != null ? body.transportSettings : body.transport_settings;
+  if (transportSettings && typeof transportSettings === 'object') {
+    const tv = xrayTransportSchema.validateTransportSettings(network, transportSettings);
+    if (!tv.ok) return tv;
+  }
   const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
   const sni = tlsMaterial.normalizeHostname(body.sni || '');
-  const parts = [{ ok: true, security, publicPort }];
+  const parts = [{ ok: true, security, publicPort, network }];
 
   if (security === 'reality') {
     if (sslId) {
+      if (sslId === SSL_CERT_AUTO) {
+        if (!sni) return errField('sni', 'SNI is required for auto Reality certificate', 'XRAY_SNI_REQUIRED');
+        const demuxPort = panelHttpsPort();
+        if (publicPort === demuxPort) {
+          parts.push(validateSniDemux('xray', sni, publicPort));
+        }
+        const merged = mergeErrors(...parts);
+        if (!merged.ok) return merged;
+        return { ok: true, sslCertId: SSL_CERT_AUTO, sni, autoCert: true, security, publicPort, network };
+      }
       const certCheck = validateSslCertId(body, 'xray_reality');
       if (!certCheck.ok) return certCheck;
       const certSni = tlsMaterial.normalizeHostname(certCheck.cert.sni || certCheck.cert.domain || '');
@@ -228,6 +259,9 @@ function validateXray(body = {}) {
 
   if (security === 'tls') {
     if (sslId) {
+      if (sslId === SSL_CERT_AUTO) {
+        return { ok: true, sslCertId: SSL_CERT_AUTO, autoCert: true, security, publicPort, network };
+      }
       const certCheck = validateSslCertId(body, 'xray_tls');
       if (!certCheck.ok) return certCheck;
       if (certCheck.cert.is_panel) {

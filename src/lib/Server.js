@@ -1251,6 +1251,10 @@ module.exports = class Server {
             address: body && body.address,
             security: body && body.security,
             network: body && body.network,
+            sslCertId: body && (body.sslCertId != null ? body.sslCertId : body.ssl_cert_id),
+            transportSettings: body && (body.transportSettings != null
+              ? body.transportSettings
+              : body.transport_settings),
             certSource: body && (body.certSource != null ? body.certSource : body.cert_source),
             certDomain: body && (body.certDomain != null ? body.certDomain : body.cert_domain),
             certPem: body && (body.certPem != null ? body.certPem : body.cert_pem),
@@ -1461,6 +1465,14 @@ module.exports = class Server {
             masqueradeType: body && (body.masqueradeType != null ? body.masqueradeType : body.masquerade_type),
             obfsType: body && (body.obfsType != null ? body.obfsType : body.obfs_type),
             obfsPassword: body && (body.obfsPassword != null ? body.obfsPassword : body.obfs_password),
+            obfsGeckoMin: body && (body.obfsGeckoMin != null ? body.obfsGeckoMin : body.obfs_gecko_min),
+            obfsGeckoMax: body && (body.obfsGeckoMax != null ? body.obfsGeckoMax : body.obfs_gecko_max),
+            congestionType: body && (body.congestionType != null ? body.congestionType : body.congestion_type),
+            bbrProfile: body && (body.bbrProfile != null ? body.bbrProfile : body.bbr_profile),
+            echEnabled: body && (body.echEnabled != null ? body.echEnabled : body.ech_enabled),
+            listenMode: body && (body.listenMode != null ? body.listenMode : body.listen_mode),
+            portRange: body && (body.portRange != null ? body.portRange : body.port_range),
+            realmUri: body && (body.realmUri != null ? body.realmUri : body.realm_uri),
             bandwidthUp: body && (body.bandwidthUp != null ? body.bandwidthUp : body.bandwidth_up),
             bandwidthDown: body && (body.bandwidthDown != null ? body.bandwidthDown : body.bandwidth_down),
             ignoreClientBandwidth: body && (body.ignoreClientBandwidth != null
@@ -1475,6 +1487,7 @@ module.exports = class Server {
             tlsInsecureClient: body && (body.tlsInsecureClient != null
               ? body.tlsInsecureClient
               : body.tls_insecure_client),
+            sslCertId: body && (body.sslCertId != null ? body.sslCertId : body.ssl_cert_id),
             email: body && (body.email != null ? body.email : body.certbotEmail),
           });
           return { success: true, ...status };

@@ -252,6 +252,26 @@ test('buildAmneziaXrayContainer matches official Amnezia connection .vpn shape',
   assert.equal(lc.outbounds[0].tag, undefined);
 });
 
+test('buildAmneziaXrayContainer includes wsSettings when network is ws', () => {
+  const { amneziaXray, settings } = loadAmneziaXray();
+  settings.amnezia_xray_desired = '1';
+  settings.amnezia_xray_security = 'tls';
+  settings.amnezia_xray_network = 'ws';
+  settings.amnezia_xray_transport_json = JSON.stringify({ wsPath: '/path', wsHost: 'cdn.example.com' });
+  settings.amnezia_xray_sni = 'cdn.example.com';
+  settings.amnezia_xray_address = '1.2.3.4';
+  settings.amnezia_xray_allow_insecure = '1';
+  const el = amneziaXray.buildAmneziaXrayContainer({
+    name: 'bob',
+    xray_uuid: '22222222-2222-4222-8222-222222222222',
+  });
+  assert.ok(el);
+  const lc = JSON.parse(el.xray.last_config);
+  assert.equal(lc.outbounds[0].streamSettings.network, 'ws');
+  assert.equal(lc.outbounds[0].streamSettings.wsSettings.path, '/path');
+  assert.equal(el.xray.transport_proto, 'tcp');
+});
+
 test('disable-shaped settings: address and keys survive in app_settings map', () => {
   const { amneziaXray, settings } = loadAmneziaXray();
   settings.amnezia_xray_address = 'panel.example.com';

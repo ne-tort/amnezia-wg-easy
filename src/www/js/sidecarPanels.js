@@ -71,11 +71,20 @@ window.SidecarPanels = {
       amneziaHysteriaMasqueradeUrl: '',
       amneziaHysteriaMasqueradeId: '',
       amneziaHysteriaObfsType: '',
-      amneziaHysteriaObfsTypes: ['', 'salamander'],
+      amneziaHysteriaObfsTypes: ['', 'salamander', 'gecko'],
       amneziaHysteriaObfsPassword: '',
       amneziaHysteriaBandwidthUp: '',
       amneziaHysteriaBandwidthDown: '',
-      amneziaHysteriaSslCertId: '',
+      amneziaHysteriaSslCertId: '__auto__',
+      amneziaHysteriaObfsGeckoMin: '',
+      amneziaHysteriaObfsGeckoMax: '',
+      amneziaHysteriaCongestionType: 'bbr',
+      amneziaHysteriaBbrProfile: 'standard',
+      amneziaHysteriaEchEnabled: false,
+      amneziaHysteriaEchConfigList: '',
+      amneziaHysteriaListenMode: 'direct',
+      amneziaHysteriaPortRange: '',
+      amneziaHysteriaRealmUri: '',
       amneziaHysteriaAdvancedOpen: false,
       amneziaHysteriaFieldErrors: {},
       masqueradeBankOpen: false,
@@ -144,18 +153,20 @@ window.SidecarPanels = {
     canConfirmAmneziaHysteriaInstall() {
       if (!String(this.amneziaHysteriaAddress || '').trim()) return false;
       if (!this.isValidAmneziaHysteriaPublicPort) return false;
-      if (!String(this.amneziaHysteriaSslCertId || '').trim()) return false;
+      if (!String(this.amneziaHysteriaSslCertId || '__auto__').trim()) return false;
       return true;
     },
     hysteriaSslCertOptions() {
       const list = (this.sslCerts || []).filter((c) => c && c.type !== 'reality' && c.type !== 'masquerade');
+      const autoOpt = { id: '__auto__', type: '_auto', label: this.$t('sslCreateAuto') || 'Create automatically' };
       const selected = this.sslFindCertById
         ? this.sslFindCertById(this.amneziaHysteriaSslCertId)
         : (this.sslCerts || []).find((c) => c.id === this.amneziaHysteriaSslCertId);
-      if (selected && !list.some((c) => c.id === selected.id)) {
-        return [selected, ...list];
+      let out = [autoOpt, ...list];
+      if (selected && selected.id !== '__auto__' && !list.some((c) => c.id === selected.id)) {
+        out = [autoOpt, selected, ...list];
       }
-      return list;
+      return out;
     },
     hysteriaMasqueradeOptions() {
       const list = (this.sslCerts || []).filter((c) => c && c.type === 'masquerade');
@@ -343,7 +354,7 @@ window.SidecarPanels = {
       const body = {
         address: String(this.amneziaHysteriaAddress).trim(),
         publicPort: Number(this.amneziaHysteriaPublicPort) || 443,
-        sslCertId: String(this.amneziaHysteriaSslCertId || '').trim(),
+        sslCertId: String(this.amneziaHysteriaSslCertId || '__auto__').trim(),
       };
       const masq = String(this.amneziaHysteriaMasqueradeUrl || '').trim();
       body.masqueradeUrl = masq;
@@ -351,11 +362,27 @@ window.SidecarPanels = {
       if (obfsType) {
         body.obfsType = obfsType;
         body.obfsPassword = String(this.amneziaHysteriaObfsPassword || '').trim();
+        if (obfsType === 'gecko') {
+          const gmin = String(this.amneziaHysteriaObfsGeckoMin || '').trim();
+          const gmax = String(this.amneziaHysteriaObfsGeckoMax || '').trim();
+          if (gmin) body.obfsGeckoMin = Number(gmin);
+          if (gmax) body.obfsGeckoMax = Number(gmax);
+        }
       }
       const up = String(this.amneziaHysteriaBandwidthUp || '').trim();
       const down = String(this.amneziaHysteriaBandwidthDown || '').trim();
       if (up) body.bandwidthUp = up;
       if (down) body.bandwidthDown = down;
+      if (this.amneziaHysteriaCongestionType) {
+        body.congestionType = this.amneziaHysteriaCongestionType;
+        if (this.amneziaHysteriaCongestionType === 'bbr' && this.amneziaHysteriaBbrProfile) {
+          body.bbrProfile = this.amneziaHysteriaBbrProfile;
+        }
+      }
+      if (this.amneziaHysteriaEchEnabled) body.echEnabled = true;
+      if (this.amneziaHysteriaListenMode) body.listenMode = this.amneziaHysteriaListenMode;
+      if (this.amneziaHysteriaPortRange) body.portRange = String(this.amneziaHysteriaPortRange).trim();
+      if (this.amneziaHysteriaRealmUri) body.realmUri = String(this.amneziaHysteriaRealmUri).trim();
       return body;
     },
     buildNaiveInstallBody() {
@@ -559,9 +586,19 @@ window.SidecarPanels = {
         }
         this.syncHysteriaMasqueradeIdFromUrl();
         if (st.obfsType) this.amneziaHysteriaObfsType = st.obfsType;
+        if (st.obfsGeckoMin) this.amneziaHysteriaObfsGeckoMin = String(st.obfsGeckoMin);
+        if (st.obfsGeckoMax) this.amneziaHysteriaObfsGeckoMax = String(st.obfsGeckoMax);
+        if (st.congestionType) this.amneziaHysteriaCongestionType = st.congestionType;
+        if (st.bbrProfile) this.amneziaHysteriaBbrProfile = st.bbrProfile;
+        if (st.echEnabled != null) this.amneziaHysteriaEchEnabled = st.echEnabled === true;
+        if (st.echConfigList) this.amneziaHysteriaEchConfigList = st.echConfigList;
+        if (st.listenMode) this.amneziaHysteriaListenMode = st.listenMode;
+        if (st.portRange) this.amneziaHysteriaPortRange = st.portRange;
+        if (st.realmUri) this.amneziaHysteriaRealmUri = st.realmUri;
         if (st.bandwidthUp) this.amneziaHysteriaBandwidthUp = st.bandwidthUp;
         if (st.bandwidthDown) this.amneziaHysteriaBandwidthDown = st.bandwidthDown;
         if (st.sslCertId) this.amneziaHysteriaSslCertId = st.sslCertId;
+        else if (!this.amneziaHysteriaSslCertId) this.amneziaHysteriaSslCertId = '__auto__';
       }
       if (this.amneziaHysteriaBusy) this.ensureAmneziaHysteriaPoll();
       else this.stopAmneziaHysteriaPoll();

@@ -44,8 +44,10 @@ const GRPC_SERVICE_KEY = 'amnezia_xray_grpc_service_name';
 const GRPC_MULTI_KEY = 'amnezia_xray_grpc_multi_mode';
 const ALPN_KEY = 'amnezia_xray_tls_alpn';
 const ALLOW_INSECURE_KEY = 'amnezia_xray_allow_insecure';
+const TRANSPORT_JSON_KEY = 'amnezia_xray_transport_json';
 
 const xrayVlessConfig = require('./xrayVlessConfig');
+const xrayTransportSchema = require('./xrayTransportSchema');
 
 const DEFAULT_SNI = 'www.sbb.ch';
 const DEFAULT_FP = 'chrome';
@@ -240,20 +242,95 @@ function getAllowInsecure() {
   return getSecurity() === 'tls' && getCertSource() === 'self_signed';
 }
 
-function clientStreamOpts() {
+function migrateLegacyTransportSettings(network) {
+  /** @type {Record<string, unknown>} */
+  const legacy = {};
+  const wsPath = getWsPath();
+  const wsHost = getWsHost();
+  const grpcService = getGrpcServiceName();
+  if (network === 'ws') {
+    if (wsPath && wsPath !== '/') legacy.wsPath = wsPath;
+    if (wsHost) legacy.wsHost = wsHost;
+  }
+  if (network === 'grpc') {
+    if (grpcService) legacy.grpcServiceName = grpcService;
+    if (getGrpcMultiMode()) legacy.grpcMultiMode = true;
+  }
+  return legacy;
+}
+
+function getTransportSettingsRaw() {
+  const raw = getSetting(TRANSPORT_JSON_KEY, '');
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function getTransportSettings() {
+  const network = getNetwork();
+  const stored = getTransportSettingsRaw();
+  if (stored) {
+    return xrayTransportSchema.sanitizeTransportSettings(network, stored);
+  }
+  return xrayTransportSchema.sanitizeTransportSettings(network, migrateLegacyTransportSettings(network));
+}
+
+function setTransportSettings(network, settings) {
+  const sanitized = xrayTransportSchema.sanitizeTransportSettings(network, settings || {});
+  setSetting(TRANSPORT_JSON_KEY, Object.keys(sanitized).length ? JSON.stringify(sanitized) : '');
+  // Keep legacy keys in sync for ws/grpc
+  if (network === 'ws') {
+    setSetting(WS_PATH_KEY, String(sanitized.wsPath || '/').trim() || '/');
+    setSetting(WS_HOST_KEY, sanitized.wsHost != null ? String(sanitized.wsHost).trim() : '');
+  }
+  if (network === 'grpc') {
+    setSetting(GRPC_SERVICE_KEY, sanitized.grpcServiceName != null ? String(sanitized.grpcServiceName).trim() : '');
+    setSetting(GRPC_MULTI_KEY, sanitized.grpcMultiMode === true ? '1' : '0');
+  }
+}
+
+function mergeStreamOpts(overrides = {}) {
+  const network = xrayVlessConfig.normalizeNetwork(
+    overrides.network != null ? overrides.network : getNetwork(),
+  );
+  const security = xrayVlessConfig.normalizeSecurity(
+    overrides.security != null ? overrides.security : getSecurity(),
+  );
+  const sni = overrides.sni != null ? String(overrides.sni) : getSni();
+  const transportRaw = overrides.transportSettings != null
+    ? overrides.transportSettings
+    : getTransportSettings();
+  const inherited = xrayTransportSchema.inheritTransportFields(
+    { sni, certDomain: overrides.certDomain },
+    network,
+    transportRaw,
+  );
+  let flow = overrides.flow != null ? String(overrides.flow) : getFlow();
+  if (!xrayTransportSchema.flowSupported(network)) flow = '';
   return {
-    security: getSecurity(),
-    network: getNetwork(),
-    sni: getSni(),
-    fingerprint: getFingerprint(),
-    flow: getFlow(),
-    wsPath: getWsPath(),
-    wsHost: getWsHost() || getSni(),
-    grpcServiceName: getGrpcServiceName(),
-    grpcMultiMode: getGrpcMultiMode(),
-    alpn: getTlsAlpn(),
-    allowInsecure: getAllowInsecure(),
+    security,
+    network,
+    sni,
+    fingerprint: overrides.fingerprint != null ? overrides.fingerprint : getFingerprint(),
+    flow,
+    alpn: overrides.alpn != null ? overrides.alpn : getTlsAlpn(),
+    allowInsecure: overrides.allowInsecure != null ? overrides.allowInsecure : getAllowInsecure(),
+    ...inherited,
+    ...overrides,
+    security,
+    network,
+    sni,
+    flow,
   };
+}
+
+function clientStreamOpts() {
+  return mergeStreamOpts({});
 }
 
 function setPhase(next, err = null) {
@@ -455,27 +532,23 @@ function buildInboundClients(flow) {
 }
 
 function buildServerConfigObject(opts = {}) {
-  const security = xrayVlessConfig.normalizeSecurity(opts.security != null ? opts.security : getSecurity());
-  const network = xrayVlessConfig.normalizeNetwork(opts.network != null ? opts.network : getNetwork());
+  const merged = mergeStreamOpts(opts);
+  const security = merged.security;
+  const network = merged.network;
   const port = opts.port;
-  const sni = opts.sni || getSni();
-  const flow = opts.flow != null ? opts.flow : getFlow();
+  const sni = merged.sni || getSni();
+  const flow = merged.flow;
   const clients = ensureClientUuids();
 
   /** @type {Record<string, unknown>} */
   const inboundOpts = {
+    ...merged,
     port,
     sni,
     security,
     network,
     flow,
     clients,
-    fingerprint: opts.fingerprint != null ? opts.fingerprint : getFingerprint(),
-    wsPath: opts.wsPath != null ? opts.wsPath : getWsPath(),
-    wsHost: opts.wsHost != null ? opts.wsHost : (getWsHost() || sni),
-    grpcServiceName: opts.grpcServiceName != null ? opts.grpcServiceName : getGrpcServiceName(),
-    grpcMultiMode: opts.grpcMultiMode != null ? opts.grpcMultiMode : getGrpcMultiMode(),
-    alpn: opts.alpn != null ? opts.alpn : getTlsAlpn(),
   };
 
   if (security === 'reality') {
@@ -648,7 +721,7 @@ function buildAmneziaXrayContainer(client) {
       last_config: `${JSON.stringify(forVpn, null, 4)}\n`,
       port: String(payload.port),
       subnet_address: AMNEZIA_XRAY_SUBNET,
-      transport_proto: 'tcp',
+      transport_proto: xrayTransportSchema.mapTransportProto(payload.network),
     },
   };
 }
@@ -1015,6 +1088,11 @@ function getStatus() {
     flow: getFlow(),
     security: getSecurity(),
     network: getNetwork(),
+    transports: xrayTransportSchema.TRANSPORTS,
+    transportSettings: getTransportSettings(),
+    transportFields: xrayTransportSchema.getFieldsForUi(getNetwork()),
+    allowedSecurities: xrayTransportSchema.allowedSecurities(getNetwork()),
+    allowedCertTypes: xrayTransportSchema.allowedCertTypes(getSecurity(), getNetwork()),
     certSource: getCertSource(),
     certDomain: resolveCertDomain(),
     sslCertId: getSetting(SSL_CERT_ID_KEY, '') || null,
@@ -1072,6 +1150,9 @@ async function enableInternal(opts = {}) {
         fieldErrors: validation.fieldErrors,
       });
     }
+    const { resolveOptsSslCert } = require('./sidecarAutoCert');
+    opts = await resolveOptsSslCert(opts, 'xray');
+    if (validation.sni && !opts.sni) opts.sni = validation.sni;
 
     const security = xrayVlessConfig.normalizeSecurity(
       opts.security != null ? opts.security : getSecurity(),
@@ -1125,6 +1206,7 @@ async function enableInternal(opts = {}) {
     if (!FINGERPRINTS.includes(fingerprint)) fingerprint = DEFAULT_FP;
     let flow = opts.flow != null ? String(opts.flow) : getFlow();
     if (flow !== '' && !FLOWS.includes(flow)) flow = DEFAULT_FLOW;
+    if (!xrayTransportSchema.flowSupported(network)) flow = '';
 
     const publicPort = opts.publicPort != null
       ? parseInt(String(opts.publicPort).trim(), 10)
@@ -1161,11 +1243,34 @@ async function enableInternal(opts = {}) {
     } else if (security === 'none') {
       setSetting(SSL_CERT_ID_KEY, '');
     }
-    if (opts.wsPath != null) setSetting(WS_PATH_KEY, String(opts.wsPath).trim() || '/');
-    if (opts.wsHost != null) setSetting(WS_HOST_KEY, String(opts.wsHost).trim());
-    if (opts.grpcServiceName != null) setSetting(GRPC_SERVICE_KEY, String(opts.grpcServiceName).trim());
-    if (opts.grpcMultiMode != null) {
-      setSetting(GRPC_MULTI_KEY, (opts.grpcMultiMode === true || opts.grpcMultiMode === '1') ? '1' : '0');
+    if (opts.transportSettings != null || opts.network != null) {
+      const ts = opts.transportSettings != null ? opts.transportSettings : getTransportSettings();
+      setTransportSettings(network, ts);
+    } else {
+      if (opts.wsPath != null) setSetting(WS_PATH_KEY, String(opts.wsPath).trim() || '/');
+      if (opts.wsHost != null) setSetting(WS_HOST_KEY, String(opts.wsHost).trim());
+      if (opts.grpcServiceName != null) setSetting(GRPC_SERVICE_KEY, String(opts.grpcServiceName).trim());
+      if (opts.grpcMultiMode != null) {
+        setSetting(GRPC_MULTI_KEY, (opts.grpcMultiMode === true || opts.grpcMultiMode === '1') ? '1' : '0');
+      }
+    }
+    const transportCheck = xrayTransportSchema.validateTransportSettings(
+      network,
+      getTransportSettings(),
+    );
+    if (!transportCheck.ok) {
+      const msg = Object.values(transportCheck.fieldErrors || {}).join('; ') || 'Invalid transport settings';
+      throw Object.assign(new Error(msg), {
+        status: 400,
+        code: 'XRAY_TRANSPORT_VALIDATION',
+        fieldErrors: transportCheck.fieldErrors,
+      });
+    }
+    if (!xrayTransportSchema.allowedSecurities(network).includes(security)) {
+      throw Object.assign(new Error(`Security «${security}» is not allowed for transport «${network}»`), {
+        status: 400,
+        code: 'XRAY_TRANSPORT_SECURITY',
+      });
     }
     if (opts.alpn != null) {
       const alpnVal = Array.isArray(opts.alpn) ? opts.alpn.join(',') : String(opts.alpn).trim();

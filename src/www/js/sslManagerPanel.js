@@ -52,6 +52,9 @@ const SslManagerPanel = {
     },
     sslCertSelectLabel(c) {
       if (!c) return '—';
+      if (c.id === '__auto__' || c.type === '_auto') {
+        return this.$t('sslCreateAuto') || 'Create automatically';
+      }
       const name = c.label || c.domain || c.sni || c.id;
       return `${name} · ${this.sslTypeLabel(c.type)}`;
     },

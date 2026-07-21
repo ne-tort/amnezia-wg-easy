@@ -33,6 +33,15 @@ const MASQUERADE_KEY = 'amnezia_hysteria_masquerade_url';
 const MASQUERADE_TYPE_KEY = 'amnezia_hysteria_masquerade_type';
 const OBFS_TYPE_KEY = 'amnezia_hysteria_obfs_type';
 const OBFS_PASSWORD_KEY = 'amnezia_hysteria_obfs_password';
+const OBFS_GECKO_MIN_KEY = 'amnezia_hysteria_obfs_gecko_min';
+const OBFS_GECKO_MAX_KEY = 'amnezia_hysteria_obfs_gecko_max';
+const CONGESTION_TYPE_KEY = 'amnezia_hysteria_congestion_type';
+const BBR_PROFILE_KEY = 'amnezia_hysteria_bbr_profile';
+const ECH_ENABLED_KEY = 'amnezia_hysteria_ech_enabled';
+const ECH_CONFIG_LIST_KEY = 'amnezia_hysteria_ech_config_list';
+const LISTEN_MODE_KEY = 'amnezia_hysteria_listen_mode';
+const PORT_RANGE_KEY = 'amnezia_hysteria_port_range';
+const REALM_URI_KEY = 'amnezia_hysteria_realm_uri';
 const BANDWIDTH_UP_KEY = 'amnezia_hysteria_bandwidth_up';
 const BANDWIDTH_DOWN_KEY = 'amnezia_hysteria_bandwidth_down';
 const IGNORE_CLIENT_BW_KEY = 'amnezia_hysteria_ignore_client_bandwidth';
@@ -157,6 +166,62 @@ function getObfsType() {
 
 function getObfsPassword() {
   return getSetting(OBFS_PASSWORD_KEY, '').trim();
+}
+
+function getObfsGeckoMin() {
+  const raw = getSetting(OBFS_GECKO_MIN_KEY, '').trim();
+  return raw ? parseInt(raw, 10) : null;
+}
+
+function getObfsGeckoMax() {
+  const raw = getSetting(OBFS_GECKO_MAX_KEY, '').trim();
+  return raw ? parseInt(raw, 10) : null;
+}
+
+function getCongestionType() {
+  const t = getSetting(CONGESTION_TYPE_KEY, 'bbr').trim().toLowerCase();
+  return t === 'reno' ? 'reno' : 'bbr';
+}
+
+function getBbrProfile() {
+  const p = getSetting(BBR_PROFILE_KEY, 'standard').trim().toLowerCase();
+  if (p === 'conservative' || p === 'aggressive') return p;
+  return 'standard';
+}
+
+function getEchEnabled() {
+  const raw = getSetting(ECH_ENABLED_KEY, '');
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function getEchConfigList() {
+  return getSetting(ECH_CONFIG_LIST_KEY, '').trim();
+}
+
+function getListenMode() {
+  const m = getSetting(LISTEN_MODE_KEY, 'direct').trim().toLowerCase();
+  if (m === 'port_hopping' || m === 'realms') return m;
+  return 'direct';
+}
+
+function getPortRange() {
+  return getSetting(PORT_RANGE_KEY, '').trim();
+}
+
+function getRealmUri() {
+  return getSetting(REALM_URI_KEY, '').trim();
+}
+
+function hysteriaHostDir() {
+  return path.join(config.WG_PATH, HYSTERIA_REL);
+}
+
+function echKeyPathHost() {
+  return path.join(hysteriaHostDir(), 'ech.pem');
+}
+
+function echKeyPathContainer() {
+  return '/opt/amnezia/awg/hysteria/ech.pem';
 }
 
 function getBandwidthUp() {
@@ -393,12 +458,23 @@ function buildUserpassMap(clients) {
 
 function buildServerYamlObject({
   userpass, masqueradeUrl, masqueradeType, certDomain, sni,
-  obfsType, obfsPassword, bandwidthUp, bandwidthDown, ignoreClientBandwidth,
+  obfsType, obfsPassword, obfsGeckoMin, obfsGeckoMax,
+  bandwidthUp, bandwidthDown, ignoreClientBandwidth,
+  congestionType, bbrProfile, echEnabled, listenMode, portRange, realmUri,
 }) {
   const paths = certPathsForDomain(certDomain);
+  const mode = listenMode != null ? listenMode : getListenMode();
+  let listen = `:${LISTEN_PORT}`;
+  if (mode === 'port_hopping') {
+    const range = (portRange != null ? portRange : getPortRange()) || '20000-50000';
+    listen = `:${range}`;
+  } else if (mode === 'realms') {
+    const uri = (realmUri != null ? realmUri : getRealmUri()) || '';
+    if (uri) listen = uri;
+  }
   /** @type {Record<string, unknown>} */
   const obj = {
-    listen: `:${LISTEN_PORT}`,
+    listen,
     tls: {
       cert: paths.cert,
       key: paths.key,
@@ -409,6 +485,10 @@ function buildServerYamlObject({
       userpass,
     },
   };
+  const echOn = echEnabled != null ? echEnabled : getEchEnabled();
+  if (echOn && fs.existsSync(echKeyPathHost())) {
+    obj.tls.ech = { keyPath: echKeyPathContainer() };
+  }
   const mType = masqueradeType || getMasqueradeType();
   if (!masqueradeUrl && mType === 'proxy') {
     // No camouflage URL — minimal string response for unauthenticated probes
@@ -429,7 +509,15 @@ function buildServerYamlObject({
   const oType = obfsType != null ? obfsType : getObfsType();
   const oPass = obfsPassword != null ? obfsPassword : getObfsPassword();
   if (oType && oPass) {
-    obj.obfs = { type: oType, [oType]: { password: oPass } };
+    /** @type {Record<string, unknown>} */
+    const inner = { password: oPass };
+    if (oType === 'gecko') {
+      const gmin = obfsGeckoMin != null ? obfsGeckoMin : getObfsGeckoMin();
+      const gmax = obfsGeckoMax != null ? obfsGeckoMax : getObfsGeckoMax();
+      if (gmin != null && Number.isFinite(gmin)) inner.minPacketSize = gmin;
+      if (gmax != null && Number.isFinite(gmax)) inner.maxPacketSize = gmax;
+    }
+    obj.obfs = { type: oType, [oType]: inner };
   }
   const up = bandwidthUp != null ? bandwidthUp : getBandwidthUp();
   const down = bandwidthDown != null ? bandwidthDown : getBandwidthDown();
@@ -440,6 +528,10 @@ function buildServerYamlObject({
   }
   const ignoreBw = ignoreClientBandwidth != null ? ignoreClientBandwidth : getIgnoreClientBandwidth();
   if (ignoreBw) obj.ignoreClientBandwidth = true;
+  const cType = congestionType != null ? congestionType : getCongestionType();
+  const bbrProf = bbrProfile != null ? bbrProfile : getBbrProfile();
+  obj.congestion = { type: cType };
+  if (cType === 'bbr') obj.congestion.bbrProfile = bbrProf;
   return obj;
 }
 
@@ -453,6 +545,10 @@ function renderServerYaml(obj) {
   ];
   if (obj.tls.sni) {
     lines.push(`  sni: ${yamlQuote(obj.tls.sni)}`);
+  }
+  if (obj.tls.ech && obj.tls.ech.keyPath) {
+    lines.push('  ech:');
+    lines.push(`    keyPath: ${yamlQuote(obj.tls.ech.keyPath)}`);
   }
   lines.push('', 'auth:', '  type: userpass', '  userpass:');
   for (const [user, pass] of Object.entries(obj.auth.userpass || {})) {
@@ -478,6 +574,19 @@ function renderServerYaml(obj) {
     if (inner && inner.password) {
       lines.push(`  ${obj.obfs.type}:`);
       lines.push(`    password: ${yamlQuote(inner.password)}`);
+      if (inner.minPacketSize != null) {
+        lines.push(`    minPacketSize: ${inner.minPacketSize}`);
+      }
+      if (inner.maxPacketSize != null) {
+        lines.push(`    maxPacketSize: ${inner.maxPacketSize}`);
+      }
+    }
+  }
+  if (obj.congestion && obj.congestion.type) {
+    lines.push('', 'congestion:');
+    lines.push(`  type: ${yamlQuote(obj.congestion.type)}`);
+    if (obj.congestion.bbrProfile) {
+      lines.push(`  bbrProfile: ${yamlQuote(obj.congestion.bbrProfile)}`);
     }
   }
   if (obj.bandwidth && (obj.bandwidth.up || obj.bandwidth.down)) {
@@ -503,7 +612,7 @@ function writeServerYaml(obj) {
  */
 function buildHy2Url({
   username, password, host, port, sni, remark,
-  obfsType, obfsPassword, insecure,
+  obfsType, obfsPassword, insecure, ech,
 }) {
   const user = encodeURIComponent(username);
   const pass = encodeURIComponent(password);
@@ -516,6 +625,8 @@ function buildHy2Url({
     params.set('obfs', oType);
     params.set('obfs-password', oPass);
   }
+  const echList = ech != null ? ech : getEchConfigList();
+  if (echList) params.set('ech', echList);
   let url = `hy2://${user}:${pass}@${host}:${Number(port)}/?${params.toString()}`;
   if (remark) url += `#${encodeURIComponent(remark)}`;
   return url;
@@ -777,6 +888,15 @@ function getStatus() {
     masqueradeUrlStored: getMasqueradeUrlStored(),
     masqueradeType: getMasqueradeType(),
     obfsType: getObfsType() || null,
+    obfsGeckoMin: getObfsGeckoMin(),
+    obfsGeckoMax: getObfsGeckoMax(),
+    congestionType: getCongestionType(),
+    bbrProfile: getBbrProfile(),
+    echEnabled: getEchEnabled(),
+    echConfigList: getEchConfigList() || null,
+    listenMode: getListenMode(),
+    portRange: getPortRange() || null,
+    realmUri: getRealmUri() || null,
     bandwidthUp: getBandwidthUp() || null,
     bandwidthDown: getBandwidthDown() || null,
     ignoreClientBandwidth: getIgnoreClientBandwidth(),
@@ -825,6 +945,8 @@ async function enableInternal(opts = {}) {
         fieldErrors: validation.fieldErrors,
       });
     }
+    const { resolveOptsSslCert } = require('./sidecarAutoCert');
+    opts = await resolveOptsSslCert(opts, 'hysteria');
 
     const publicPort = opts.publicPort != null
       ? parseInt(String(opts.publicPort).trim(), 10)
@@ -896,6 +1018,21 @@ async function enableInternal(opts = {}) {
       : (masqueradeUrl ? getMasqueradeType() : 'string');
     const obfsType = opts.obfsType != null ? String(opts.obfsType).trim().toLowerCase() : getObfsType();
     const obfsPassword = opts.obfsPassword != null ? String(opts.obfsPassword).trim() : getObfsPassword();
+    const obfsGeckoMin = opts.obfsGeckoMin != null ? opts.obfsGeckoMin : (opts.obfs_gecko_min != null ? opts.obfs_gecko_min : null);
+    const obfsGeckoMax = opts.obfsGeckoMax != null ? opts.obfsGeckoMax : (opts.obfs_gecko_max != null ? opts.obfs_gecko_max : null);
+    const congestionType = opts.congestionType != null ? String(opts.congestionType).trim().toLowerCase()
+      : (opts.congestion_type != null ? String(opts.congestion_type).trim().toLowerCase() : getCongestionType());
+    const bbrProfile = opts.bbrProfile != null ? String(opts.bbrProfile).trim().toLowerCase()
+      : (opts.bbr_profile != null ? String(opts.bbr_profile).trim().toLowerCase() : getBbrProfile());
+    const echEnabled = opts.echEnabled != null
+      ? (opts.echEnabled === true || opts.echEnabled === '1' || opts.echEnabled === 'true')
+      : getEchEnabled();
+    const listenMode = opts.listenMode != null ? String(opts.listenMode).trim().toLowerCase()
+      : (opts.listen_mode != null ? String(opts.listen_mode).trim().toLowerCase() : getListenMode());
+    const portRange = opts.portRange != null ? String(opts.portRange).trim()
+      : (opts.port_range != null ? String(opts.port_range).trim() : getPortRange());
+    const realmUri = opts.realmUri != null ? String(opts.realmUri).trim()
+      : (opts.realm_uri != null ? String(opts.realm_uri).trim() : getRealmUri());
     const bandwidthUp = opts.bandwidthUp != null ? String(opts.bandwidthUp).trim() : getBandwidthUp();
     const bandwidthDown = opts.bandwidthDown != null ? String(opts.bandwidthDown).trim() : getBandwidthDown();
     const ignoreClientBw = opts.ignoreClientBandwidth != null
@@ -917,6 +1054,14 @@ async function enableInternal(opts = {}) {
     setSetting(MASQUERADE_TYPE_KEY, masqueradeType === 'file' || masqueradeType === 'string' ? masqueradeType : 'proxy');
     setSetting(OBFS_TYPE_KEY, obfsType);
     setSetting(OBFS_PASSWORD_KEY, obfsPassword);
+    setSetting(OBFS_GECKO_MIN_KEY, obfsGeckoMin != null ? String(obfsGeckoMin) : '');
+    setSetting(OBFS_GECKO_MAX_KEY, obfsGeckoMax != null ? String(obfsGeckoMax) : '');
+    setSetting(CONGESTION_TYPE_KEY, congestionType);
+    setSetting(BBR_PROFILE_KEY, bbrProfile);
+    setSetting(ECH_ENABLED_KEY, echEnabled ? '1' : '0');
+    setSetting(LISTEN_MODE_KEY, listenMode);
+    setSetting(PORT_RANGE_KEY, portRange);
+    setSetting(REALM_URI_KEY, realmUri);
     setSetting(BANDWIDTH_UP_KEY, bandwidthUp);
     setSetting(BANDWIDTH_DOWN_KEY, bandwidthDown);
     setSetting(IGNORE_CLIENT_BW_KEY, ignoreClientBw ? '1' : '0');
@@ -970,11 +1115,22 @@ async function enableInternal(opts = {}) {
     await portPlan.assertHostUdpPortsAvailable([publicPort], { allowSidecar: true });
 
     const enabled = ensureClientPasswords();
+    fs.mkdirSync(hysteriaHostDir(), { recursive: true });
     const obj = buildServerYamlObject({
       userpass: buildUserpassMap(enabled),
       masqueradeUrl,
       certDomain: resolveCertDomain(),
       sni,
+      obfsType,
+      obfsPassword,
+      obfsGeckoMin,
+      obfsGeckoMax,
+      congestionType,
+      bbrProfile,
+      echEnabled,
+      listenMode,
+      portRange,
+      realmUri,
     });
     writeServerYaml(obj);
 
