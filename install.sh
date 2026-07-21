@@ -1778,7 +1778,7 @@ for d in domains:
       fi
     done < <(grep -oE '"[^"]+\.[^"]+"' "$bank" | tr -d '"' || true)
   fi
-  printf '%s' "${host:-www.sbb.ch}"
+  printf '%s' "${host:-www.gov.uk}"
 }
 
 pick_default_mirror_host() {

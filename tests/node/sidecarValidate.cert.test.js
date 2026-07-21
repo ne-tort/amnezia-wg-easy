@@ -179,5 +179,17 @@ test('masqueradeBank loadMirrorBankDomains returns seed entries', () => {
   const domains = masqueradeBank.loadMirrorBankDomains();
   assert.ok(Array.isArray(domains));
   assert.ok(domains.length >= 1);
-  assert.ok(domains.includes('www.sbb.ch'));
+  assert.ok(domains.includes('www.gov.uk'));
+  assert.ok(!domains.includes('www.sbb.ch'));
+});
+
+test('masqueradeBank mirror probe helpers detect deny and SPA shell', () => {
+  const p = masqueradeBank._mirrorProbe;
+  assert.equal(p.mirrorSameSite('www.example.com', 'example.com'), true);
+  assert.equal(p.mirrorSameSite('www.example.com', 'other.com'), false);
+  assert.equal(p.mirrorDenyPage('<html><title>Access Denied</title></html>', 403), true);
+  assert.equal(p.mirrorDenyPage('<html><body>Welcome</body></html>', 200), false);
+  const spa = '<!DOCTYPE html><div id="__next"></div><script></script>';
+  assert.equal(p.mirrorLooksLikeSpaShell(spa.repeat(50)), true);
+  assert.equal(p.mirrorLooksLikeSpaShell(`<html>${'x'.repeat(30_000)}</html>`), false);
 });

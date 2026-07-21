@@ -57,6 +57,102 @@ function parseMasqueradeUrl(url) {
   }
 }
 
+const MIRROR_PROBE_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const MIRROR_PROBE_TIMEOUT_MS = 15_000;
+
+function mirrorHostKey(hostname) {
+  return String(hostname || '').trim().toLowerCase().replace(/^www\./, '');
+}
+
+function mirrorSameSite(requestHost, finalHost) {
+  return mirrorHostKey(requestHost) === mirrorHostKey(finalHost);
+}
+
+function mirrorVisibleText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** True when HTML is a thin client shell (often hangs as nginx mirror stub). */
+function mirrorLooksLikeSpaShell(html) {
+  const sample = String(html || '').slice(0, 12_000).toLowerCase();
+  if (html.length > 25_000) return false;
+  const spa = /__next_data__|\/_next\/|id="__next"|id="root"|id="app"|ng-version|data-reactroot|nuxt|vite|webpackJsonp/.test(sample);
+  const textLen = mirrorVisibleText(html).length;
+  return spa && textLen < 500;
+}
+
+function mirrorDenyPage(html, status) {
+  if (status === 401 || status === 403 || status === 429) return true;
+  const lower = String(html || '').slice(0, 5000).toLowerCase();
+  return /access denied|<title>forbidden|<h1>forbidden|request blocked|captcha|cf-browser-verification|akamai|bot detection|please enable cookies|errors\.edgesuite\.net|cloudflare/.test(lower);
+}
+
+/**
+ * Strict mirror-stub check: GET with browser UA, 200 HTML, same-site redirect, no deny/SPA shell.
+ * @param {string} domain
+ * @returns {Promise<{ ok: boolean, domain: string, url: string, status?: number, finalHost?: string, bodyLen?: number, ms?: number, reasons?: string[], message?: string }>}
+ */
+async function validateMirrorHost(domain) {
+  const host = String(domain || '').trim().toLowerCase().replace(/^https?:\/\//i, '').replace(/\/.*$/, '');
+  const url = toMasqueradeUrl(host);
+  if (!host) {
+    return { ok: false, domain: host, url, reasons: ['empty'], message: 'empty host' };
+  }
+  const t0 = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MIRROR_PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'User-Agent': MIRROR_PROBE_UA,
+        Accept: 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+      },
+    });
+    clearTimeout(timer);
+    const ms = Date.now() - t0;
+    const text = await res.text();
+    const finalHost = new URL(res.url).hostname;
+    const reasons = [];
+    if (res.status !== 200) reasons.push(`status${res.status}`);
+    if (ms >= 12_000) reasons.push('slow');
+    if (text.length < 1500) reasons.push('short');
+    if (!mirrorSameSite(host, finalHost)) reasons.push(`redirect:${finalHost}`);
+    if (mirrorDenyPage(text, res.status)) reasons.push('deny');
+    if (mirrorLooksLikeSpaShell(text)) reasons.push('spa-shell');
+    const ok = reasons.length === 0;
+    return {
+      ok,
+      domain: host,
+      url,
+      status: res.status,
+      finalHost,
+      bodyLen: text.length,
+      ms,
+      reasons,
+      message: ok ? null : reasons.join(', '),
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    const msg = String(err.message || 'Request failed');
+    return {
+      ok: false,
+      domain: host,
+      url,
+      ms: Date.now() - t0,
+      reasons: [`err:${msg.slice(0, 80)}`],
+      message: msg,
+    };
+  }
+}
+
 async function fetchProbe(url, method) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12_000);
@@ -105,15 +201,18 @@ async function validateBankEntries(domains) {
   const list = domains && domains.length ? domains : loadMirrorBankDomains();
   const results = [];
   for (const domain of list) {
-    const url = toMasqueradeUrl(domain);
     // eslint-disable-next-line no-await-in-loop
-    const check = await preflightMasqueradeUrl(url);
+    const check = await validateMirrorHost(domain);
     results.push({
-      domain,
-      url,
+      domain: check.domain,
+      url: check.url,
       ok: check.ok,
       status: check.status,
       message: check.message,
+      reasons: check.reasons,
+      finalHost: check.finalHost,
+      bodyLen: check.bodyLen,
+      ms: check.ms,
     });
   }
   return results;
@@ -130,7 +229,14 @@ module.exports = {
   toMasqueradeUrl,
   parseMasqueradeUrl,
   preflightMasqueradeUrl,
+  validateMirrorHost,
   listMasqueradeBank,
   validateBankEntries,
   pickRandomMasqueradeUrl,
+  _mirrorProbe: {
+    mirrorHostKey,
+    mirrorSameSite,
+    mirrorDenyPage,
+    mirrorLooksLikeSpaShell,
+  },
 };
