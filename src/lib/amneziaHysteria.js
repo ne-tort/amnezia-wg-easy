@@ -1160,7 +1160,7 @@ async function enableInternal(opts = {}) {
         } else if (certSource === 'issue_le') {
           certDomainForIssue = sni;
         } else {
-          certDomainForIssue = sni || 'hysteria.local';
+          certDomainForIssue = sni || getSni() || DEFAULT_SNI;
         }
       }
       await tlsMaterial.resolveCertMaterial({

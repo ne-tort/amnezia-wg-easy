@@ -14,13 +14,25 @@ function isAutoCertId(id) {
  * @param {{ service: 'xray'|'hysteria', security?: string, sni?: string, address?: string, email?: string }} opts
  * @returns {Promise<{ id: string, sni?: string, type?: string }>}
  */
+/** Same neutral default as Reality/Hysteria (SNI bank → www.sbb.ch). */
+function neutralAutoHostname() {
+  try {
+    const picked = require('./sniFinder').pickDefaultSni();
+    if (picked) return String(picked).trim().toLowerCase();
+  } catch {
+    /* ignore */
+  }
+  return 'www.sbb.ch';
+}
+
 /**
  * Pick a demux-friendly cert CN/SNI. Bare IPs work for TLS verify with allowInsecure,
- * but nginx stream demux matches ClientHello SNI — prefer a hostname label.
+ * but nginx stream demux matches ClientHello SNI — use a common public hostname.
  */
-function autoCertDomain(sni, address, fallback) {
+function autoCertDomain(sni, address) {
   const tlsMaterial = require('./tlsMaterial');
   const portPlan = require('./portPlan');
+  const fallback = neutralAutoHostname();
   let domain = sni || tlsMaterial.normalizeHostname(address) || fallback;
   if (portPlan.isIpLiteral(domain) || domain === 'localhost') {
     domain = fallback;
@@ -37,13 +49,13 @@ async function resolveAutoCert(opts = {}) {
   let sni = tlsMaterial.normalizeHostname(opts.sni || '');
 
   if (service === 'hysteria') {
-    const domain = autoCertDomain(sni, address, 'hysteria.local');
+    const domain = autoCertDomain(sni, address);
     const row = await sslManager.createSelfSigned({ domain, label: domain });
     return { id: row.id, sni: row.sni || row.domain, type: row.type };
   }
 
   if (service === 'xray' && security === 'tls') {
-    const domain = autoCertDomain(sni, address, 'xray.local');
+    const domain = autoCertDomain(sni, address);
     const row = await sslManager.createSelfSigned({ domain, label: domain });
     return { id: row.id, sni: row.sni || row.domain, type: row.type };
   }

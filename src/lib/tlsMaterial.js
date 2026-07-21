@@ -695,7 +695,7 @@ async function resolveCertMaterial(opts = {}) {
   }
 
   if (source === 'self_signed') {
-    const certDomain = domain || 'hysteria.local';
+    const certDomain = domain || require('./sniFinder').pickDefaultSni() || 'www.sbb.ch';
     return ensureSelfSignedCert(certDomain).then((p) => ({ ...p, source: 'self_signed' }));
   }
 

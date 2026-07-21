@@ -1422,7 +1422,7 @@ async function enableInternal(opts = {}) {
           } else if (certSource === 'issue_le') {
             certDomain = sni;
           } else {
-            certDomain = sni || 'xray.local';
+            certDomain = sni || getSni() || DEFAULT_SNI;
           }
         }
         await tlsMaterial.resolveCertMaterial({
