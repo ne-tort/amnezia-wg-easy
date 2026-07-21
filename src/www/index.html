@@ -2359,11 +2359,14 @@
                   <option v-for="t in hysteriaObfsTypesFiltered" :key="t" :value="t">{{ t }}</option>
                 </select>
               </div>
-              <div v-if="amneziaHysteriaObfsType">
+              <div v-if="amneziaHysteriaObfsType && amneziaHysteriaModalMode === 'manage' && amneziaHysteriaObfsPassword">
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaObfsPassword') }}</label>
-                <input v-model="amneziaHysteriaObfsPassword" type="text" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
-                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                <input :value="amneziaHysteriaObfsPassword" type="text" readonly disabled
+                  class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 opacity-80" />
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('hysteriaObfsPasswordAutoHint') }}</p>
               </div>
+              <p v-else-if="amneziaHysteriaObfsType && amneziaHysteriaModalMode !== 'manage'"
+                class="text-xs text-gray-500 dark:text-neutral-400">{{ $t('hysteriaObfsPasswordAutoHint') }}</p>
               <div v-if="amneziaHysteriaCore !== 'xray' && amneziaHysteriaObfsType === 'gecko'">
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('hysteriaObfsGeckoMin') }}</label>
                 <input v-model="amneziaHysteriaObfsGeckoMin" type="number" min="0" :readonly="amneziaHysteriaModalMode === 'manage'" :disabled="amneziaHysteriaModalMode === 'manage'"
@@ -2485,6 +2488,20 @@
                   class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
                 <p v-if="amneziaNaiveFieldErrors.publicPort" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'publicPort') }}</p>
               </div>
+              <div class="panel-check-row">
+                <label class="panel-check">
+                  <input v-model="amneziaNaiveEnableTcp" type="checkbox" class="panel-check-input" :disabled="amneziaNaiveModalMode === 'manage'" />
+                  <span class="panel-check-box" aria-hidden="true"></span>
+                  <span class="panel-check-label">{{ $t('naiveEnableTcp') }}</span>
+                </label>
+                <label class="panel-check">
+                  <input v-model="amneziaNaiveEnableQuic" type="checkbox" class="panel-check-input" :disabled="amneziaNaiveModalMode === 'manage'" />
+                  <span class="panel-check-box" aria-hidden="true"></span>
+                  <span class="panel-check-label">{{ $t('naiveEnableQuic') }}</span>
+                </label>
+              </div>
+              <p class="text-xs text-gray-500 dark:text-neutral-400">{{ $t('naiveQuicHint') }}</p>
+              <p v-if="amneziaNaiveFieldErrors.enableTcp" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'enableTcp') }}</p>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naiveProbeDomain') }}</label>
                 <input v-model.trim="amneziaNaiveProbeDomain" type="text" :readonly="amneziaNaiveModalMode === 'manage'" :disabled="amneziaNaiveModalMode === 'manage'"

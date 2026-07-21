@@ -157,9 +157,9 @@ function validateMieru(body = {}) {
   return { ok: true, tcpOn, udpOn, tcpPort, udpPort };
 }
 
-function validateSniDemux(serviceId, sni, publicPort) {
+function validateSniDemux(serviceId, sni, publicPort, opts = {}) {
   try {
-    portPlan.assertSniConflict(serviceId, sni, publicPort);
+    portPlan.assertSniConflict(serviceId, sni, publicPort, opts);
     return { ok: true };
   } catch (err) {
     return errField('sni', err.message, err.code || 'SNI_CONFLICT');
@@ -205,6 +205,19 @@ function validateNaive(body = {}) {
   if (!Number.isFinite(publicPort) || publicPort < 1 || publicPort > 65535) {
     return errField('publicPort', 'Invalid public port (1–65535)', 'NAIVE_BAD_PUBLIC_PORT');
   }
+  const tcpOn = body.enableTcp != null
+    ? (body.enableTcp === true || body.enableTcp === '1' || body.enableTcp === 'true')
+    : (body.tcpEnabled != null
+      ? (body.tcpEnabled === true || body.tcpEnabled === '1' || body.tcpEnabled === 'true')
+      : true);
+  const quicOn = body.enableQuic != null
+    ? (body.enableQuic === true || body.enableQuic === '1' || body.enableQuic === 'true')
+    : (body.quicEnabled != null
+      ? (body.quicEnabled === true || body.quicEnabled === '1' || body.quicEnabled === 'true')
+      : false);
+  if (!tcpOn && !quicOn) {
+    return errField('enableTcp', 'Enable TCP and/or QUIC', 'NAIVE_TRANSPORT_REQUIRED');
+  }
   const certCheck = validateSslCertId(body, 'naive');
   if (!certCheck.ok) return certCheck;
   if (certCheck.auto) {
@@ -219,13 +232,14 @@ function validateNaive(body = {}) {
     return errField('probeResistanceDomain', 'Probe resistance domain should differ from Naive SNI', 'NAIVE_PROBE_SNI');
   }
   const parts = [
-    { ok: true, sni, sslCertId: certCheck.cert.id },
-    validateSniDemux('naive', sni, publicPort),
+    { ok: true, sni, sslCertId: certCheck.cert.id, tcpEnabled: tcpOn, quicEnabled: quicOn },
   ];
+  if (tcpOn) {
+    parts.push(validateSniDemux('naive', sni, publicPort, { sslCertId: certCheck.cert.id }));
+  }
   if (certCheck.cert.is_panel) {
     parts.push(validatePanelCertConflict('panel', publicPort));
   }
-  // Mirror exclusive port: Naive can join demux, but panel cert on that port is still forbidden above.
   return mergeErrors(...parts);
 }
 
@@ -237,11 +251,11 @@ function validateHysteria(body = {}) {
   const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
   const masq = body.masqueradeUrl != null ? body.masqueradeUrl : body.masquerade_url;
   const obfsType = String(body.obfsType != null ? body.obfsType : body.obfs_type || '').trim().toLowerCase();
-  const obfsPassword = String(body.obfsPassword != null ? body.obfsPassword : body.obfs_password || '').trim();
-  if (obfsType === 'salamander' || obfsType === 'gecko') {
-    if (!obfsPassword) {
-      return errField('obfsPassword', 'Obfuscation password is required for salamander/gecko', 'HYSTERIA_OBFS_PASSWORD');
-    }
+  // Obfs password is auto-generated on enable when salamander/gecko is selected.
+  void body.obfsPassword;
+  void body.obfs_password;
+  if (obfsType && obfsType !== 'salamander' && obfsType !== 'gecko' && obfsType !== '') {
+    return errField('obfsType', 'Unsupported obfuscation type', 'HYSTERIA_BAD_OBFS');
   }
   if (sslId) {
     if (sslId === SSL_CERT_AUTO) {

@@ -14,6 +14,20 @@ function isAutoCertId(id) {
  * @param {{ service: 'xray'|'hysteria', security?: string, sni?: string, address?: string, email?: string }} opts
  * @returns {Promise<{ id: string, sni?: string, type?: string }>}
  */
+/**
+ * Pick a demux-friendly cert CN/SNI. Bare IPs work for TLS verify with allowInsecure,
+ * but nginx stream demux matches ClientHello SNI — prefer a hostname label.
+ */
+function autoCertDomain(sni, address, fallback) {
+  const tlsMaterial = require('./tlsMaterial');
+  const portPlan = require('./portPlan');
+  let domain = sni || tlsMaterial.normalizeHostname(address) || fallback;
+  if (portPlan.isIpLiteral(domain) || domain === 'localhost') {
+    domain = fallback;
+  }
+  return domain;
+}
+
 async function resolveAutoCert(opts = {}) {
   const sslManager = require('./sslManager');
   const tlsMaterial = require('./tlsMaterial');
@@ -23,13 +37,13 @@ async function resolveAutoCert(opts = {}) {
   let sni = tlsMaterial.normalizeHostname(opts.sni || '');
 
   if (service === 'hysteria') {
-    const domain = sni || tlsMaterial.normalizeHostname(address) || 'hysteria.local';
+    const domain = autoCertDomain(sni, address, 'hysteria.local');
     const row = await sslManager.createSelfSigned({ domain, label: domain });
     return { id: row.id, sni: row.sni || row.domain, type: row.type };
   }
 
   if (service === 'xray' && security === 'tls') {
-    const domain = sni || tlsMaterial.normalizeHostname(address) || 'xray.local';
+    const domain = autoCertDomain(sni, address, 'xray.local');
     const row = await sslManager.createSelfSigned({ domain, label: domain });
     return { id: row.id, sni: row.sni || row.domain, type: row.type };
   }

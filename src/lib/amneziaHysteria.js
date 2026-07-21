@@ -952,6 +952,7 @@ function getStatus() {
     masqueradeUrlStored: getMasqueradeUrlStored(),
     masqueradeType: getMasqueradeType(),
     obfsType: getObfsType() || null,
+    obfsPassword: getObfsPassword() || null,
     obfsGeckoMin: getObfsGeckoMin(),
     obfsGeckoMax: getObfsGeckoMax(),
     congestionType: getCongestionType(),
@@ -1081,7 +1082,10 @@ async function enableInternal(opts = {}) {
       ? String(opts.masqueradeType).trim().toLowerCase()
       : (masqueradeUrl ? getMasqueradeType() : 'string');
     const obfsType = opts.obfsType != null ? String(opts.obfsType).trim().toLowerCase() : getObfsType();
-    const obfsPassword = opts.obfsPassword != null ? String(opts.obfsPassword).trim() : getObfsPassword();
+    let obfsPassword = opts.obfsPassword != null ? String(opts.obfsPassword).trim() : getObfsPassword();
+    if ((obfsType === 'salamander' || obfsType === 'gecko') && !obfsPassword) {
+      obfsPassword = generatePassword();
+    }
     const obfsGeckoMin = opts.obfsGeckoMin != null ? opts.obfsGeckoMin : (opts.obfs_gecko_min != null ? opts.obfs_gecko_min : null);
     const obfsGeckoMax = opts.obfsGeckoMax != null ? opts.obfsGeckoMax : (opts.obfs_gecko_max != null ? opts.obfs_gecko_max : null);
     const congestionType = opts.congestionType != null ? String(opts.congestionType).trim().toLowerCase()
@@ -1178,7 +1182,9 @@ async function enableInternal(opts = {}) {
     }
 
     const portPlan = require('./portPlan');
-    await portPlan.assertHostUdpPortsAvailable([publicPort], { allowSidecar: true });
+    await portPlan.assertHostUdpPortsAvailable([publicPort], {
+      owner: getCore() === 'xray' ? 'xray' : 'hysteria',
+    });
 
     const enabled = ensureClientPasswords();
     fs.mkdirSync(hysteriaHostDir(), { recursive: true });

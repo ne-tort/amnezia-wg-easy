@@ -217,11 +217,15 @@ function buildStreamSettings(opts) {
       spiderX: opts.spiderX != null ? opts.spiderX : '',
     };
   } else if (security === 'tls') {
+    // Server-side tlsSettings must NOT include allowInsecure (removed in Xray 26+;
+    // that flag is client-only via pinnedPeerCertSha256 / URI allowInsecure).
     stream.tlsSettings = {
-      allowInsecure: opts.allowInsecure === true,
       fingerprint: opts.fingerprint || '',
       alpn: opts.alpn ? (Array.isArray(opts.alpn) ? opts.alpn : String(opts.alpn).split(',')) : undefined,
     };
+    if (opts.forClient === true && opts.allowInsecure === true) {
+      stream.tlsSettings.allowInsecure = true;
+    }
     if (opts.sni) stream.tlsSettings.serverName = opts.sni;
     if (stream.tlsSettings.alpn == null) delete stream.tlsSettings.alpn;
     if (!stream.tlsSettings.fingerprint) delete stream.tlsSettings.fingerprint;
@@ -283,7 +287,7 @@ function buildClientJson(opts) {
         users: [user],
       }],
     },
-    streamSettings: buildStreamSettings(opts),
+    streamSettings: buildStreamSettings({ ...opts, forClient: true }),
   };
   if (opts.remark) outbound.tag = opts.remark;
 

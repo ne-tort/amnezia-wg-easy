@@ -1566,6 +1566,8 @@ module.exports = class Server {
             sni: body && body.sni,
             publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
             sslCertId: body && (body.sslCertId != null ? body.sslCertId : body.ssl_cert_id),
+            enableTcp: body && (body.enableTcp != null ? body.enableTcp : body.tcpEnabled),
+            enableQuic: body && (body.enableQuic != null ? body.enableQuic : body.quicEnabled),
             probeResistanceDomain: body && (body.probeResistanceDomain != null
               ? body.probeResistanceDomain
               : body.probe_resistance_domain),

@@ -235,7 +235,7 @@ function collectServices() {
     });
   }
 
-  if (desired('amnezia_naive_desired')) {
+  if (desired('amnezia_naive_desired') && desiredBool('amnezia_naive_tcp_enabled', true)) {
     const pub = parsePort(
       setting('amnezia_naive_public_port', '') || process.env.NAIVE_PUBLIC_PORT || '443',
       443,
@@ -290,6 +290,18 @@ function collectUdpDirectServices() {
       id: 'hysteria',
       publicPort: pub,
       listenPort: 443,
+      protocol: 'udp',
+    });
+  }
+  if (desired('amnezia_naive_desired') && desiredBool('amnezia_naive_quic_enabled', false)) {
+    const pub = parsePort(
+      setting('amnezia_naive_public_port', '') || process.env.NAIVE_PUBLIC_PORT || '443',
+      443,
+    );
+    services.push({
+      id: 'naive-quic',
+      publicPort: pub,
+      listenPort: 8443,
       protocol: 'udp',
     });
   }
@@ -532,6 +544,25 @@ function modeForService(serviceId, plan) {
   return p.modes[serviceId] || null;
 }
 
+/**
+ * Resolve TCP publish mode for a sidecar. Prefers computePlan(); if the service
+ * is not yet in the plan (or upstream missing), infer demux when the public port
+ * is already owned by panel HTTPS or the mirror stub — never default to direct
+ * on those ports (would fight nginx's host bind).
+ */
+function inferTcpMode(serviceId, publicPort, plan) {
+  const p = plan || computePlan();
+  const existing = p.modes[serviceId];
+  if (existing === 'demux' || existing === 'direct') return existing;
+  const pub = parsePort(publicPort, 0);
+  if (!pub) return 'direct';
+  if (pub === panelPublicPort()) return 'demux';
+  const mirror = mirrorPublicPort();
+  if (mirror && pub === mirror) return 'demux';
+  if ((p.demuxPorts || []).some((d) => d.port === pub)) return 'demux';
+  return 'direct';
+}
+
 function isDemuxService(serviceId) {
   return modeForService(serviceId) === 'demux';
 }
@@ -662,33 +693,66 @@ async function isHostUdpPortInUse(port) {
 }
 
 /**
- * Assert host UDP ports for udpDirect sidecars are free or already ours.
+ * Assert host UDP ports are free, or already published by the same owner service.
  * @param {number[]} ports
- * @param {{ allowSidecar?: boolean }} opts
+ * @param {{ owner?: string }} opts  owner id: hysteria | mieru | naive | xray
  */
 async function assertHostUdpPortsAvailable(ports, opts = {}) {
-  const allowSidecar = opts.allowSidecar !== false;
+  let owner = String(opts.owner || '').trim();
+  if (!owner) {
+    owner = opts.allowSidecar === false ? '' : 'any';
+  }
+  const ownerContainers = {
+    hysteria: ['amnezia-hysteria'],
+    mieru: ['amnezia-mieru'],
+    naive: ['amnezia-naive'],
+    xray: ['amnezia-xray'],
+    any: ['amnezia-hysteria', 'amnezia-mieru', 'amnezia-naive', 'amnezia-xray'],
+  };
+  const allowedNames = ownerContainers[owner] || (opts.allowSidecar === false ? [] : ownerContainers.any);
   const wgPort = parsePort(process.env.WG_PORT, 51820);
+
+  const containerHoldsUdp = async (name, port) => {
+    const r = await runCmd('docker', [
+      'inspect', '-f',
+      '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
+      name,
+    ]);
+    return r.ok && new RegExp(`${port}/udp`).test(r.stdout);
+  };
+
   for (const port of ports) {
-    if (allowSidecar) {
-      const hy = await runCmd('docker', [
-        'inspect', '-f',
-        '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
-        'amnezia-hysteria',
-      ]);
-      if (hy.ok && new RegExp(`${port}/udp`).test(hy.stdout)) continue;
-      const mieru = await runCmd('docker', [
-        'inspect', '-f',
-        '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
-        'amnezia-mieru',
-      ]);
-      if (mieru.ok && new RegExp(`${port}/udp`).test(mieru.stdout)) continue;
+    let ownedByUs = false;
+    for (const name of allowedNames) {
+      // eslint-disable-next-line no-await-in-loop
+      if (await containerHoldsUdp(name, port)) {
+        ownedByUs = true;
+        break;
+      }
     }
+    if (ownedByUs) continue;
     if (port === wgPort) continue;
+
+    // Conflict with another Amnezia sidecar that is not the owner
+    for (const [svc, names] of Object.entries(ownerContainers)) {
+      if (svc === 'any' || svc === owner) continue;
+      for (const name of names) {
+        // eslint-disable-next-line no-await-in-loop
+        if (await containerHoldsUdp(name, port)) {
+          const err = new Error(`Host UDP ${port} is already used by ${svc}`);
+          err.status = 409;
+          err.code = 'HOST_UDP_PORT_BUSY';
+          err.fieldErrors = { publicPort: err.message };
+          throw err;
+        }
+      }
+    }
+
     if (await isHostUdpPortInUse(port)) {
       const err = new Error(`Host UDP ${port} is in use by another process`);
       err.status = 409;
       err.code = 'HOST_UDP_PORT_BUSY';
+      err.fieldErrors = { publicPort: err.message };
       throw err;
     }
   }
@@ -1149,6 +1213,17 @@ async function ensureUdpDirectSidecars(plan) {
       console.error('portPlan: ensure mieru for udpDirect failed:', err && err.message);
     }
   }
+  if (ids.has('naive-quic')) {
+    try {
+      const naive = require('./amneziaNaive');
+      if (typeof naive.ensureNaiveContainer === 'function') {
+        await naive.ensureNaiveContainer();
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('portPlan: ensure naive for udpDirect failed:', err && err.message);
+    }
+  }
 }
 
 /** @deprecated use applyPlan — kept for callers */
@@ -1174,24 +1249,78 @@ async function resolveNginxNetwork() {
 }
 
 /**
- * SNI conflict when another demux peer already uses the same SNI on the same public port.
+ * Collect SNI / cert hostnames used by a demux candidate (settings + SSL inventory).
  */
-function assertSniConflict(serviceId, sni, publicPort) {
+function collectServiceHostnames(svc) {
+  const out = new Set();
+  const add = (raw) => {
+    const s = String(raw || '').trim().toLowerCase();
+    if (s) out.add(s);
+  };
+  add(svc && svc.sni);
+  const certKeys = {
+    xray: 'amnezia_xray_ssl_cert_id',
+    naive: 'amnezia_naive_ssl_cert_id',
+    panel: null,
+  };
+  const key = svc && certKeys[svc.id];
+  if (key) {
+    const certId = setting(key, '');
+    if (certId) {
+      try {
+        const row = require('./sslManager').getRaw(certId);
+        if (row) {
+          add(row.sni);
+          add(row.domain);
+          add(row.storage_key);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * SNI conflict when another demux peer already uses the same SNI (or same SSL cert host)
+ * on the same public TCP port.
+ */
+function assertSniConflict(serviceId, sni, publicPort, opts = {}) {
   const s = String(sni || '').trim().toLowerCase();
   if (!s) return;
   const pub = parsePort(publicPort, 0);
   if (!pub) return;
 
+  const mine = new Set([s]);
+  const sslCertId = String(opts.sslCertId || opts.ssl_cert_id || '').trim();
+  if (sslCertId && sslCertId !== '__auto__') {
+    try {
+      const row = require('./sslManager').getRaw(sslCertId);
+      if (row) {
+        for (const x of [row.sni, row.domain, row.storage_key]) {
+          const n = String(x || '').trim().toLowerCase();
+          if (n) mine.add(n);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   for (const other of collectServices()) {
     if (other.id === serviceId) continue;
     if (other.publicPort !== pub) continue;
-    if (other.sni && other.sni === s) {
-      const err = new Error(
-        `${serviceId} SNI must differ from ${other.id} SNI when sharing public port ${pub} (demux)`,
-      );
-      err.status = 400;
-      err.code = 'SNI_CONFLICT';
-      throw err;
+    const theirs = collectServiceHostnames(other);
+    for (const host of mine) {
+      if (theirs.has(host)) {
+        const err = new Error(
+          `${serviceId} SNI/cert «${host}» conflicts with ${other.id} on public port ${pub} (demux)`,
+        );
+        err.status = 400;
+        err.code = 'SNI_CONFLICT';
+        throw err;
+      }
     }
   }
 }
@@ -1222,6 +1351,7 @@ module.exports = {
   applyPlan,
   syncStreamDemux,
   modeForService,
+  inferTcpMode,
   isDemuxService,
   assertSniConflict,
   assertHostPortsAvailable,

@@ -31,6 +31,8 @@ const PROBE_KEY = 'amnezia_naive_probe_resistance_domain';
 const CERT_SOURCE_KEY = 'amnezia_naive_cert_source';
 const CERT_DOMAIN_KEY = 'amnezia_naive_cert_domain';
 const SSL_CERT_ID_KEY = 'amnezia_naive_ssl_cert_id';
+const TCP_ENABLED_KEY = 'amnezia_naive_tcp_enabled';
+const QUIC_ENABLED_KEY = 'amnezia_naive_quic_enabled';
 
 const ENABLE_TIMEOUT_MS = 180_000;
 const RECONCILE_INTERVAL_MS = 30_000;
@@ -85,12 +87,33 @@ function getClientFacingPort() {
   return getPublicPort();
 }
 
-function assertSniDemux(sni, publicPort) {
+function assertSniDemux(sni, publicPort, opts = {}) {
   require('./portPlan').assertSniConflict(
     'naive',
     sni,
     publicPort != null ? publicPort : getPublicPort(),
+    opts,
   );
+}
+
+function getTcpEnabled() {
+  const raw = getSetting(TCP_ENABLED_KEY, '');
+  if (raw === '') return true;
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function getQuicEnabled() {
+  const raw = getSetting(QUIC_ENABLED_KEY, '');
+  if (raw === '') return false;
+  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+function setTcpEnabled(on) {
+  setSetting(TCP_ENABLED_KEY, on ? '1' : '0');
+}
+
+function setQuicEnabled(on) {
+  setSetting(QUIC_ENABLED_KEY, on ? '1' : '0');
 }
 
 function getSni() {
@@ -307,15 +330,39 @@ function ensureClientPasswords() {
 }
 
 /**
- * @param {{ port: number, sni: string, probeDomain?: string, clients: Array<{ name: string, naive_password: string, id: string }> }} opts
+ * @param {{
+ *   port: number,
+ *   sni: string,
+ *   certDomain?: string,
+ *   probeDomain?: string,
+ *   tcpEnabled?: boolean,
+ *   quicEnabled?: boolean,
+ *   clients: Array<{ name: string, naive_password: string, id: string }>
+ * }} opts
  */
 function buildCaddyfileObject(opts) {
   const sni = String(opts.sni || '').trim().toLowerCase();
+  const certDomain = String(opts.certDomain || sni).trim().toLowerCase() || sni;
   const port = opts.port || INTERNAL_PORT;
-  const certBase = `/etc/letsencrypt/live/${sni}`;
+  const certBase = `/etc/letsencrypt/live/${certDomain}`;
+  const tcpOn = opts.tcpEnabled !== false;
+  const quicOn = opts.quicEnabled === true;
+  const protocols = [];
+  if (tcpOn) {
+    protocols.push('h1', 'h2');
+  }
+  if (quicOn) {
+    protocols.push('h3');
+  }
+  if (!protocols.length) {
+    protocols.push('h1', 'h2');
+  }
   const lines = [
     '{',
     '  order forward_proxy before file_server',
+    '  servers {',
+    `    protocols ${protocols.join(' ')}`,
+    '  }',
     '  log {',
     '    exclude http.log.error',
     '  }',
@@ -403,10 +450,17 @@ function getClientNaivePayload(client, opts = {}) {
   const pass = client.naive_password;
   const hostPart = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
   const portPart = port === 443 ? '' : `:${port}`;
-  const proxy = `https://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${hostPart}${portPart}`;
+  const auth = `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${hostPart}${portPart}`;
+  const tcpOn = getTcpEnabled();
+  const quicOn = getQuicEnabled();
+  const httpsProxy = `https://${auth}`;
+  const quicProxy = `quic://${auth}`;
+  const proxy = tcpOn ? httpsProxy : (quicOn ? quicProxy : httpsProxy);
 
   const clientJson = buildClientJson({ proxy });
   const shareUrl = buildNaiveShareUrl(clientJson);
+  const quicClientJson = quicOn ? buildClientJson({ proxy: quicProxy }) : null;
+  const quicShareUrl = quicClientJson ? buildNaiveShareUrl(quicClientJson) : null;
 
   const base = (opts.baseUrl || '').replace(/\/+$/, '');
   const subPrefix = String(
@@ -417,13 +471,17 @@ function getClientNaivePayload(client, opts = {}) {
 
   return {
     shareUrl,
+    quicShareUrl,
     subUrl,
     subPath,
     clientJson,
+    quicClientJson,
     port,
     sni,
     host,
     user,
+    tcpEnabled: tcpOn,
+    quicEnabled: quicOn,
   };
 }
 
@@ -435,13 +493,14 @@ const AMNEZIA_NAIVE_SUBNET = '10.8.2.0';
 function buildAmneziaNaiveContainer(client) {
   const payload = getClientNaivePayload(client);
   if (!payload) return null;
+  const transport = payload.quicEnabled && !payload.tcpEnabled ? 'quic' : 'tcp';
   return {
     container: 'amnezia-naive',
     naive: {
       last_config: `${JSON.stringify(payload.clientJson, null, 4)}\n`,
       port: String(payload.port),
       subnet_address: AMNEZIA_NAIVE_SUBNET,
-      transport_proto: 'tcp',
+      transport_proto: transport,
     },
   };
 }
@@ -516,22 +575,30 @@ async function ensureNaiveContainer() {
   const volume = await resolveAwgVolumeName();
   const certbotVol = await resolveCertbotVolumeName();
   const portPlan = require('./portPlan');
-  const mode = portPlan.modeForService('naive') || 'direct';
+  const tcpOn = getTcpEnabled();
+  const quicOn = getQuicEnabled();
   const publicPort = getPublicPort();
   const port = getPort();
+  const mode = tcpOn ? portPlan.inferTcpMode('naive', publicPort) : 'direct';
 
   const network = await portPlan.resolveNginxNetwork();
-  if (mode === 'demux' && !network) {
+  if (mode === 'demux' && tcpOn && !network) {
     throw new Error('nginx compose network not found; is nginx running?');
   }
 
+  const wantFp = [
+    `tcp=${tcpOn ? mode : 'off'}`,
+    `quic=${quicOn ? `${publicPort}:${port}/udp` : 'off'}`,
+    `pub=${publicPort}`,
+  ].join('|');
+
   const running = await dockerContainerRunning();
   if (running && await containerManagedByUs()) {
-    const labelMode = await runCmd('docker', [
-      'inspect', '-f', '{{index .Config.Labels "amnezia.port_mode"}}', CONTAINER_NAME,
+    const labelFp = await runCmd('docker', [
+      'inspect', '-f', '{{index .Config.Labels "amnezia.publish_fp"}}', CONTAINER_NAME,
     ]);
-    const curMode = (labelMode.ok ? labelMode.stdout : '').trim();
-    if (curMode === mode) {
+    const curFp = (labelFp.ok ? labelFp.stdout : '').trim();
+    if (curFp === wantFp) {
       return { reused: true };
     }
   }
@@ -550,14 +617,20 @@ async function ensureNaiveContainer() {
     '--label', `amnezia.port_mode=${mode}`,
     '--label', `amnezia.listen_port=${port}`,
     '--label', `amnezia.public_port=${publicPort}`,
+    '--label', `amnezia.publish_fp=${wantFp}`,
+    '--label', `amnezia.tcp=${tcpOn ? '1' : '0'}`,
+    '--label', `amnezia.quic=${quicOn ? '1' : '0'}`,
     '-v', `${volume}:/opt/amnezia/awg:rw`,
     '-v', `${certbotVol}:/etc/letsencrypt:ro`,
   ];
-  if (mode === 'demux') {
+  if (network && (mode === 'demux' || quicOn || tcpOn)) {
     runArgs.push('--network', network);
-  } else {
-    if (network) runArgs.push('--network', network);
+  }
+  if (tcpOn && mode !== 'demux') {
     runArgs.push('-p', `${publicPort}:${port}/tcp`);
+  }
+  if (quicOn) {
+    runArgs.push('-p', `${publicPort}:${port}/udp`);
   }
   runArgs.push(IMAGE_NAME);
 
@@ -590,7 +663,10 @@ async function syncClientsFromDb() {
   const text = buildCaddyfileObject({
     port: getPort(),
     sni,
+    certDomain: resolveCertDomain() || sni,
     probeDomain: getProbeResistanceDomain(),
+    tcpEnabled: getTcpEnabled(),
+    quicEnabled: getQuicEnabled(),
     clients,
   });
   writeCaddyfile(text);
@@ -636,6 +712,8 @@ function getStatus() {
     sslCertId: getSetting(SSL_CERT_ID_KEY, '') || null,
     port: getPort(),
     publicPort: getClientFacingPort(),
+    tcpEnabled: getTcpEnabled(),
+    quicEnabled: getQuicEnabled(),
     mode: plan.modes.naive || null,
     demuxPeers: plan.demuxPeers.naive || [],
     updatedAt,
@@ -698,7 +776,27 @@ async function enableInternal(opts = {}) {
       });
     }
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
-    assertSniDemux(sni, publicPort);
+    assertSniDemux(sni, publicPort, { sslCertId: inventoryCert.id });
+
+    const tcpEnabled = opts.enableTcp != null
+      ? (opts.enableTcp === true || opts.enableTcp === '1' || opts.enableTcp === 'true')
+      : (opts.tcpEnabled != null
+        ? (opts.tcpEnabled === true || opts.tcpEnabled === '1' || opts.tcpEnabled === 'true')
+        : getTcpEnabled());
+    const quicEnabled = opts.enableQuic != null
+      ? (opts.enableQuic === true || opts.enableQuic === '1' || opts.enableQuic === 'true')
+      : (opts.quicEnabled != null
+        ? (opts.quicEnabled === true || opts.quicEnabled === '1' || opts.quicEnabled === 'true')
+        : getQuicEnabled());
+    if (!tcpEnabled && !quicEnabled) {
+      throw Object.assign(new Error('Enable at least one of TCP or QUIC'), {
+        status: 400,
+        code: 'NAIVE_TRANSPORT_REQUIRED',
+        fieldErrors: { enableTcp: 'TCP or QUIC required' },
+      });
+    }
+    setTcpEnabled(tcpEnabled);
+    setQuicEnabled(quicEnabled);
 
     const probeDomain = opts.probeResistanceDomain != null
       ? String(opts.probeResistanceDomain).trim()
@@ -721,11 +819,9 @@ async function enableInternal(opts = {}) {
     setSetting(SSL_CERT_ID_KEY, inventoryCert.id);
 
     const portPlan = require('./portPlan');
-    const tentativeMode = (() => {
-      const panelPub = parseInt(String(config.PANEL_HTTPS_PORT || '10123'), 10);
-      if (panelPub === publicPort) return 'demux';
-      return 'direct';
-    })();
+    const tentativeMode = tcpEnabled
+      ? portPlan.inferTcpMode('naive', publicPort)
+      : 'direct';
 
     const addressRaw = opts.address != null ? String(opts.address).trim() : '';
     const address = addressRaw || getAddress() || getPublicHost();
@@ -736,8 +832,11 @@ async function enableInternal(opts = {}) {
     setSetting(SNI_KEY, sni);
     setSetting(ADDRESS_KEY, address);
 
-    if (tentativeMode === 'direct') {
+    if (tentativeMode === 'direct' && tcpEnabled) {
       await portPlan.assertHostPortsAvailable([publicPort], { allowNginx: true });
+    }
+    if (quicEnabled) {
+      await portPlan.assertHostUdpPortsAvailable([publicPort], { owner: 'naive' });
     }
 
     ensureClientPasswords();
@@ -745,7 +844,10 @@ async function enableInternal(opts = {}) {
     const text = buildCaddyfileObject({
       port: getPort(),
       sni,
+      certDomain: storageKey,
       probeDomain: probeDomain || getProbeResistanceDomain(),
+      tcpEnabled,
+      quicEnabled,
       clients: ensureClientPasswords(),
     });
     writeCaddyfile(text);
@@ -870,7 +972,10 @@ async function resetCredentialsInternal() {
       writeCaddyfile(buildCaddyfileObject({
         port: getPort(),
         sni,
+        certDomain: resolveCertDomain() || sni,
         probeDomain: getProbeResistanceDomain(),
+        tcpEnabled: getTcpEnabled(),
+        quicEnabled: getQuicEnabled(),
         clients: ensureClientPasswords(),
       }));
     }

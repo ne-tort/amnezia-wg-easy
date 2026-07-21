@@ -131,7 +131,7 @@ function excludedPortsForAlloc() {
  */
 function resolveListenPort(preferred, { mode } = {}) {
   const portPlan = require('./portPlan');
-  const m = mode || portPlan.modeForService('xray') || 'direct';
+  const m = mode || portPlan.inferTcpMode('xray', getPublicPort());
   const publicPort = getPublicPort();
   if (m === 'direct') {
     const raw = preferred != null ? parseInt(String(preferred), 10) : getPort();
@@ -155,7 +155,12 @@ function resolveInternalListenPort(preferred) {
 }
 
 function assertSniDemux(sni, publicPort) {
-  require('./portPlan').assertSniConflict('xray', sni, publicPort != null ? publicPort : getPublicPort());
+  require('./portPlan').assertSniConflict(
+    'xray',
+    sni,
+    publicPort != null ? publicPort : getPublicPort(),
+    { sslCertId: getSetting(SSL_CERT_ID_KEY, '') },
+  );
 }
 
 function getSni() {
@@ -1027,7 +1032,7 @@ async function ensureXrayContainer() {
   const vlessDesired = getDesired() === true;
   const needsUdpTransport = vlessDesired && xrayTransportSchema.isUdpTransport(networkName);
   const hyXray = isHysteriaXrayCoreDesired();
-  let mode = portPlan.modeForService('xray') || 'direct';
+  let mode = portPlan.inferTcpMode('xray', getPublicPort());
   // UDP transports (mKCP / hysteria) cannot share TCP SNI demux — force direct publish.
   if (needsUdpTransport && mode === 'demux') {
     mode = 'direct';
@@ -1444,12 +1449,8 @@ async function enableInternal(opts = {}) {
     }
 
     const portPlan = require('./portPlan');
-    // Tentative listen for plan computation: demux when panel shares this public port.
-    const tentativeMode = (() => {
-      const panelPub = parseInt(String(config.PANEL_HTTPS_PORT || '10123'), 10);
-      if (panelPub === publicPort) return 'demux';
-      return 'direct';
-    })();
+    // Demux when panel or mirror stub already owns this public TCP port.
+    const tentativeMode = portPlan.inferTcpMode('xray', publicPort);
 
     const port = resolveListenPort(
       opts.port != null && String(opts.port).trim() !== '' ? opts.port : getPort(),

@@ -114,6 +114,8 @@ window.SidecarPanels = {
       amneziaNaiveSslCertId: '',
       amneziaNaivePublicPort: 443,
       amneziaNaiveProbeDomain: '',
+      amneziaNaiveEnableTcp: true,
+      amneziaNaiveEnableQuic: false,
       amneziaNaiveFieldErrors: {},
 
       qrcodeMieruLink: '',
@@ -154,6 +156,7 @@ window.SidecarPanels = {
       if (!String(this.amneziaNaiveAddress || '').trim()) return false;
       if (!this.isValidAmneziaNaivePublicPort) return false;
       if (!String(this.amneziaNaiveSslCertId || '').trim()) return false;
+      if (!this.amneziaNaiveEnableTcp && !this.amneziaNaiveEnableQuic) return false;
       return true;
     },
     canConfirmAmneziaHysteriaInstall() {
@@ -384,7 +387,7 @@ window.SidecarPanels = {
       if (obfsType && !(core === 'xray' && obfsType === 'gecko')) {
         body.obfsType = core === 'xray' ? (obfsType === 'salamander' ? 'salamander' : '') : obfsType;
         if (body.obfsType) {
-          body.obfsPassword = String(this.amneziaHysteriaObfsPassword || '').trim();
+          // Password is auto-generated on the server when empty.
           if (body.obfsType === 'gecko') {
             const gmin = String(this.amneziaHysteriaObfsGeckoMin || '').trim();
             const gmax = String(this.amneziaHysteriaObfsGeckoMax || '').trim();
@@ -423,6 +426,8 @@ window.SidecarPanels = {
         sni: sniFromCert || this.normalizeHostnameInput(this.amneziaNaiveSni),
         publicPort: Number(this.amneziaNaivePublicPort) || 443,
         sslCertId: String(this.amneziaNaiveSslCertId || '').trim(),
+        enableTcp: this.amneziaNaiveEnableTcp === true,
+        enableQuic: this.amneziaNaiveEnableQuic === true,
       };
       const probe = String(this.amneziaNaiveProbeDomain || '').trim();
       if (probe) body.probeResistanceDomain = probe;
@@ -616,6 +621,7 @@ window.SidecarPanels = {
         }
         this.syncHysteriaMasqueradeIdFromUrl();
         if (st.obfsType) this.amneziaHysteriaObfsType = st.obfsType;
+        if (st.obfsPassword) this.amneziaHysteriaObfsPassword = st.obfsPassword;
         if (st.core) this.amneziaHysteriaCore = st.core;
         if (st.obfsGeckoMin) this.amneziaHysteriaObfsGeckoMin = String(st.obfsGeckoMin);
         if (st.obfsGeckoMax) this.amneziaHysteriaObfsGeckoMax = String(st.obfsGeckoMax);
@@ -801,6 +807,8 @@ window.SidecarPanels = {
         }
         if (st.publicPort) this.amneziaNaivePublicPort = st.publicPort;
         if (st.sslCertId) this.amneziaNaiveSslCertId = st.sslCertId;
+        if (st.tcpEnabled != null) this.amneziaNaiveEnableTcp = st.tcpEnabled === true;
+        if (st.quicEnabled != null) this.amneziaNaiveEnableQuic = st.quicEnabled === true;
       }
       if (this.amneziaNaiveBusy) this.ensureAmneziaNaivePoll();
       else this.stopAmneziaNaivePoll();
