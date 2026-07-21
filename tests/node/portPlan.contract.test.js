@@ -302,3 +302,23 @@ test('mirrorPublicPort: separate stub port when NGINX_MIRROR_HTTPS_PORT differs 
   assert.deepEqual(plan.mirrorExclusive, { hostPort: 443, containerPort: 8444 });
   assert.deepEqual(plan.panelExclusive, { hostPort: 4433, containerPort: 8443 });
 });
+
+test('computePlan: mirror stub + xray direct on same port → demux with mirror default', () => {
+  const { portPlan, settings } = loadPortPlan({
+    PANEL_HTTPS_PORT: '4433',
+    NGINX_MIRROR_HTTPS_PORT: '443',
+  });
+  settings.amnezia_xray_desired = '1';
+  settings.amnezia_xray_public_port = '443';
+  settings.amnezia_xray_port = '24443';
+  settings.amnezia_xray_sni = 'vpn.example.com';
+
+  const plan = portPlan.computePlan();
+  assert.equal(plan.mirrorExclusive, null);
+  assert.equal(plan.modes.xray, 'demux');
+  assert.deepEqual(plan.direct, []);
+  const demux = plan.demuxPorts.find((d) => d.port === 443);
+  assert.ok(demux);
+  assert.equal(demux.defaultUpstream, '127.0.0.1:8444');
+  assert.ok(demux.routes.some((r) => r.service === 'xray' && r.sni === 'vpn.example.com'));
+});

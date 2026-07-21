@@ -432,9 +432,9 @@ function computePlan(servicesInput) {
   }
 
   const udpDirect = collectUdpDirectServices();
-  const mirrorExclusive = mirrorExclusiveFromEnv();
+  let mirrorExclusive = mirrorExclusiveFromEnv();
 
-  return {
+  const plan = {
     demuxPorts,
     direct,
     udpDirect,
@@ -444,6 +444,87 @@ function computePlan(servicesInput) {
     demuxPeers,
     conflicts,
   };
+  reconcileMirrorPortConflicts(plan, services);
+  validateNginxHostPorts(plan);
+  return plan;
+}
+
+/**
+ * Mirror stub on a dedicated host port cannot share Docker publish with a direct sidecar.
+ * Merge into stream demux: sidecar SNI routes + default → mirror TLS listener (:8444).
+ */
+function reconcileMirrorPortConflicts(plan, services) {
+  const mirror = plan.mirrorExclusive;
+  if (!mirror) return;
+
+  const mirrorPort = mirror.hostPort;
+  const conflictingDirect = plan.direct.filter((d) => d.publicPort === mirrorPort);
+
+  if (!conflictingDirect.length) {
+    const demux = plan.demuxPorts.find((d) => d.port === mirrorPort);
+    if (demux) {
+      plan.mirrorExclusive = null;
+      if (demux.defaultUpstream === '127.0.0.1:9') {
+        demux.defaultUpstream = `127.0.0.1:${MIRROR_TLS_INTERNAL}`;
+      }
+    }
+    return;
+  }
+
+  for (const d of conflictingDirect) {
+    const svc = services.find((s) => s.id === d.service);
+    if (!svc || !svc.sni || !svc.upstream) {
+      plan.conflicts.push({
+        code: 'MIRROR_PORT_CONFLICT',
+        message: `${d.service} on TCP ${mirrorPort} conflicts with mirror stub; set SNI or use another mirror port`,
+      });
+      continue;
+    }
+
+    plan.direct = plan.direct.filter((x) => x.service !== d.service);
+    plan.modes[d.service] = 'demux';
+    if (!plan.demuxPeers[d.service]) plan.demuxPeers[d.service] = [];
+
+    let block = plan.demuxPorts.find((b) => b.port === mirrorPort);
+    if (!block) {
+      block = {
+        port: mirrorPort,
+        routes: [],
+        defaultUpstream: `127.0.0.1:${MIRROR_TLS_INTERNAL}`,
+      };
+      plan.demuxPorts.push(block);
+    } else {
+      block.defaultUpstream = `127.0.0.1:${MIRROR_TLS_INTERNAL}`;
+    }
+
+    if (!block.routes.some((r) => r.service === d.service)) {
+      block.routes.push({
+        sni: svc.sni,
+        upstream: svc.upstream,
+        service: d.service,
+      });
+    }
+  }
+
+  plan.mirrorExclusive = null;
+}
+
+/** Detect duplicate host TCP binds requested for nginx publish. */
+function validateNginxHostPorts(plan) {
+  const seen = new Map();
+  const claim = (port, who) => {
+    if (seen.has(port)) {
+      plan.conflicts.push({
+        code: 'NGINX_HOST_PORT_DUP',
+        message: `Host TCP ${port} claimed by both ${seen.get(port)} and ${who}`,
+      });
+    } else {
+      seen.set(port, who);
+    }
+  };
+  if (plan.panelExclusive) claim(plan.panelExclusive.hostPort, 'panel');
+  if (plan.mirrorExclusive) claim(plan.mirrorExclusive.hostPort, 'mirror');
+  for (const d of plan.demuxPorts) claim(d.port, 'demux');
 }
 
 function modeForService(serviceId, plan) {
