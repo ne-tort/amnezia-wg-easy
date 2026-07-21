@@ -1276,7 +1276,7 @@ module.exports = class Server {
           if (err && err.status === 400) throw httpError(400, err.message);
           if (err && err.status === 504) throw httpError(504, err.message);
           if (err && err.status === 503) throw httpError(503, err.message);
-          throw httpError(500, err.message || 'Amnezia Xray enable failed');
+          throw httpError(500, err.message || 'Vless enable failed');
         }
       }))
       .post('/api/amnezia-xray/disable', defineEventHandler(async (event) => {
@@ -1286,7 +1286,7 @@ module.exports = class Server {
           return { success: true, ...status };
         } catch (err) {
           if (err && err.status === 409) throw httpError(409, err.message);
-          throw httpError(500, err.message || 'Amnezia Xray disable failed');
+          throw httpError(500, err.message || 'Vless disable failed');
         }
       }))
       .post('/api/amnezia-xray/force-cleanup', defineEventHandler(async (event) => {
@@ -1296,7 +1296,7 @@ module.exports = class Server {
           return { success: true, ...status };
         } catch (err) {
           if (err && err.status === 409) throw httpError(409, err.message);
-          throw httpError(500, err.message || 'Amnezia Xray cleanup failed');
+          throw httpError(500, err.message || 'Vless cleanup failed');
         }
       }))
       .post('/api/amnezia-xray/reset', defineEventHandler(async (event) => {
@@ -1306,7 +1306,7 @@ module.exports = class Server {
           return { success: true, ...status };
         } catch (err) {
           if (err && err.status === 409) throw httpError(409, err.message);
-          throw httpError(500, err.message || 'Amnezia Xray reset failed');
+          throw httpError(500, err.message || 'Vless reset failed');
         }
       }))
       .get('/api/amnezia-xray/sni-cache', defineEventHandler(async (event) => {
@@ -1625,7 +1625,7 @@ module.exports = class Server {
         const clientId = getRouterParam(event, 'clientId');
         acl.assertClientAccess(event, clientId);
         if (!amneziaXray.isAmneziaXrayAvailable()) {
-          throw httpError(503, 'Amnezia Xray is not running');
+          throw httpError(503, 'Vless is not running');
         }
         const client = db.clients.getById(clientId);
         if (!client) throw httpError(404, 'Client Not Found');

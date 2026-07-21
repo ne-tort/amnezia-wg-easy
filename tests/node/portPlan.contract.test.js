@@ -284,6 +284,29 @@ test('computePlan: hysteria → udpDirect', () => {
   assert.ok(plan.udpDirect.some((u) => u.id === 'hysteria' && u.publicPort === 443 && u.protocol === 'udp'));
 });
 
+test('computePlan: VLESS mKCP/hysteria → udpDirect, not TCP demux', () => {
+  const { portPlan, settings } = loadPortPlan({
+    PANEL_HTTPS_PORT: '4433',
+  });
+  settings.amnezia_xray_desired = '1';
+  settings.amnezia_xray_public_port = '4433';
+  settings.amnezia_xray_port = '24443';
+  settings.amnezia_xray_network = 'hysteria';
+  settings.amnezia_xray_sni = 'vpn.example.com';
+
+  let plan = portPlan.computePlan();
+  assert.equal(plan.modes.xray, undefined);
+  assert.ok(!plan.demuxPorts.some((d) => d.routes && d.routes.some((r) => r.service === 'xray')));
+  assert.ok(plan.udpDirect.some((u) => u.id === 'xray-udp' && u.publicPort === 4433 && u.protocol === 'udp'));
+  assert.deepEqual(plan.panelExclusive, { hostPort: 4433, containerPort: 8443 });
+
+  settings.amnezia_xray_network = 'kcp';
+  settings.amnezia_xray_public_port = '45000';
+  plan = portPlan.computePlan();
+  assert.ok(plan.udpDirect.some((u) => u.id === 'xray-udp' && u.publicPort === 45000));
+  assert.equal(plan.modes.xray, undefined);
+});
+
 test('mirrorPublicPort: separate stub port when NGINX_MIRROR_HTTPS_PORT differs from panel', () => {
   const { portPlan } = loadPortPlan({
     PANEL_HTTPS_PORT: '4433',

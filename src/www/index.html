@@ -999,7 +999,7 @@
                 <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
               </svg>
             </button>
-            <!-- Amnezia Xray VLESS Reality -->
+            <!-- Vless (Xray) -->
             <button v-if="canManageXray" type="button" @click="toggleAmneziaXray()"
               :disabled="amneziaXrayBusy"
               class="dns-header-btn flex items-center justify-center h-8 min-w-[3.25rem] px-2 rounded-full transition disabled:opacity-50 disabled:cursor-wait"
@@ -1974,7 +1974,7 @@
           </div>
         </div>
 
-        <!-- Xray install modal -->
+        <!-- Vless install modal -->
         <div v-if="amneziaXrayInstallOpen" class="modal-root">
           <div class="modal-backdrop" @click="closeAmneziaXrayInstall"></div>
           <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true" aria-labelledby="modal-xray-install-title">

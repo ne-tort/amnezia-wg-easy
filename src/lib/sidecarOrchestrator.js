@@ -44,13 +44,10 @@ function setPhaseState(state, next, err = null) {
   state.updatedAt = Date.now();
 }
 
-function withJobFactory(getActiveJob, setActiveJob, serviceLabel) {
+function withJobFactory(getActiveJob, setActiveJob, _serviceLabel) {
   return function withJob(fn) {
-    if (getActiveJob()) {
-      const err = new Error(`Amnezia ${serviceLabel} operation already in progress`);
-      err.status = 409;
-      return Promise.reject(err);
-    }
+    const existing = getActiveJob();
+    if (existing) return existing;
     const job = Promise.resolve()
       .then(fn)
       .finally(() => {

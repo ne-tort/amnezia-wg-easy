@@ -43,7 +43,7 @@ const SOCKOPT_FIELDS = Object.freeze([
     options: TCP_CONGESTION, default: 'bbr' },
   { key: 'domainStrategy', type: 'select', optional: true, scope: 'shared', labelKey: 'xrayTfDomainStrategy',
     options: DOMAIN_STRATEGIES },
-  { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
+  { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfAcceptProxyProtocol' },
 ]);
 
 /** @type {Record<string, Array<Record<string, unknown>>>} */
@@ -65,7 +65,7 @@ const FIELDS = Object.freeze({
     { key: 'wsPath', type: 'text', optional: true, default: '/', scope: 'shared', labelKey: 'xrayTfWsPath' },
     { key: 'wsHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfWsHost', inheritFrom: 'sni' },
     { key: 'wsHeaders', type: 'json', optional: true, scope: 'shared', labelKey: 'xrayTfWsHeaders' },
-    { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
+    { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfAcceptProxyProtocol' },
   ]),
   grpc: Object.freeze([
     { key: 'grpcServiceName', type: 'text', optional: false, scope: 'shared', labelKey: 'xrayTfGrpcServiceName' },
@@ -81,9 +81,7 @@ const FIELDS = Object.freeze({
     { key: 'kcpReadBufferSize', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpReadBufferSize' },
     { key: 'kcpWriteBufferSize', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpWriteBufferSize' },
     { key: 'kcpCongestion', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfKcpCongestion' },
-    { key: 'kcpSeed', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfKcpSeed' },
-    { key: 'kcpHeaderType', type: 'select', optional: true, default: 'none', scope: 'shared', labelKey: 'xrayTfKcpHeaderType',
-      options: KCP_HEADER_TYPES },
+    // header/seed removed in Xray 26 (finalmask); do not expose in UI
   ]),
   httpupgrade: Object.freeze([
     { key: 'httpupgradeHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHttpupgradeHost', inheritFrom: 'sni' },
@@ -112,6 +110,8 @@ const FIELDS = Object.freeze({
       showIf: { hysteriaMasqueradeType: 'proxy' } },
     { key: 'hysteriaMasqueradeContent', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeContent',
       showIf: { hysteriaMasqueradeType: 'string' } },
+    { key: 'hysteriaMasqueradeDir', type: 'text', optional: true, default: '/var/www/html', scope: 'shared',
+      labelKey: 'xrayTfHysteriaMasqueradeDir', showIf: { hysteriaMasqueradeType: 'file' } },
   ]),
 });
 

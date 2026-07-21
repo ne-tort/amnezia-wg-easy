@@ -1026,11 +1026,7 @@ async function disableInternal() {
 }
 
 function withJob(fn) {
-  if (activeJob) {
-    const err = new Error('Amnezia Mieru operation already in progress');
-    err.status = 409;
-    return Promise.reject(err);
-  }
+  if (activeJob) return activeJob;
   activeJob = Promise.resolve()
     .then(fn)
     .finally(() => {

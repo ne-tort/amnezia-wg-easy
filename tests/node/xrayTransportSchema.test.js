@@ -56,9 +56,20 @@ test('buildStreamSettings supports ws grpc xhttp kcp', () => {
     security: 'tls',
     network: 'kcp',
     kcpMtu: 1350,
-    kcpHeaderType: 'none',
+    kcpCongestion: true,
   });
   assert.equal(kcp.kcpSettings.mtu, 1350);
+  assert.equal(kcp.kcpSettings.congestion, true);
+  assert.equal(kcp.kcpSettings.header, undefined);
+  assert.equal(kcp.kcpSettings.seed, undefined);
+
+  const hy = xrayVless.buildStreamSettings({
+    security: 'tls',
+    network: 'hysteria',
+    hysteriaAuth: 'secret',
+  });
+  assert.equal(hy.network, 'hysteria');
+  assert.equal(hy.hysteriaSettings.auth, 'secret');
 });
 
 test('buildVlessUrl encodes transport params', () => {

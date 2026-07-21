@@ -141,9 +141,8 @@ function buildKcpSettings(opts) {
     kcp.writeBufferSize = Number(opts.kcpWriteBufferSize);
   }
   if (opts.kcpCongestion === true) kcp.congestion = true;
-  if (opts.kcpSeed) kcp.seed = String(opts.kcpSeed);
-  const ht = opts.kcpHeaderType || 'none';
-  kcp.header = { type: ht };
+  // Xray 26+: header/seed removed from kcpSettings (use finalmask). Emitting them
+  // makes `xray -test` fail — never write them into server/client JSON.
   return kcp;
 }
 
@@ -195,7 +194,7 @@ function buildHysteriaSettings(opts) {
     } else if (mType === 'string') {
       masq.content = String(opts.hysteriaMasqueradeContent || 'ok');
     } else if (mType === 'file') {
-      masq.dir = '/var/www/html';
+      masq.dir = String(opts.hysteriaMasqueradeDir || '/var/www/html');
     }
     h.masquerade = masq;
   }
@@ -310,11 +309,6 @@ function appendVlessTransportParams(params, network, opts) {
   } else if (network === 'grpc') {
     if (opts.grpcServiceName) params.set('serviceName', opts.grpcServiceName);
     if (opts.grpcMultiMode === true) params.set('mode', 'multi');
-  } else if (network === 'kcp') {
-    if (opts.kcpHeaderType && opts.kcpHeaderType !== 'none') {
-      params.set('headerType', opts.kcpHeaderType);
-    }
-    if (opts.kcpSeed) params.set('seed', opts.kcpSeed);
   } else if (network === 'httpupgrade') {
     if (opts.httpupgradePath) params.set('path', opts.httpupgradePath);
     if (opts.httpupgradeHost) params.set('host', opts.httpupgradeHost);

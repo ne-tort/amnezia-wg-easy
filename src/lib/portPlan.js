@@ -202,6 +202,15 @@ function mieruUdpEnabled() {
   return proto === 'UDP';
 }
 
+function xrayUsesUdpTransport() {
+  try {
+    const net = setting('amnezia_xray_network', 'tcp').toLowerCase();
+    return require('./xrayTransportSchema').isUdpTransport(net);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Collect candidate services for the plan (desired sidecars + always panel).
  */
@@ -218,7 +227,9 @@ function collectServices() {
     canJoinDemux: panelCanJoinDemuxBySni(panelSni()),
   });
 
-  if (desired('amnezia_xray_desired')) {
+  // TCP VLESS only — mKCP/hysteria transport must not join stream SNI demux
+  // (that wrongly republishes panel HTTPS as host:host and breaks the panel).
+  if (desired('amnezia_xray_desired') && !xrayUsesUdpTransport()) {
     const pub = parsePort(
       setting('amnezia_xray_public_port', '') || process.env.XRAY_PUBLIC_PORT || '443',
       443,
@@ -290,6 +301,19 @@ function collectUdpDirectServices() {
       id: 'hysteria',
       publicPort: pub,
       listenPort: 443,
+      protocol: 'udp',
+    });
+  }
+  if (desired('amnezia_xray_desired') && xrayUsesUdpTransport()) {
+    const pub = parsePort(
+      setting('amnezia_xray_public_port', '') || process.env.XRAY_PUBLIC_PORT || '443',
+      443,
+    );
+    const listen = parsePort(setting('amnezia_xray_port', ''), pub);
+    services.push({
+      id: 'xray-udp',
+      publicPort: pub,
+      listenPort: listen || pub,
       protocol: 'udp',
     });
   }
@@ -1225,6 +1249,17 @@ async function ensureUdpDirectSidecars(plan) {
       console.error('portPlan: ensure naive for udpDirect failed:', err && err.message);
     }
   }
+  if (ids.has('xray-udp')) {
+    try {
+      const xray = require('./amneziaXray');
+      if (typeof xray.ensureXrayContainer === 'function') {
+        await xray.ensureXrayContainer();
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('portPlan: ensure xray for udpDirect failed:', err && err.message);
+    }
+  }
 }
 
 /** @deprecated use applyPlan — kept for callers */
@@ -1290,7 +1325,7 @@ function serviceFamily(id) {
   if (s === 'hysteria' || s.startsWith('hysteria')) return 'hysteria';
   if (s === 'naive' || s.startsWith('naive')) return 'naive';
   if (s.startsWith('mieru')) return 'mieru';
-  if (s === 'xray') return 'xray';
+  if (s === 'xray' || s.startsWith('xray')) return 'xray';
   if (s === 'panel' || s === 'mirror') return s;
   return s;
 }

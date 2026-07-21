@@ -1032,11 +1032,11 @@ async function ensureXrayContainer() {
   const vlessDesired = getDesired() === true;
   const needsUdpTransport = vlessDesired && xrayTransportSchema.isUdpTransport(networkName);
   const hyXray = isHysteriaXrayCoreDesired();
-  let mode = portPlan.inferTcpMode('xray', getPublicPort());
-  // UDP transports (mKCP / hysteria) cannot share TCP SNI demux — force direct publish.
-  if (needsUdpTransport && mode === 'demux') {
-    mode = 'direct';
-  }
+  // UDP transports (mKCP / hysteria) never join TCP SNI demux — always direct -p …/udp.
+  // Joining demux on PANEL_HTTPS_PORT remaps nginx publish and can take down the panel.
+  let mode = needsUdpTransport
+    ? 'direct'
+    : portPlan.inferTcpMode('xray', getPublicPort());
   const publicPort = getPublicPort();
   const port = resolveListenPort(getPort(), { mode });
   if (vlessDesired && String(port) !== String(getPort())) {
@@ -1591,11 +1591,7 @@ async function disableInternal() {
 }
 
 function withJob(fn) {
-  if (activeJob) {
-    const err = new Error('Amnezia Xray operation already in progress');
-    err.status = 409;
-    return Promise.reject(err);
-  }
+  if (activeJob) return activeJob;
   activeJob = Promise.resolve()
     .then(fn)
     .finally(() => {

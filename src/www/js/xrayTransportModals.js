@@ -30,7 +30,6 @@ const TCP_CONGESTION = ['bbr', 'cubic', 'reno', 'bbr2'];
 const HTTP_VERSIONS = ['1.1', '2'];
 const HTTP_METHODS = ['GET', 'POST', 'PUT', 'HEAD', 'OPTIONS'];
 const DOMAIN_STRATEGIES = ['AsIs', 'UseIP', 'UseIPv4', 'UseIPv6'];
-const KCP_HEADER_TYPES = ['none', 'srtp', 'utp', 'wechat-video', 'wechat-audio', 'dtls', 'wireguard'];
 const XHTTP_MODES = ['auto', 'stream-one', 'stream-up', 'packet-up'];
 const TCP_HEADER_TYPES = ['none', 'http'];
 
@@ -38,7 +37,7 @@ const SOCKOPT_FIELDS = [
   { key: 'tcpFastOpen', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfTcpFastOpen' },
   { key: 'tcpCongestion', type: 'select', optional: true, scope: 'shared', labelKey: 'xrayTfTcpCongestion', options: TCP_CONGESTION, default: 'bbr' },
   { key: 'domainStrategy', type: 'select', optional: true, scope: 'shared', labelKey: 'xrayTfDomainStrategy', options: DOMAIN_STRATEGIES },
-  { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
+  { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfAcceptProxyProtocol' },
 ];
 
 const TRANSPORT_FIELDS = {
@@ -54,7 +53,7 @@ const TRANSPORT_FIELDS = {
     { key: 'wsPath', type: 'text', optional: true, default: '/', scope: 'shared', labelKey: 'xrayTfWsPath' },
     { key: 'wsHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfWsHost', inheritFrom: 'sni' },
     { key: 'wsHeaders', type: 'json', optional: true, scope: 'shared', labelKey: 'xrayTfWsHeaders' },
-    { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
+    { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfAcceptProxyProtocol' },
   ],
   grpc: [
     { key: 'grpcServiceName', type: 'text', optional: false, scope: 'shared', labelKey: 'xrayTfGrpcServiceName' },
@@ -70,8 +69,6 @@ const TRANSPORT_FIELDS = {
     { key: 'kcpReadBufferSize', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpReadBufferSize' },
     { key: 'kcpWriteBufferSize', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpWriteBufferSize' },
     { key: 'kcpCongestion', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfKcpCongestion' },
-    { key: 'kcpSeed', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfKcpSeed' },
-    { key: 'kcpHeaderType', type: 'select', optional: true, default: 'none', scope: 'shared', labelKey: 'xrayTfKcpHeaderType', options: KCP_HEADER_TYPES },
   ],
   httpupgrade: [
     { key: 'httpupgradeHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHttpupgradeHost', inheritFrom: 'sni' },
@@ -84,8 +81,7 @@ const TRANSPORT_FIELDS = {
     { key: 'xhttpPath', type: 'text', optional: true, default: '/', scope: 'shared', labelKey: 'xrayTfXhttpPath' },
     { key: 'xhttpExtra', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfXhttpExtra' },
     { key: 'xhttpHeaders', type: 'json', optional: true, scope: 'shared', labelKey: 'xrayTfXhttpHeaders' },
-    ...SOCKOPT_FIELDS.filter((f) => f.key !== 'acceptProxyProtocol'),
-    { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
+    ...SOCKOPT_FIELDS,
   ],
   hysteria: [
     { key: 'hysteriaVersion', type: 'select', optional: true, default: '2', scope: 'shared', labelKey: 'xrayTfHysteriaVersion', options: ['2'] },
@@ -96,6 +92,7 @@ const TRANSPORT_FIELDS = {
     { key: 'hysteriaMasqueradeType', type: 'select', optional: true, default: '', scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeType', options: ['', 'proxy', 'string', 'file'] },
     { key: 'hysteriaMasqueradeUrl', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeUrl', showIf: { hysteriaMasqueradeType: 'proxy' } },
     { key: 'hysteriaMasqueradeContent', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeContent', showIf: { hysteriaMasqueradeType: 'string' } },
+    { key: 'hysteriaMasqueradeDir', type: 'text', optional: true, default: '/var/www/html', scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeDir', showIf: { hysteriaMasqueradeType: 'file' } },
   ],
 };
 
@@ -323,7 +320,7 @@ window.XrayTransportUi = {
         const val = this.amneziaXrayTransportSettings[f.key];
         if (val === null || val === undefined || val === '') continue;
         if (f.type === 'bool') {
-          if (val === true) out[f.key] = true;
+          out[f.key] = val === true;
           continue;
         }
         out[f.key] = val;
