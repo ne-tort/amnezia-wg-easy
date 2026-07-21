@@ -139,6 +139,7 @@ new Vue({
     panelSettingsRestartHint: false,
     panelSettingsForm: {
       panelHttpsPort: 443,
+      mirrorHttpsPort: '',
       webuiPublicPrefix: '/panel',
       mirrorHost: '',
       sslCertId: '',
@@ -2506,6 +2507,9 @@ new Vue({
           this.api.getPanelSettings().then((st) => {
             this.panelSettingsForm = {
               panelHttpsPort: (st && st.panelHttpsPort) || 443,
+              mirrorHttpsPort: (st && st.mirrorHttpsPort != null && st.mirrorHttpsPort !== '')
+                ? st.mirrorHttpsPort
+                : '',
               webuiPublicPrefix: (st && st.webuiPublicPrefix) || '/panel',
               mirrorHost: (st && st.mirrorHost) || '',
               sslCertId: (st && st.sslCertId) || '',
@@ -2530,6 +2534,9 @@ new Vue({
       try {
         const body = {
           panelHttpsPort: Number(this.panelSettingsForm.panelHttpsPort),
+          mirrorHttpsPort: String(this.panelSettingsForm.mirrorHttpsPort == null
+            ? ''
+            : this.panelSettingsForm.mirrorHttpsPort).trim(),
           webuiPublicPrefix: String(this.panelSettingsForm.webuiPublicPrefix || '').trim(),
           mirrorHost: String(this.panelSettingsForm.mirrorHost || '').trim(),
           sslCertId: String(this.panelSettingsForm.sslCertId || '').trim(),
@@ -2538,6 +2545,9 @@ new Vue({
         if (res && res.settings) {
           this.panelSettingsForm = {
             panelHttpsPort: res.settings.panelHttpsPort || body.panelHttpsPort,
+            mirrorHttpsPort: res.settings.mirrorHttpsPort != null && res.settings.mirrorHttpsPort !== ''
+              ? res.settings.mirrorHttpsPort
+              : '',
             webuiPublicPrefix: res.settings.webuiPublicPrefix || body.webuiPublicPrefix,
             mirrorHost: res.settings.mirrorHost || '',
             sslCertId: res.settings.sslCertId || body.sslCertId,
@@ -2545,6 +2555,9 @@ new Vue({
         }
         if (res && res.restarted) {
           this.panelSettingsRestartHint = true;
+          if (res.panelReady === false) {
+            this.panelSettingsError = this.$t('panelSettingsPanelSlow');
+          }
         } else {
           this.closePanelSettings();
           if (this.refreshSslCerts) await this.refreshSslCerts();

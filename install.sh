@@ -52,6 +52,7 @@ WEBUI_PUBLIC_PREFIX_VAL="/panel"
 SUB_PUBLIC_PREFIX_VAL="/sub"
 NGINX_ROOT_BEHAVIOR_VAL="mirror"
 NGINX_MIRROR_HOST_VAL=""
+NGINX_MIRROR_HTTPS_PORT_VAL=""
 MIRROR_USE_SNI_VAL=0
 
 # Random free ports (user/dynamic range) for AWG UDP / Xray internal TCP.
@@ -1906,6 +1907,48 @@ prompt_webui_paths_and_mirror() {
   if [[ -z "$NGINX_MIRROR_HOST_VAL" ]]; then
     NGINX_MIRROR_HOST_VAL=$(pick_checked_bank_host mirror)
   fi
+
+  local cur_mirror_port ans_mirror_port=""
+  cur_mirror_port=$(panel_env_get NGINX_MIRROR_HTTPS_PORT)
+  echo ""
+  if [[ "$NONINTERACTIVE" == "1" ]]; then
+    if [[ -n "${AWG_NGINX_MIRROR_HTTPS_PORT:-}" ]]; then
+      NGINX_MIRROR_HTTPS_PORT_VAL="${AWG_NGINX_MIRROR_HTTPS_PORT}"
+    elif [[ -n "$cur_mirror_port" ]]; then
+      NGINX_MIRROR_HTTPS_PORT_VAL="$cur_mirror_port"
+    else
+      NGINX_MIRROR_HTTPS_PORT_VAL=""
+    fi
+  else
+    local mhint="пусто = тот же порт что панель"
+    if [[ -n "$cur_mirror_port" ]]; then
+      mhint="редеплой: ${cur_mirror_port} (пусто = порт панели)"
+    fi
+    read -rp "HTTPS порт заглушки [${mhint}]: " ans_mirror_port || true
+    ans_mirror_port="${ans_mirror_port// /}"
+    if [[ -z "$ans_mirror_port" ]]; then
+      if [[ -n "$cur_mirror_port" ]]; then
+        NGINX_MIRROR_HTTPS_PORT_VAL="$cur_mirror_port"
+      else
+        NGINX_MIRROR_HTTPS_PORT_VAL=""
+      fi
+    elif [[ "$ans_mirror_port" =~ ^[0-9]+$ ]] && [[ "$ans_mirror_port" -ge 1 && "$ans_mirror_port" -le 65535 ]]; then
+      if [[ "$ans_mirror_port" == "$PANEL_HTTPS_PORT_VAL" ]]; then
+        NGINX_MIRROR_HTTPS_PORT_VAL=""
+      else
+        NGINX_MIRROR_HTTPS_PORT_VAL="$ans_mirror_port"
+      fi
+    else
+      logw "Некорректный порт заглушки — использую порт панели"
+      NGINX_MIRROR_HTTPS_PORT_VAL=""
+    fi
+  fi
+  if [[ -n "$NGINX_MIRROR_HTTPS_PORT_VAL" ]]; then
+    logi "Заглушка HTTPS: ${NGINX_MIRROR_HTTPS_PORT_VAL}/tcp (панель: ${PANEL_HTTPS_PORT_VAL})"
+  else
+    logi "Заглушка HTTPS: тот же порт что панель (${PANEL_HTTPS_PORT_VAL})"
+  fi
+
   if [[ "${MIRROR_USE_SNI_VAL:-0}" -eq 1 ]]; then
     logi "UI=${WEBUI_PUBLIC_PREFIX_VAL}/ sub=${SUB_PUBLIC_PREFIX_VAL}/ mirror=${NGINX_MIRROR_HOST_VAL} (→ SNI Finder после enable)"
   else
@@ -1974,6 +2017,12 @@ write_env() {
   env_set "$envf" SUB_PUBLIC_PREFIX "${SUB_PUBLIC_PREFIX_VAL}"
   env_set "$envf" NGINX_ROOT_BEHAVIOR "${NGINX_ROOT_BEHAVIOR_VAL:-mirror}"
   env_set "$envf" NGINX_MIRROR_HOST "${NGINX_MIRROR_HOST_VAL}"
+  if [[ -n "$NGINX_MIRROR_HTTPS_PORT_VAL" ]]; then
+    env_set "$envf" NGINX_MIRROR_HTTPS_PORT "${NGINX_MIRROR_HTTPS_PORT_VAL}"
+  else
+    grep -q '^NGINX_MIRROR_HTTPS_PORT=' "$envf" 2>/dev/null \
+      && sed -i '/^NGINX_MIRROR_HTTPS_PORT=/d' "$envf" || true
+  fi
   if [[ -n "${XRAY_PORT_VAL}" ]]; then
     env_set "$envf" XRAY_PORT "${XRAY_PORT_VAL}"
   fi
@@ -2002,6 +2051,7 @@ XRAY_PUBLIC_PORT=${XRAY_PUBLIC_PORT_VAL}
 WEBUI_PUBLIC_PREFIX=${WEBUI_PUBLIC_PREFIX_VAL}
 SUB_PUBLIC_PREFIX=${SUB_PUBLIC_PREFIX_VAL}
 NGINX_MIRROR_HOST=${NGINX_MIRROR_HOST_VAL}
+NGINX_MIRROR_HTTPS_PORT=${NGINX_MIRROR_HTTPS_PORT_VAL}
 ENABLE_DNS=${ENABLE_DNS}
 ENABLE_XRAY=${ENABLE_XRAY}
 ENABLE_MIERU=${ENABLE_MIERU}

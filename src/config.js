@@ -29,6 +29,11 @@ module.exports.WEBUI_PUBLIC_PREFIX = (() => {
   if (!p.startsWith('/')) p = `/${p}`;
   return p.replace(/\/+$/, '') || '/panel';
 })();
+/** Published HTTPS port for root mirror stub (nginx → :8444). Empty or same as panel → mirror on panel port. */
+module.exports.NGINX_MIRROR_HTTPS_PORT = (() => {
+  const raw = String(process.env.NGINX_MIRROR_HTTPS_PORT || '').trim();
+  return /^\d+$/.test(raw) ? raw : '';
+})();
 /** Public subscription path prefix (nginx → app /sub/), default /sub. */
 module.exports.SUB_PUBLIC_PREFIX = (() => {
   let p = String(process.env.SUB_PUBLIC_PREFIX != null ? process.env.SUB_PUBLIC_PREFIX : '/sub').trim();

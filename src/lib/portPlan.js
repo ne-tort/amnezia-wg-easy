@@ -15,8 +15,24 @@ const execFileAsync = promisify(execFile);
 
 const NGINX_CONTAINER = 'nginx';
 const PANEL_TLS_INTERNAL = 8443;
+const MIRROR_TLS_INTERNAL = 8444;
 const STREAM_DIR_REL = path.join('nginx', 'stream');
 const COMPOSE_PORTS_NAME = 'docker-compose.ports.yml';
+
+const NGINX_ENV_KEYS = [
+  'PANEL_DOMAIN',
+  'PANEL_PORT',
+  'PORT',
+  'PANEL_HTTPS_PORT',
+  'NGINX_MIRROR_HTTPS_PORT',
+  'WEBUI_PUBLIC_PREFIX',
+  'SUB_PUBLIC_PREFIX',
+  'NGINX_ROOT_BEHAVIOR',
+  'NGINX_MIRROR_HOST',
+  'NGINX_LOCAL_URL',
+  'WG_HOST',
+  'NGINX_CONFIG_PROFILE',
+];
 
 function runCmd(bin, args, { timeout = 30_000 } = {}) {
   return execFileAsync(bin, args, { timeout, maxBuffer: 2 * 1024 * 1024 })
@@ -72,6 +88,70 @@ function composePortsPath() {
 
 function panelPublicPort() {
   return parsePort(config.PANEL_HTTPS_PORT, 10123);
+}
+
+/** Host port for dedicated mirror stub; null when mirror shares panel port. */
+function mirrorPublicPort() {
+  const raw = String(process.env.NGINX_MIRROR_HTTPS_PORT || config.NGINX_MIRROR_HTTPS_PORT || '').trim();
+  const m = parsePort(raw, 0);
+  if (!m) return null;
+  const panel = panelPublicPort();
+  if (m === panel) return null;
+  return m;
+}
+
+function mirrorExclusiveFromEnv() {
+  const host = mirrorPublicPort();
+  if (!host) return null;
+  return { hostPort: host, containerPort: MIRROR_TLS_INTERNAL };
+}
+
+function installEnvPath() {
+  return path.join(process.env.AWG_INSTALL_DIR || '/opt/amnezia-wg-easy', '.env');
+}
+
+function readInstallDotEnv() {
+  const out = {};
+  const envFile = installEnvPath();
+  if (!fs.existsSync(envFile)) return out;
+  try {
+    const text = fs.readFileSync(envFile, 'utf8');
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const idx = trimmed.indexOf('=');
+      if (idx <= 0) continue;
+      const key = trimmed.slice(0, idx).trim();
+      out[key] = trimmed.slice(idx + 1).trim();
+    }
+  } catch {
+    /* optional */
+  }
+  return out;
+}
+
+/** Refresh nginx container env from install .env (docker-run fallback after settings UI). */
+function patchNginxEnvFromDotEnv(envArr) {
+  const dot = readInstallDotEnv();
+  const map = new Map();
+  for (const entry of envArr || []) {
+    const idx = String(entry).indexOf('=');
+    if (idx <= 0) continue;
+    map.set(entry.slice(0, idx), entry.slice(idx + 1));
+  }
+  for (const key of NGINX_ENV_KEYS) {
+    if (key === 'PORT' && dot.PORT != null && dot.PORT !== '') {
+      map.set('PANEL_PORT', dot.PORT);
+      continue;
+    }
+    if (dot[key] != null && String(dot[key]).trim() !== '') {
+      map.set(key, String(dot[key]).trim());
+    }
+  }
+  if (!map.has('PANEL_PORT') && dot.PORT) {
+    map.set('PANEL_PORT', String(dot.PORT).trim());
+  }
+  return [...map.entries()].map(([k, v]) => `${k}=${v}`);
 }
 
 function panelSni() {
@@ -352,12 +432,14 @@ function computePlan(servicesInput) {
   }
 
   const udpDirect = collectUdpDirectServices();
+  const mirrorExclusive = mirrorExclusiveFromEnv();
 
   return {
     demuxPorts,
     direct,
     udpDirect,
     panelExclusive,
+    mirrorExclusive,
     modes,
     demuxPeers,
     conflicts,
@@ -448,6 +530,9 @@ function writeComposePortsFile(plan) {
   const ports = [];
   if (plan.panelExclusive) {
     ports.push(`      - "${plan.panelExclusive.hostPort}:${plan.panelExclusive.containerPort}"`);
+  }
+  if (plan.mirrorExclusive) {
+    ports.push(`      - "${plan.mirrorExclusive.hostPort}:${plan.mirrorExclusive.containerPort}"`);
   }
   for (const d of plan.demuxPorts) {
     ports.push(`      - "${d.port}:${d.port}"`);
@@ -588,6 +673,7 @@ async function nginxPublishedTcpPorts() {
 function desiredNginxHostPorts(plan) {
   const set = new Set([80]); // ACME always from base compose; may already exist
   if (plan.panelExclusive) set.add(plan.panelExclusive.hostPort);
+  if (plan.mirrorExclusive) set.add(plan.mirrorExclusive.hostPort);
   for (const d of plan.demuxPorts) set.add(d.port);
   return [...set].sort((a, b) => a - b);
 }
@@ -663,7 +749,7 @@ async function removeNginxContainer({ attempts = 5 } = {}) {
 
 function buildNginxRunArgs(plan, info) {
   const image = (info.Config && info.Config.Image) || 'amnezia-wg-easy-nginx:local';
-  const env = (info.Config && info.Config.Env) || [];
+  const env = patchNginxEnvFromDotEnv((info.Config && info.Config.Env) || []);
   const restart = (info.HostConfig && info.HostConfig.RestartPolicy && info.HostConfig.RestartPolicy.Name)
     || 'unless-stopped';
 
@@ -684,6 +770,9 @@ function buildNginxRunArgs(plan, info) {
   portArgs.push('-p', `${httpPort}:80`);
   if (plan.panelExclusive) {
     portArgs.push('-p', `${plan.panelExclusive.hostPort}:${plan.panelExclusive.containerPort}`);
+  }
+  if (plan.mirrorExclusive) {
+    portArgs.push('-p', `${plan.mirrorExclusive.hostPort}:${plan.mirrorExclusive.containerPort}`);
   }
   for (const d of plan.demuxPorts) {
     portArgs.push('-p', `${d.port}:${d.port}`);
@@ -1020,6 +1109,7 @@ function getStatusSummary() {
 module.exports = {
   NGINX_CONTAINER,
   PANEL_TLS_INTERNAL,
+  MIRROR_TLS_INTERNAL,
   COMPOSE_PORTS_NAME,
   computePlan,
   applyPlan,
@@ -1038,10 +1128,12 @@ module.exports = {
   writeComposePortsFile,
   composePortsPath,
   panelPublicPort,
+  mirrorPublicPort,
   panelSni,
   isIpLiteral,
   panelCanJoinDemuxBySni,
   parsePort,
   reloadNginx,
   recreateNginxForPlan,
+  patchNginxEnvFromDotEnv,
 };

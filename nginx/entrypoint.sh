@@ -21,8 +21,27 @@ export WEBUI_PUBLIC_PREFIX="${WEBUI_PUBLIC_PREFIX:-/panel}"
 export SUB_PUBLIC_PREFIX="${SUB_PUBLIC_PREFIX:-/sub}"
 export NGINX_ROOT_BEHAVIOR="${NGINX_ROOT_BEHAVIOR:-mirror}"
 export NGINX_MIRROR_HOST="${NGINX_MIRROR_HOST:-}"
+export NGINX_MIRROR_HTTPS_PORT="${NGINX_MIRROR_HTTPS_PORT:-}"
 export NGINX_LOCAL_URL="${NGINX_LOCAL_URL:-}"
 export NGINX_CONFIG_PROFILE="${NGINX_CONFIG_PROFILE:-entry}"
+MIRROR_TLS_LISTEN=8444
+export MIRROR_TLS_LISTEN
+
+mirror_ports_split() {
+  [ -n "$NGINX_MIRROR_HTTPS_PORT" ] \
+    && [ "$NGINX_MIRROR_HTTPS_PORT" != "$PANEL_HTTPS_PORT" ]
+}
+
+# Host-facing mirror port in redirects when mirror is on a dedicated publish port.
+if mirror_ports_split; then
+  if [ "$NGINX_MIRROR_HTTPS_PORT" = "443" ]; then
+    export MIRROR_HTTPS_REDIRECT_HOST='$host'
+  else
+    export MIRROR_HTTPS_REDIRECT_HOST="\$host:${NGINX_MIRROR_HTTPS_PORT}"
+  fi
+else
+  export MIRROR_HTTPS_REDIRECT_HOST="$PANEL_HTTPS_REDIRECT_HOST"
+fi
 
 # Normalize prefixes to start with /
 case "$WEBUI_PUBLIC_PREFIX" in
@@ -164,6 +183,45 @@ root_block_entry_local() {
 EOF
 }
 
+# Dedicated mirror listener (host NGINX_MIRROR_HTTPS_PORT → container :8444).
+append_mirror_server_block() {
+  [ -n "$NGINX_MIRROR_HOST" ] || return 0
+  mirror_ports_split || return 0
+  cat >>"$OUTPUT" <<EOF
+server {
+    listen ${MIRROR_TLS_LISTEN} ssl;
+    server_name ${PANEL_DOMAIN};
+    ssl_certificate /etc/letsencrypt/live/${PANEL_DOMAIN}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/${PANEL_DOMAIN}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    port_in_redirect off;
+    absolute_redirect off;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+$(mirror_proxy_directives "$NGINX_MIRROR_HOST")
+    }
+}
+EOF
+}
+
+pick_entry_root_block() {
+  if mirror_ports_split; then
+    root_block_entry_redirect
+    return
+  fi
+  case "$NGINX_ROOT_BEHAVIOR" in
+    mirror) root_block_entry_mirror ;;
+    local) root_block_entry_local ;;
+    redirect) root_block_entry_redirect ;;
+    *) root_block_entry_mirror ;;
+  esac
+}
+
 LE_LIVE="/etc/letsencrypt/live/${PANEL_DOMAIN}"
 rm -f "${CONF_DIR}/default.conf"
 mkdir -p "${STREAM_DIR}" "${AWG_NGINX}"
@@ -220,22 +278,20 @@ server {
 EOF
   printf '%s\n' "$ROOT_BLOCK" >>"$OUTPUT"
   printf '%s\n' "}" >>"$OUTPUT"
+  append_mirror_server_block
 elif [ "$WEBUI_PUBLIC_PREFIX" = "/" ] || [ -z "$WEBUI_PUBLIC_PREFIX" ]; then
   # Explicit legacy: panel on entire site root
   TEMPLATE="/etc/nginx/conf.d/panel-legacy.conf.template"
   envsubst '${PANEL_DOMAIN} ${PANEL_PORT} ${PANEL_HTTPS_PORT} ${PANEL_HTTPS_REDIRECT_HOST}' < "$TEMPLATE" >"$OUTPUT"
+  append_mirror_server_block
 else
   TEMPLATE="/etc/nginx/conf.d/panel-subpath.conf.template"
-  case "$NGINX_ROOT_BEHAVIOR" in
-    mirror) ROOT_BLOCK=$(root_block_entry_mirror) ;;
-    local) ROOT_BLOCK=$(root_block_entry_local) ;;
-    redirect) ROOT_BLOCK=$(root_block_entry_redirect) ;;
-    *) ROOT_BLOCK=$(root_block_entry_mirror) ;;
-  esac
+  ROOT_BLOCK=$(pick_entry_root_block)
   RF=$(mktemp)
   printf '%s\n' "$ROOT_BLOCK" >"$RF"
   inject_root "$TEMPLATE" "$RF" >"$OUTPUT"
   rm -f "$RF"
+  append_mirror_server_block
 fi
 
 if [ ! -f "${LE_LIVE}/fullchain.pem" ]; then

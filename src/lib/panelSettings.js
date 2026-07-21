@@ -11,6 +11,7 @@ const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
+const PANEL_CONTAINER = 'amnezia-awg';
 
 function httpError(status, message, code) {
   const err = new Error(message);
@@ -107,6 +108,7 @@ function persistEnvKeys(pairs) {
 function normalizePathPrefix(raw, fallback = '/panel') {
   let p = String(raw == null ? '' : raw).trim();
   if (!p || p === '/') p = fallback;
+  p = p.replace(/\\/g, '/');
   if (!p.startsWith('/')) p = `/${p}`;
   p = p.replace(/\/+$/, '');
   return p || fallback;
@@ -130,13 +132,24 @@ function parsePort(raw) {
   return n;
 }
 
-function mutateRuntimeConfig({ panelHttpsPort, webuiPublicPrefix } = {}) {
+function normalizeMirrorPort(raw, panelPort) {
+  if (raw == null || String(raw).trim() === '') return null;
+  const n = parsePort(raw);
+  if (n == null) return null;
+  if (Number(panelPort) === n) return null;
+  return n;
+}
+
+function mutateRuntimeConfig({ panelHttpsPort, webuiPublicPrefix, mirrorHttpsPort } = {}) {
   const config = require('../config');
   if (panelHttpsPort != null) {
     config.PANEL_HTTPS_PORT = String(panelHttpsPort);
   }
   if (webuiPublicPrefix != null) {
     config.WEBUI_PUBLIC_PREFIX = String(webuiPublicPrefix);
+  }
+  if (mirrorHttpsPort !== undefined) {
+    config.NGINX_MIRROR_HTTPS_PORT = mirrorHttpsPort == null ? '' : String(mirrorHttpsPort);
   }
 }
 
@@ -149,30 +162,40 @@ async function openHostPorts() {
   return { ok: r.ok, stdout: r.stdout, stderr: r.stderr };
 }
 
-/**
- * Recreate panel container so env (port/prefix) is picked up by config.js.
- * Scheduled after the HTTP response — this process will die.
- */
-function schedulePanelRecreate() {
+async function recreatePanelContainer() {
   const install = installDir();
   const composeYml = path.join(install, 'docker-compose.yml');
   const portsYml = path.join(install, 'docker-compose.ports.yml');
   const envFile = path.join(install, '.env');
-  setTimeout(() => {
-    (async () => {
-      const args = ['compose'];
-      if (fs.existsSync(envFile)) args.push('--env-file', envFile);
-      args.push('-f', composeYml);
-      if (fs.existsSync(portsYml)) args.push('-f', portsYml);
-      args.push('up', '-d', '--no-deps', '--force-recreate', 'amnezia-wg-easy');
-      const r = await runCmd('docker', args, { timeout: 180_000 });
-      if (!r.ok) {
-        console.error('panelSettings: panel recreate failed:', (r.stderr || r.stdout || '').slice(0, 400));
+  const args = ['compose'];
+  if (fs.existsSync(envFile)) args.push('--env-file', envFile);
+  args.push('-f', composeYml);
+  if (fs.existsSync(portsYml)) args.push('-f', portsYml);
+  args.push('up', '-d', '--no-deps', '--force-recreate', 'amnezia-wg-easy');
+  return runCmd('docker', args, { timeout: 180_000 });
+}
+
+async function waitForPanelReady({ timeoutMs = 90_000 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  const panelPort = parsePort(readEnvKey('PORT', '51821'), 51821) || 51821;
+  while (Date.now() < deadline) {
+    const st = await runCmd('docker', [
+      'inspect', '-f', '{{.State.Running}}', PANEL_CONTAINER,
+    ], { timeout: 10_000 });
+    if (st.ok && st.stdout.trim() === 'true') {
+      const probe = await runCmd('docker', [
+        'exec', PANEL_CONTAINER,
+        'wget', '-q', '-S', '-O', '/dev/null',
+        `http://127.0.0.1:${panelPort}/api/session`,
+      ], { timeout: 15_000 });
+      const blob = `${probe.stdout || ''}\n${probe.stderr || ''}`;
+      if (probe.ok || /HTTP\/1\.[01]\s+(200|401|403|302)/.test(blob)) {
+        return true;
       }
-    })().catch((err) => {
-      console.error('panelSettings: panel recreate error:', err && err.message);
-    });
-  }, 800);
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
 }
 
 async function getSettings() {
@@ -191,6 +214,8 @@ async function getSettings() {
   const panelHttpsPort = parsePort(readEnvKey('PANEL_HTTPS_PORT', config.PANEL_HTTPS_PORT))
     || parsePort(config.PANEL_HTTPS_PORT)
     || 443;
+  const mirrorPortRaw = readEnvKey('NGINX_MIRROR_HTTPS_PORT', config.NGINX_MIRROR_HTTPS_PORT || '');
+  const mirrorHttpsPort = normalizeMirrorPort(mirrorPortRaw, panelHttpsPort);
   const webuiPublicPrefix = normalizePathPrefix(
     readEnvKey('WEBUI_PUBLIC_PREFIX', config.WEBUI_PUBLIC_PREFIX || '/panel'),
     '/panel',
@@ -202,6 +227,7 @@ async function getSettings() {
 
   return {
     panelHttpsPort,
+    mirrorHttpsPort: mirrorHttpsPort == null ? '' : mirrorHttpsPort,
     webuiPublicPrefix,
     mirrorHost,
     nginxRootBehavior: rootBehavior,
@@ -212,7 +238,7 @@ async function getSettings() {
 
 /**
  * Apply panel settings from UI body.
- * @param {{ panelHttpsPort?: number|string, webuiPublicPrefix?: string, mirrorHost?: string, sslCertId?: string }} body
+ * @param {{ panelHttpsPort?: number|string, mirrorHttpsPort?: number|string, webuiPublicPrefix?: string, mirrorHost?: string, sslCertId?: string }} body
  */
 async function applySettings(body = {}) {
   const current = await getSettings();
@@ -231,6 +257,15 @@ async function applySettings(body = {}) {
     ? normalizeMirrorHost(body.mirrorHost)
     : current.mirrorHost;
 
+  let nextMirrorPort = current.mirrorHttpsPort === '' ? null : current.mirrorHttpsPort;
+  if (body.mirrorHttpsPort !== undefined) {
+    const raw = String(body.mirrorHttpsPort == null ? '' : body.mirrorHttpsPort).trim();
+    nextMirrorPort = raw === '' ? null : normalizeMirrorPort(raw, nextPort);
+    if (raw !== '' && nextMirrorPort == null && parsePort(raw) == null) {
+      throw httpError(400, 'Invalid mirror HTTPS port', 'MIRROR_BAD_PORT');
+    }
+  }
+
   const sslCertId = body.sslCertId != null
     ? String(body.sslCertId || '').trim()
     : current.sslCertId;
@@ -238,12 +273,14 @@ async function applySettings(body = {}) {
   const portChanged = Number(nextPort) !== Number(current.panelHttpsPort);
   const prefixChanged = nextPrefix !== current.webuiPublicPrefix;
   const mirrorChanged = nextMirror !== current.mirrorHost;
+  const mirrorPortChanged = Number(nextMirrorPort || 0) !== Number(current.mirrorHttpsPort || 0);
   const certChanged = sslCertId && sslCertId !== current.sslCertId;
 
   const envPairs = {
     PANEL_HTTPS_PORT: String(nextPort),
     WEBUI_PUBLIC_PREFIX: nextPrefix,
     NGINX_MIRROR_HOST: nextMirror,
+    NGINX_MIRROR_HTTPS_PORT: nextMirrorPort == null ? '' : String(nextMirrorPort),
   };
   if (nextMirror) {
     envPairs.NGINX_ROOT_BEHAVIOR = 'mirror';
@@ -252,6 +289,7 @@ async function applySettings(body = {}) {
   mutateRuntimeConfig({
     panelHttpsPort: nextPort,
     webuiPublicPrefix: nextPrefix,
+    mirrorHttpsPort: nextMirrorPort,
   });
 
   const sslManager = require('./sslManager');
@@ -260,9 +298,18 @@ async function applySettings(body = {}) {
     assignedCert = await sslManager.assignPanel(sslCertId);
   }
 
+  let panelReady = true;
+  if (portChanged) {
+    const panelRecreate = await recreatePanelContainer();
+    if (!panelRecreate.ok) {
+      throw httpError(500, (panelRecreate.stderr || panelRecreate.stdout || 'Panel recreate failed').slice(0, 300));
+    }
+    panelReady = await waitForPanelReady();
+  }
+
   const portPlan = require('./portPlan');
   let planResult = null;
-  if (portChanged || prefixChanged || mirrorChanged) {
+  if (portChanged || prefixChanged || mirrorChanged || mirrorPortChanged) {
     const plan = portPlan.computePlan();
     portPlan.writeStreamConfigs(plan);
     portPlan.writeComposePortsFile(plan);
@@ -272,13 +319,8 @@ async function applySettings(body = {}) {
   }
 
   let openPorts = null;
-  if (portChanged) {
+  if (portChanged || mirrorPortChanged) {
     openPorts = await openHostPorts();
-  }
-
-  const needsPanelRestart = portChanged || prefixChanged;
-  if (needsPanelRestart) {
-    schedulePanelRecreate();
   }
 
   const settings = await getSettings();
@@ -288,11 +330,13 @@ async function applySettings(body = {}) {
     assignedCert,
     planResult,
     openPorts,
-    restarted: needsPanelRestart,
+    panelReady,
+    restarted: portChanged,
     changes: {
       port: portChanged,
       prefix: prefixChanged,
       mirror: mirrorChanged,
+      mirrorPort: mirrorPortChanged,
       cert: !!certChanged,
     },
   };
@@ -303,6 +347,8 @@ module.exports = {
   applySettings,
   normalizePathPrefix,
   normalizeMirrorHost,
+  normalizeMirrorPort,
   persistEnvKeys,
   readEnvKey,
+  waitForPanelReady,
 };

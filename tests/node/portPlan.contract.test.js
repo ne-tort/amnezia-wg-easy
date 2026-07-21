@@ -283,3 +283,22 @@ test('computePlan: hysteria → udpDirect', () => {
   assert.ok(Array.isArray(plan.udpDirect));
   assert.ok(plan.udpDirect.some((u) => u.id === 'hysteria' && u.publicPort === 443 && u.protocol === 'udp'));
 });
+
+test('mirrorPublicPort: separate stub port when NGINX_MIRROR_HTTPS_PORT differs from panel', () => {
+  const { portPlan } = loadPortPlan({
+    PANEL_HTTPS_PORT: '4433',
+    NGINX_MIRROR_HTTPS_PORT: '443',
+  });
+  assert.equal(portPlan.mirrorPublicPort(), 443);
+  const plan = portPlan.computePlan([{
+    id: 'panel',
+    publicPort: 4433,
+    listenPort: 8443,
+    sni: 'panel.example.com',
+    upstream: '127.0.0.1:8443',
+    alwaysOn: true,
+    canJoinDemux: true,
+  }]);
+  assert.deepEqual(plan.mirrorExclusive, { hostPort: 443, containerPort: 8444 });
+  assert.deepEqual(plan.panelExclusive, { hostPort: 4433, containerPort: 8443 });
+});
