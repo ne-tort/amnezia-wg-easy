@@ -102,12 +102,36 @@
     {
       "id": "hy-balanced",
       "name": "Balanced bandwidth",
-      "settings": { "hysteriaUpMbps": 50, "hysteriaDownMbps": 100 }
+      "settings": {
+        "hysteriaVersion": "2",
+        "hysteriaUdpIdleTimeout": 60,
+        "hysteriaUpMbps": 50,
+        "hysteriaDownMbps": 100,
+        "hysteriaMasqueradeType": "string",
+        "hysteriaMasqueradeContent": "ok"
+      }
     },
     {
       "id": "hy-mobile",
       "name": "Mobile-friendly limits",
-      "settings": { "hysteriaUpMbps": 20, "hysteriaDownMbps": 50 }
+      "settings": {
+        "hysteriaVersion": "2",
+        "hysteriaUdpIdleTimeout": 60,
+        "hysteriaUpMbps": 20,
+        "hysteriaDownMbps": 50
+      }
+    },
+    {
+      "id": "hy-cdn-masq",
+      "name": "Proxy masquerade",
+      "settings": {
+        "hysteriaVersion": "2",
+        "hysteriaUdpIdleTimeout": 60,
+        "hysteriaUpMbps": 100,
+        "hysteriaDownMbps": 200,
+        "hysteriaMasqueradeType": "proxy",
+        "hysteriaMasqueradeUrl": "https://www.cloudflare.com/"
+      }
     }
   ]
 }

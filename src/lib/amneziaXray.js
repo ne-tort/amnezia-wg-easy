@@ -400,7 +400,19 @@ async function resolveAwgVolumeName() {
 
 async function ensureXrayImage() {
   const inspect = await runCmd('docker', ['image', 'inspect', IMAGE_NAME]);
-  if (inspect.ok) return;
+  let needBuild = !inspect.ok;
+  if (!needBuild) {
+    const ver = await runCmd('docker', [
+      'run', '--rm', '--entrypoint', 'xray', IMAGE_NAME, 'version',
+    ], { timeout: 30_000 });
+    const text = `${ver.stdout || ''} ${ver.stderr || ''}`;
+    // Hy2 inbound requires Xray >= 26.3.27
+    if (!/Xray\s+26\./i.test(text) && !/26\.\d+\.\d+/.test(text)) {
+      needBuild = true;
+      await runCmd('docker', ['rmi', '-f', IMAGE_NAME], { timeout: 60_000 });
+    }
+  }
+  if (!needBuild) return;
 
   const dockerfilePath = path.join(DOCKERFILE_FOLDER, 'Dockerfile');
   if (!fs.existsSync(dockerfilePath)) {
@@ -431,11 +443,6 @@ async function ensureXrayImage() {
   });
 }
 
-/**
- * Parse `xray x25519` output into private/public keys.
- * @param {string} text
- * @returns {{ privateKey: string, publicKey: string }}
- */
 function parseX25519Output(text) {
   const lines = String(text || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   let privateKey = '';
@@ -539,29 +546,59 @@ function buildServerConfigObject(opts = {}) {
   const sni = merged.sni || getSni();
   const flow = merged.flow;
   const clients = ensureClientUuids();
+  const includeVless = opts.includeVless !== false && getDesired() === true;
 
-  /** @type {Record<string, unknown>} */
-  const inboundOpts = {
-    ...merged,
-    port,
-    sni,
-    security,
-    network,
-    flow,
-    clients,
-  };
+  /** @type {Array<Record<string, unknown>>} */
+  const inbounds = [];
 
-  if (security === 'reality') {
-    inboundOpts.privateKey = opts.privateKey;
-    inboundOpts.shortId = opts.shortId;
-  } else if (security === 'tls') {
-    const certDomain = opts.certDomain || resolveCertDomain();
-    const paths = require('./tlsMaterial').certPathsForDomain(certDomain);
-    inboundOpts.tlsCert = paths.cert;
-    inboundOpts.tlsKey = paths.key;
+  if (includeVless) {
+    /** @type {Record<string, unknown>} */
+    const inboundOpts = {
+      ...merged,
+      port,
+      sni,
+      security,
+      network,
+      flow,
+      clients,
+    };
+
+    if (security === 'reality') {
+      inboundOpts.privateKey = opts.privateKey;
+      inboundOpts.shortId = opts.shortId;
+    } else if (security === 'tls') {
+      const certDomain = opts.certDomain || resolveCertDomain();
+      const paths = require('./tlsMaterial').certPathsForDomain(certDomain);
+      inboundOpts.tlsCert = paths.cert;
+      inboundOpts.tlsKey = paths.key;
+    }
+
+    inbounds.push(xrayVlessConfig.buildServerInbound(inboundOpts));
   }
 
-  const vlessInbound = xrayVlessConfig.buildServerInbound(inboundOpts);
+  if (opts.hysteriaInbound) {
+    inbounds.push(opts.hysteriaInbound);
+  } else {
+    try {
+      const hyInbound = buildSharedHysteriaInboundIfNeeded();
+      if (hyInbound) inbounds.push(hyInbound);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn('Xray hy inbound skip:', err && err.message ? err.message : err);
+    }
+  }
+
+  inbounds.push({
+    tag: 'api',
+    listen: '127.0.0.1',
+    port: XRAY_API_PORT,
+    protocol: 'dokodemo-door',
+    settings: { address: '127.0.0.1' },
+  });
+
+  if (!inbounds.some((i) => i.tag !== 'api')) {
+    throw new Error('Xray config has no proxy inbounds');
+  }
 
   return {
     log: { loglevel: 'error' },
@@ -583,16 +620,7 @@ function buildServerConfigObject(opts = {}) {
         statsInboundDownlink: true,
       },
     },
-    inbounds: [
-      vlessInbound,
-      {
-        tag: 'api',
-        listen: '127.0.0.1',
-        port: XRAY_API_PORT,
-        protocol: 'dokodemo-door',
-        settings: { address: '127.0.0.1' },
-      },
-    ],
+    inbounds,
     outbounds: [{ protocol: 'freedom', tag: 'direct' }],
     routing: {
       rules: [
@@ -604,6 +632,24 @@ function buildServerConfigObject(opts = {}) {
       ],
     },
   };
+}
+
+/** Internal UDP listen for Hy2 inbound inside amnezia-xray. */
+const HYSTERIA_XRAY_LISTEN_PORT = 34443;
+
+function isHysteriaXrayCoreDesired() {
+  try {
+    const hy = require('./amneziaHysteria');
+    return typeof hy.isXrayCoreDesired === 'function' && hy.isXrayCoreDesired();
+  } catch {
+    return false;
+  }
+}
+
+function buildSharedHysteriaInboundIfNeeded() {
+  if (!isHysteriaXrayCoreDesired()) return null;
+  const hy = require('./amneziaHysteria');
+  return hy.buildXrayInboundConfig({ listenPort: HYSTERIA_XRAY_LISTEN_PORT });
 }
 
 function writeServerJson(obj) {
@@ -727,12 +773,32 @@ function buildAmneziaXrayContainer(client) {
 }
 
 /**
- * Probe that Xray accepts TCP inside its container namespace.
+ * Probe that Xray accepts connections inside its container namespace.
  * Do NOT dial 127.0.0.1 from the panel — published -p ports bind on the Docker
  * host, not in amnezia-awg, so ECONNREFUSED there is expected.
  */
 async function probeListenInsideContainer(port) {
   const p = String(port);
+  const needsUdp = xrayTransportSchema.isUdpTransport(getNetwork());
+  if (needsUdp) {
+    // UDP: confirm the process is listening (ss/netstat); nc -u is unreliable for bind-only.
+    const ss = await runCmd('docker', [
+      'exec', CONTAINER_NAME, 'sh', '-c',
+      `ss -uln 2>/dev/null | grep -E '[:.]${p}\\s' || netstat -uln 2>/dev/null | grep -E '[:.]${p}\\s'`,
+    ], { timeout: 8_000 });
+    if (ss.ok && String(ss.stdout || '').trim()) {
+      return { ok: true, via: 'ss-udp', out: 'listening' };
+    }
+    // Fallback: xray process up + config test already passed at start
+    const ps = await runCmd('docker', [
+      'exec', CONTAINER_NAME, 'sh', '-c', 'pgrep -x xray >/dev/null && echo up',
+    ], { timeout: 8_000 });
+    if (ps.ok && String(ps.stdout || '').includes('up')) {
+      return { ok: true, via: 'pgrep', out: 'xray running (udp)' };
+    }
+    return { ok: false, via: 'ss-udp', out: (ss.stderr || ss.stdout || 'udp not listening').trim().slice(0, 160) };
+  }
+
   // netcat-openbsd is in the amnezia-xray image
   const nc = await runCmd('docker', [
     'exec', CONTAINER_NAME, 'nc', '-z', '-w', '2', '127.0.0.1', p,
@@ -957,26 +1023,49 @@ async function ensureXrayContainer() {
   await ensureXrayImage();
   const volume = await resolveAwgVolumeName();
   const portPlan = require('./portPlan');
-  const mode = portPlan.modeForService('xray') || 'direct';
+  const networkName = getNetwork();
+  const vlessDesired = getDesired() === true;
+  const needsUdpTransport = vlessDesired && xrayTransportSchema.isUdpTransport(networkName);
+  const hyXray = isHysteriaXrayCoreDesired();
+  let mode = portPlan.modeForService('xray') || 'direct';
+  // UDP transports (mKCP / hysteria) cannot share TCP SNI demux — force direct publish.
+  if (needsUdpTransport && mode === 'demux') {
+    mode = 'direct';
+  }
   const publicPort = getPublicPort();
   const port = resolveListenPort(getPort(), { mode });
-  if (String(port) !== String(getPort())) {
+  if (vlessDesired && String(port) !== String(getPort())) {
     setSetting(PORT_KEY, String(port));
   }
 
-  const network = await portPlan.resolveNginxNetwork();
-  if (mode === 'demux' && !network) {
+  let hyPublicPort = 0;
+  if (hyXray) {
+    try {
+      hyPublicPort = require('./amneziaHysteria').getPublicPort();
+    } catch {
+      hyPublicPort = 443;
+    }
+  }
+
+  const dockerNet = await portPlan.resolveNginxNetwork();
+  if (mode === 'demux' && vlessDesired && !dockerNet) {
     throw new Error('nginx compose network not found; is nginx running?');
   }
 
+  const wantHyUdp = hyXray ? `hyudp=${hyPublicPort}:${HYSTERIA_XRAY_LISTEN_PORT}` : '';
+  const wantVlessProto = needsUdpTransport ? 'udp' : 'tcp';
+  const wantVlessPub = (vlessDesired && mode !== 'demux')
+    ? `${publicPort}:${port}/${wantVlessProto}`
+    : (vlessDesired ? 'demux' : 'none');
+  const wantFingerprint = `${wantVlessPub}|${wantHyUdp}|mode=${mode}`;
+
   const running = await dockerContainerRunning();
   if (running && await containerManagedByUs()) {
-    const envPort = await inspectContainerPortEnv();
-    const labelMode = await runCmd('docker', [
-      'inspect', '-f', '{{index .Config.Labels "amnezia.port_mode"}}', CONTAINER_NAME,
+    const labelFp = await runCmd('docker', [
+      'inspect', '-f', '{{index .Config.Labels "amnezia.publish_fp"}}', CONTAINER_NAME,
     ]);
-    const curMode = (labelMode.ok ? labelMode.stdout : '').trim();
-    if (envPort === port && curMode === mode) {
+    const curFp = (labelFp.ok ? labelFp.stdout : '').trim();
+    if (curFp === wantFingerprint) {
       return { reused: true };
     }
   }
@@ -985,6 +1074,7 @@ async function ensureXrayContainer() {
     await removeXrayContainer();
   }
 
+  const needCertMount = getSecurity() === 'tls' || hyXray;
   const runArgs = [
     'run', '-d',
     '--log-driver', 'none',
@@ -996,18 +1086,23 @@ async function ensureXrayContainer() {
     '--label', `amnezia.port_mode=${mode}`,
     '--label', `amnezia.listen_port=${port}`,
     '--label', `amnezia.public_port=${publicPort}`,
+    '--label', `amnezia.transport_proto=${wantVlessProto}`,
+    '--label', `amnezia.publish_fp=${wantFingerprint}`,
     '-e', `XRAY_SERVER_PORT=${port}`,
+    '-e', `XRAY_TRANSPORT_PROTO=${wantVlessProto}`,
     '-v', `${volume}:/opt/amnezia/awg:rw`,
   ];
-  if (getSecurity() === 'tls') {
+  if (needCertMount) {
     const certVolume = await resolveCertbotVolumeName();
     runArgs.push('-v', `${certVolume}:/etc/letsencrypt:ro`);
   }
-  if (mode === 'demux') {
-    runArgs.push('--network', network);
-  } else {
-    if (network) runArgs.push('--network', network);
-    runArgs.push('-p', `${publicPort}:${port}/tcp`);
+  if (dockerNet) runArgs.push('--network', dockerNet);
+  if (vlessDesired && mode !== 'demux') {
+    runArgs.push('-p', `${publicPort}:${port}/${wantVlessProto}`);
+  }
+  if (hyXray && hyPublicPort) {
+    runArgs.push('-p', `${hyPublicPort}:${HYSTERIA_XRAY_LISTEN_PORT}/udp`);
+    runArgs.push('-e', `XRAY_HYSTERIA_PORT=${HYSTERIA_XRAY_LISTEN_PORT}`);
   }
   runArgs.push(IMAGE_NAME);
 
@@ -1029,10 +1124,13 @@ async function reloadXrayConfig() {
  * Rewrite server.json from DB and reload container when Xray is desired/running.
  */
 async function syncClientsFromDb() {
-  if (getDesired() !== true && phase !== 'running' && phase !== 'degraded') {
+  const hyNeedsXray = isHysteriaXrayCoreDesired();
+  if (getDesired() !== true && !hyNeedsXray && phase !== 'running' && phase !== 'degraded') {
     return { skipped: true };
   }
-  const keys = getSecurity() === 'reality' ? await generateRealityKeysIfMissing() : null;
+  const keys = (getDesired() === true && getSecurity() === 'reality')
+    ? await generateRealityKeysIfMissing()
+    : null;
   const port = getPort();
   const sni = getSni();
   const flow = getFlow();
@@ -1695,4 +1793,5 @@ module.exports = {
   stopAmneziaXray,
   regenerateClientConfigs,
   ensureXrayContainer,
+  reloadXrayConfig,
 };

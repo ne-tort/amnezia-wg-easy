@@ -11,7 +11,7 @@ const tlsMaterial = require('./tlsMaterial');
 const xrayTransportSchema = require('./xrayTransportSchema');
 const { SSL_CERT_AUTO } = require('./sidecarAutoCert');
 
-const PANEL_CERT_CONFLICT_MSG = 'Cannot reuse panel certificate on the same public port as panel HTTPS';
+const PANEL_CERT_CONFLICT_MSG = 'Cannot reuse panel certificate on the same public port as panel HTTPS or mirror stub';
 
 function errField(field, message, code) {
   return { ok: false, fieldErrors: { [field]: message }, code };
@@ -34,14 +34,62 @@ function panelHttpsPort() {
   return parseInt(String(config.PANEL_HTTPS_PORT || '443'), 10);
 }
 
+function mirrorHttpsPort() {
+  try {
+    const m = portPlan.mirrorPublicPort();
+    return m != null ? m : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Ports where panel/mirror TLS terminate on nginx — panel cert reuse is forbidden. */
+function nginxTlsExclusivePorts() {
+  const ports = new Set();
+  const panel = panelHttpsPort();
+  if (Number.isFinite(panel)) ports.add(panel);
+  const mirror = mirrorHttpsPort();
+  if (mirror != null && Number.isFinite(mirror)) ports.add(mirror);
+  return [...ports];
+}
+
 function validatePanelCertConflict(certSource, publicPort) {
   if (certSource !== 'panel') return { ok: true };
-  const panelPort = panelHttpsPort();
   const pub = parseInt(String(publicPort), 10);
-  if (Number.isFinite(panelPort) && pub === panelPort) {
-    return errField('certSource', PANEL_CERT_CONFLICT_MSG, 'CERT_PORT_CONFLICT');
+  if (!Number.isFinite(pub)) return { ok: true };
+  for (const p of nginxTlsExclusivePorts()) {
+    if (pub === p) {
+      return errField('certSource', PANEL_CERT_CONFLICT_MSG, 'CERT_PORT_CONFLICT');
+    }
   }
   return { ok: true };
+}
+
+/**
+ * TCP public ports that must not collide with exclusive nginx TLS publishes
+ * (panel HTTPS and/or dedicated mirror stub). Demux-capable services may share
+ * panel port when SNI is set — pass { allowPanelDemux: true }.
+ */
+function validateTcpHostPortConflict(ports, { allowPanelDemux = false } = {}) {
+  const unique = [...new Set(ports.filter((p) => Number.isFinite(p)))];
+  if (unique.length !== ports.filter((p) => Number.isFinite(p)).length) {
+    return errField('publicPort', 'Public ports must differ between services', 'PORT_CONFLICT');
+  }
+  const panelPort = panelHttpsPort();
+  const mirrorPort = mirrorHttpsPort();
+  for (const p of unique) {
+    if (!allowPanelDemux && p === panelPort) {
+      return errField('publicPort', `Port ${p} is used by panel HTTPS`, 'PORT_PANEL_CONFLICT');
+    }
+    if (mirrorPort != null && p === mirrorPort) {
+      return errField('publicPort', `Port ${p} is used by the mirror stub`, 'PORT_MIRROR_CONFLICT');
+    }
+  }
+  return { ok: true, ports: unique };
+}
+
+function validatePublicPortConflict(ports, { allowNginx = true } = {}) {
+  return validateTcpHostPortConflict(ports, { allowPanelDemux: false });
 }
 
 function validateManualCertFields(certSource, body = {}) {
@@ -97,6 +145,14 @@ function validateMieru(body = {}) {
   if (udpOn && (!Number.isFinite(udpPort) || udpPort < 1 || udpPort > 65535)) {
     fieldErrors.udpPublicPort = 'Invalid UDP port (1–65535)';
   }
+  if (tcpOn && Number.isFinite(tcpPort)) {
+    const portCheck = validateTcpHostPortConflict([tcpPort], { allowPanelDemux: false });
+    if (!portCheck.ok) {
+      const msg = (portCheck.fieldErrors && (portCheck.fieldErrors.publicPort || portCheck.fieldErrors.tcpPublicPort))
+        || 'TCP port conflicts with panel/mirror';
+      fieldErrors.tcpPublicPort = msg;
+    }
+  }
   if (Object.keys(fieldErrors).length) return { ok: false, fieldErrors };
   return { ok: true, tcpOn, udpOn, tcpPort, udpPort };
 }
@@ -151,19 +207,26 @@ function validateNaive(body = {}) {
   }
   const certCheck = validateSslCertId(body, 'naive');
   if (!certCheck.ok) return certCheck;
+  if (certCheck.auto) {
+    return errField('sslCertId', 'Select a Let\'s Encrypt FQDN certificate', 'SSL_CERT_REQUIRED');
+  }
   const sni = tlsMaterial.normalizeHostname(certCheck.cert.sni || certCheck.cert.domain || body.sni || '');
   if (!sni || !tlsMaterial.isFqdn(sni)) {
-    return errField('sslCertId', 'Naive requires a Let\'s Encrypt FQDN certificate', 'NAIVE_BAD_SNI');
+    return errField('sni', 'Naive requires a Let\'s Encrypt FQDN certificate', 'NAIVE_BAD_SNI');
   }
   const probe = String(body.probeResistanceDomain || body.probe_resistance_domain || '').trim();
   if (probe && probe.toLowerCase() === sni) {
     return errField('probeResistanceDomain', 'Probe resistance domain should differ from Naive SNI', 'NAIVE_PROBE_SNI');
   }
-  return mergeErrors(
+  const parts = [
     { ok: true, sni, sslCertId: certCheck.cert.id },
     validateSniDemux('naive', sni, publicPort),
-    validatePublicPortConflict([publicPort]),
-  );
+  ];
+  if (certCheck.cert.is_panel) {
+    parts.push(validatePanelCertConflict('panel', publicPort));
+  }
+  // Mirror exclusive port: Naive can join demux, but panel cert on that port is still forbidden above.
+  return mergeErrors(...parts);
 }
 
 function validateHysteria(body = {}) {
@@ -173,6 +236,13 @@ function validateHysteria(body = {}) {
   }
   const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
   const masq = body.masqueradeUrl != null ? body.masqueradeUrl : body.masquerade_url;
+  const obfsType = String(body.obfsType != null ? body.obfsType : body.obfs_type || '').trim().toLowerCase();
+  const obfsPassword = String(body.obfsPassword != null ? body.obfsPassword : body.obfs_password || '').trim();
+  if (obfsType === 'salamander' || obfsType === 'gecko') {
+    if (!obfsPassword) {
+      return errField('obfsPassword', 'Obfuscation password is required for salamander/gecko', 'HYSTERIA_OBFS_PASSWORD');
+    }
+  }
   if (sslId) {
     if (sslId === SSL_CERT_AUTO) {
       return mergeErrors(
@@ -321,6 +391,7 @@ module.exports = {
   validateXray,
   validateSniDemux,
   validatePublicPortConflict,
+  validateTcpHostPortConflict,
   validatePanelCertConflict,
   validateManualCertFields,
   validateMasqueradeUrl,

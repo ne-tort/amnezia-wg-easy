@@ -76,6 +76,8 @@ window.SidecarPanels = {
       amneziaHysteriaObfsType: '',
       amneziaHysteriaObfsTypes: ['', 'salamander', 'gecko'],
       amneziaHysteriaObfsPassword: '',
+      amneziaHysteriaCore: 'original',
+      amneziaHysteriaCores: ['original', 'xray'],
       amneziaHysteriaBandwidthUp: '',
       amneziaHysteriaBandwidthDown: '',
       amneziaHysteriaSslCertId: '__auto__',
@@ -182,6 +184,13 @@ window.SidecarPanels = {
       }
       return list;
     },
+    hysteriaObfsTypesFiltered() {
+      const all = (this.amneziaHysteriaObfsTypes || []).filter(Boolean);
+      if (this.amneziaHysteriaCore === 'xray') {
+        return all.filter((t) => t === 'salamander');
+      }
+      return all;
+    },
     naiveSslCertOptions() {
       const list = (this.sslCerts || []).filter((c) => c && c.type === 'lets_encrypt');
       const selected = this.sslFindCertById
@@ -225,6 +234,11 @@ window.SidecarPanels = {
         if (parts.length === 2 && /^\d+$/.test(parts[1])) s = parts[0];
       }
       return s.replace(/\.$/, '');
+    },
+    onHysteriaCoreChange() {
+      if (this.amneziaHysteriaCore === 'xray' && this.amneziaHysteriaObfsType === 'gecko') {
+        this.amneziaHysteriaObfsType = '';
+      }
     },
     onHysteriaSslCertChange() {
       const c = this.sslFindCertById
@@ -361,34 +375,40 @@ window.SidecarPanels = {
         address: String(this.amneziaHysteriaAddress).trim(),
         publicPort: Number(this.amneziaHysteriaPublicPort) || 443,
         sslCertId: String(this.amneziaHysteriaSslCertId || '__auto__').trim(),
+        core: String(this.amneziaHysteriaCore || 'original').trim().toLowerCase(),
       };
       const masq = String(this.amneziaHysteriaMasqueradeUrl || '').trim();
       body.masqueradeUrl = masq;
       const obfsType = String(this.amneziaHysteriaObfsType || '').trim();
-      if (obfsType) {
-        body.obfsType = obfsType;
-        body.obfsPassword = String(this.amneziaHysteriaObfsPassword || '').trim();
-        if (obfsType === 'gecko') {
-          const gmin = String(this.amneziaHysteriaObfsGeckoMin || '').trim();
-          const gmax = String(this.amneziaHysteriaObfsGeckoMax || '').trim();
-          if (gmin) body.obfsGeckoMin = Number(gmin);
-          if (gmax) body.obfsGeckoMax = Number(gmax);
+      const core = body.core;
+      if (obfsType && !(core === 'xray' && obfsType === 'gecko')) {
+        body.obfsType = core === 'xray' ? (obfsType === 'salamander' ? 'salamander' : '') : obfsType;
+        if (body.obfsType) {
+          body.obfsPassword = String(this.amneziaHysteriaObfsPassword || '').trim();
+          if (body.obfsType === 'gecko') {
+            const gmin = String(this.amneziaHysteriaObfsGeckoMin || '').trim();
+            const gmax = String(this.amneziaHysteriaObfsGeckoMax || '').trim();
+            if (gmin) body.obfsGeckoMin = Number(gmin);
+            if (gmax) body.obfsGeckoMax = Number(gmax);
+          }
         }
       }
       const up = String(this.amneziaHysteriaBandwidthUp || '').trim();
       const down = String(this.amneziaHysteriaBandwidthDown || '').trim();
       if (up) body.bandwidthUp = up;
       if (down) body.bandwidthDown = down;
-      if (this.amneziaHysteriaCongestionType) {
-        body.congestionType = this.amneziaHysteriaCongestionType;
-        if (this.amneziaHysteriaCongestionType === 'bbr' && this.amneziaHysteriaBbrProfile) {
-          body.bbrProfile = this.amneziaHysteriaBbrProfile;
+      if (core !== 'xray') {
+        if (this.amneziaHysteriaCongestionType) {
+          body.congestionType = this.amneziaHysteriaCongestionType;
+          if (this.amneziaHysteriaCongestionType === 'bbr' && this.amneziaHysteriaBbrProfile) {
+            body.bbrProfile = this.amneziaHysteriaBbrProfile;
+          }
         }
+        if (this.amneziaHysteriaEchEnabled) body.echEnabled = true;
+        if (this.amneziaHysteriaListenMode) body.listenMode = this.amneziaHysteriaListenMode;
+        if (this.amneziaHysteriaPortRange) body.portRange = String(this.amneziaHysteriaPortRange).trim();
+        if (this.amneziaHysteriaRealmUri) body.realmUri = String(this.amneziaHysteriaRealmUri).trim();
       }
-      if (this.amneziaHysteriaEchEnabled) body.echEnabled = true;
-      if (this.amneziaHysteriaListenMode) body.listenMode = this.amneziaHysteriaListenMode;
-      if (this.amneziaHysteriaPortRange) body.portRange = String(this.amneziaHysteriaPortRange).trim();
-      if (this.amneziaHysteriaRealmUri) body.realmUri = String(this.amneziaHysteriaRealmUri).trim();
       return body;
     },
     buildNaiveInstallBody() {
@@ -596,6 +616,7 @@ window.SidecarPanels = {
         }
         this.syncHysteriaMasqueradeIdFromUrl();
         if (st.obfsType) this.amneziaHysteriaObfsType = st.obfsType;
+        if (st.core) this.amneziaHysteriaCore = st.core;
         if (st.obfsGeckoMin) this.amneziaHysteriaObfsGeckoMin = String(st.obfsGeckoMin);
         if (st.obfsGeckoMax) this.amneziaHysteriaObfsGeckoMax = String(st.obfsGeckoMax);
         if (st.congestionType) this.amneziaHysteriaCongestionType = st.congestionType;

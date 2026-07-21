@@ -137,9 +137,20 @@ test('validateNaive rejects IP as SNI', () => {
   const r = sidecarValidate.validateNaive({
     sni: '1.2.3.4',
     publicPort: 8444,
+    sslCertId: 'missing-cert-id',
   });
   assert.equal(r.ok, false);
-  assert.ok(r.fieldErrors.sni);
+  // Certificate not found or SNI invalid — either is a rejection
+  assert.ok(r.fieldErrors.sni || r.fieldErrors.sslCertId);
+});
+
+test('validateNaive requires certificate id', () => {
+  const r = sidecarValidate.validateNaive({
+    sni: 'naive.example.com',
+    publicPort: 8444,
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.fieldErrors.sslCertId);
 });
 
 test('validateHysteria rejects bad masquerade URL', () => {

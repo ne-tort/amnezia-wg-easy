@@ -802,7 +802,33 @@ async function assertHostPortsAvailable(ports, opts = {}) {
   }
 }
 
+/**
+ * Re-copy volume stream demux confs into nginx container stream.d.
+ * Entrypoint does this once at start; without re-sync, stale demux-*.conf
+ * keeps referencing deleted stream-sni-*.map after portPlan updates.
+ */
+async function syncNginxStreamDir() {
+  const volStream = '/opt/amnezia/awg/nginx/stream';
+  const streamD = '/etc/nginx/stream.d';
+  const script = [
+    `mkdir -p '${streamD}' '${volStream}'`,
+    `rm -f '${streamD}'/*.conf`,
+    `if ls '${volStream}'/*.conf >/dev/null 2>&1; then`,
+    `  cp '${volStream}'/*.conf '${streamD}/'`,
+    'else',
+    `  printf '%s\\n' '# no demux yet' > '${streamD}/empty.conf'`,
+    'fi',
+  ].join('\n');
+  const sync = await runCmd('docker', ['exec', NGINX_CONTAINER, 'sh', '-c', script], { timeout: 15_000 });
+  if (!sync.ok) {
+    throw new Error(
+      `nginx stream.d sync failed: ${(sync.stderr || sync.stdout || '').trim().slice(0, 300)}`,
+    );
+  }
+}
+
 async function reloadNginx() {
+  await syncNginxStreamDir();
   const test = await runCmd('docker', ['exec', NGINX_CONTAINER, 'nginx', '-t'], { timeout: 15_000 });
   if (!test.ok) {
     throw new Error(`nginx config invalid: ${(test.stderr || test.stdout || '').trim().slice(0, 400)}`);
@@ -1208,6 +1234,7 @@ module.exports = {
   writeStreamConfigs,
   writeComposePortsFile,
   composePortsPath,
+  syncNginxStreamDir,
   panelPublicPort,
   mirrorPublicPort,
   panelSni,

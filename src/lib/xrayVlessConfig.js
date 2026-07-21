@@ -172,14 +172,34 @@ function buildXhttpSettings(opts) {
 
 function buildHysteriaSettings(opts) {
   /** @type {Record<string, unknown>} */
-  const h = {};
+  const h = {
+    version: Number(opts.hysteriaVersion || 2) || 2,
+  };
+  if (opts.hysteriaAuth) h.auth = String(opts.hysteriaAuth);
+  if (opts.hysteriaUdpIdleTimeout != null && opts.hysteriaUdpIdleTimeout !== '') {
+    h.udpIdleTimeout = Number(opts.hysteriaUdpIdleTimeout);
+  }
   if (opts.hysteriaUpMbps != null && opts.hysteriaUpMbps !== '') {
     h.up = `${opts.hysteriaUpMbps} Mbps`;
   }
   if (opts.hysteriaDownMbps != null && opts.hysteriaDownMbps !== '') {
     h.down = `${opts.hysteriaDownMbps} Mbps`;
   }
-  return Object.keys(h).length ? h : {};
+  const mType = String(opts.hysteriaMasqueradeType || '').trim();
+  if (mType) {
+    /** @type {Record<string, unknown>} */
+    const masq = { type: mType };
+    if (mType === 'proxy' && opts.hysteriaMasqueradeUrl) {
+      masq.url = String(opts.hysteriaMasqueradeUrl);
+      masq.rewriteHost = true;
+    } else if (mType === 'string') {
+      masq.content = String(opts.hysteriaMasqueradeContent || 'ok');
+    } else if (mType === 'file') {
+      masq.dir = '/var/www/html';
+    }
+    h.masquerade = masq;
+  }
+  return h;
 }
 
 function buildStreamSettings(opts) {

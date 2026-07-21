@@ -1,7 +1,7 @@
 FROM alpine:3.15
 LABEL maintainer="AmneziaVPN / amnezia-wg-easy"
 
-ARG XRAY_RELEASE="v25.8.3"
+ARG XRAY_RELEASE="v26.3.27"
 
 RUN apk add --no-cache curl unzip bash openssl netcat-openbsd dumb-init rng-tools xz \
   && apk --update upgrade --no-cache
@@ -20,7 +20,14 @@ RUN printf '%s\n' \
   'iptables -A INPUT -i lo -j ACCEPT 2>/dev/null || true' \
   'iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true' \
   'iptables -A INPUT -p icmp -j ACCEPT 2>/dev/null || true' \
-  'iptables -A INPUT -p tcp --dport "${PORT}" -j ACCEPT 2>/dev/null || true' \
+  'if [ "${XRAY_TRANSPORT_PROTO:-tcp}" = "udp" ]; then' \
+  '  iptables -A INPUT -p udp --dport "${PORT}" -j ACCEPT 2>/dev/null || true' \
+  'else' \
+  '  iptables -A INPUT -p tcp --dport "${PORT}" -j ACCEPT 2>/dev/null || true' \
+  'fi' \
+  'if [ -n "${XRAY_HYSTERIA_PORT:-}" ]; then' \
+  '  iptables -A INPUT -p udp --dport "${XRAY_HYSTERIA_PORT}" -j ACCEPT 2>/dev/null || true' \
+  'fi' \
   'iptables -P INPUT DROP 2>/dev/null || true' \
   'killall -KILL xray 2>/dev/null || true' \
   'if [ -n "$CFG" ]; then' \

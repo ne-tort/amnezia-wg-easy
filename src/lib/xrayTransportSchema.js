@@ -100,8 +100,18 @@ const FIELDS = Object.freeze({
     ...SOCKOPT_FIELDS,
   ]),
   hysteria: Object.freeze([
+    { key: 'hysteriaVersion', type: 'select', optional: true, default: '2', scope: 'shared', labelKey: 'xrayTfHysteriaVersion',
+      options: Object.freeze(['2']) },
+    { key: 'hysteriaAuth', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaAuth' },
+    { key: 'hysteriaUdpIdleTimeout', type: 'number', optional: true, default: 60, scope: 'shared', labelKey: 'xrayTfHysteriaUdpIdleTimeout' },
     { key: 'hysteriaUpMbps', type: 'number', optional: true, scope: 'client', labelKey: 'xrayTfHysteriaUpMbps' },
     { key: 'hysteriaDownMbps', type: 'number', optional: true, scope: 'client', labelKey: 'xrayTfHysteriaDownMbps' },
+    { key: 'hysteriaMasqueradeType', type: 'select', optional: true, default: '', scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeType',
+      options: Object.freeze(['', 'proxy', 'string', 'file']) },
+    { key: 'hysteriaMasqueradeUrl', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeUrl',
+      showIf: { hysteriaMasqueradeType: 'proxy' } },
+    { key: 'hysteriaMasqueradeContent', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeContent',
+      showIf: { hysteriaMasqueradeType: 'string' } },
   ]),
 });
 
@@ -209,8 +219,13 @@ function flowSupported(network) {
 
 function mapTransportProto(network) {
   const n = String(network || 'tcp').toLowerCase();
-  if (n === 'kcp') return 'udp';
+  if (n === 'kcp' || n === 'hysteria') return 'udp';
   return 'tcp';
+}
+
+/** Transports that listen on UDP (cannot use TCP SNI demux). */
+function isUdpTransport(network) {
+  return mapTransportProto(network) === 'udp';
 }
 
 function getFieldsForUi(network) {
@@ -238,6 +253,7 @@ module.exports = {
   validateTransportSettings,
   flowSupported,
   mapTransportProto,
+  isUdpTransport,
   getFieldsForUi,
   isEmptyValue,
 };

@@ -1521,6 +1521,7 @@ module.exports = class Server {
               ? body.tlsInsecureClient
               : body.tls_insecure_client),
             sslCertId: body && (body.sslCertId != null ? body.sslCertId : body.ssl_cert_id),
+            core: body && body.core,
             email: body && (body.email != null ? body.email : body.certbotEmail),
           });
           return { success: true, ...status };
@@ -1564,6 +1565,7 @@ module.exports = class Server {
             address: body && body.address,
             sni: body && body.sni,
             publicPort: body && (body.publicPort != null ? body.publicPort : body.public_port),
+            sslCertId: body && (body.sslCertId != null ? body.sslCertId : body.ssl_cert_id),
             probeResistanceDomain: body && (body.probeResistanceDomain != null
               ? body.probeResistanceDomain
               : body.probe_resistance_domain),

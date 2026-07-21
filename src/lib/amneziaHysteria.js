@@ -50,6 +50,8 @@ const CERT_SOURCE_KEY = 'amnezia_hysteria_cert_source';
 const CERT_DOMAIN_KEY = 'amnezia_hysteria_cert_domain';
 const SSL_CERT_ID_KEY = 'amnezia_hysteria_ssl_cert_id';
 const TLS_INSECURE_CLIENT_KEY = 'amnezia_hysteria_tls_insecure_client';
+const CORE_KEY = 'amnezia_hysteria_core';
+const CORES = Object.freeze(['original', 'xray']);
 
 const DEFAULT_SNI = 'www.sbb.ch';
 const DEFAULT_MASQUERADE = 'https://www.sbb.ch/';
@@ -99,6 +101,65 @@ function getPublicPort() {
   const fromEnv = parseInt(String(process.env.HYSTERIA_PUBLIC_PORT || '').trim(), 10);
   if (Number.isFinite(fromEnv) && fromEnv >= 1 && fromEnv <= 65535) return fromEnv;
   return 443;
+}
+
+function getCore() {
+  const raw = getSetting(CORE_KEY, 'original').trim().toLowerCase();
+  return CORES.includes(raw) ? raw : 'original';
+}
+
+function setCore(core) {
+  const c = String(core || 'original').trim().toLowerCase();
+  setSetting(CORE_KEY, CORES.includes(c) ? c : 'original');
+}
+
+function isXrayCoreDesired() {
+  return getDesired() === true && getCore() === 'xray';
+}
+
+/**
+ * Build Hy2 inbound object for shared amnezia-xray server.json.
+ * @param {{ listenPort: number }} opts
+ */
+function buildXrayInboundConfig(opts = {}) {
+  const { buildHysteriaInbound } = require('./xrayHysteriaInbound');
+  const tlsMaterial = require('./tlsMaterial');
+  const clients = ensureClientPasswords();
+  const users = clients.map((c) => ({
+    auth: c.hysteria_password,
+    email: c.name || c.username || c.id,
+  }));
+  const sni = getSni();
+  const certDomain = getSetting(CERT_DOMAIN_KEY, '') || sni;
+  const paths = tlsMaterial.certPathsForDomain(certDomain);
+  const masqType = getMasqueradeType();
+  const masqUrl = getMasqueradeUrl();
+  /** @type {Record<string, unknown>|undefined} */
+  let masquerade;
+  if (masqType === 'proxy' && masqUrl) {
+    masquerade = { type: 'proxy', url: masqUrl, rewriteHost: true };
+  } else if (masqType === 'string') {
+    masquerade = { type: 'string', content: masqUrl || 'ok' };
+  } else if (masqType === 'file') {
+    masquerade = { type: 'file', dir: '/var/www/html' };
+  }
+  const obfsType = getObfsType();
+  const obfsPassword = getObfsPassword();
+  const salamanderPassword = (obfsType === 'salamander' && obfsPassword) ? obfsPassword : '';
+  const up = getBandwidthUp();
+  const down = getBandwidthDown();
+  return buildHysteriaInbound({
+    port: opts.listenPort || 34443,
+    users,
+    sni,
+    tlsCert: paths.cert,
+    tlsKey: paths.key,
+    up: up || undefined,
+    down: down || undefined,
+    masquerade,
+    salamanderPassword: salamanderPassword || undefined,
+    udpIdleTimeout: 60,
+  });
 }
 
 function getClientFacingPort() {
@@ -881,6 +942,8 @@ function getStatus() {
     lastError,
     smoke: lastSmoke,
     container: CONTAINER_NAME,
+    core: getCore(),
+    cores: CORES,
     address: getPublicHost(),
     addressStored: getAddress() || null,
     sni: getSni(),
@@ -1069,6 +1132,8 @@ async function enableInternal(opts = {}) {
     setSetting(CERT_SOURCE_KEY, certSource);
     setSetting(CERT_DOMAIN_KEY, certDomainOverride);
     setSetting(TLS_INSECURE_CLIENT_KEY, tlsInsecure ? '1' : '0');
+    const core = opts.core != null ? String(opts.core).trim().toLowerCase() : getCore();
+    setCore(core);
     if (inventoryCert) {
       setSetting(SSL_CERT_ID_KEY, inventoryCert.id);
     }
@@ -1117,6 +1182,36 @@ async function enableInternal(opts = {}) {
 
     const enabled = ensureClientPasswords();
     fs.mkdirSync(hysteriaHostDir(), { recursive: true });
+
+    if (getCore() === 'xray') {
+      // Shared amnezia-xray process: no amnezia-hysteria container / gecko / ECH.
+      await removeHysteriaContainer();
+      if (obfsType === 'gecko') {
+        throw Object.assign(
+          new Error('Gecko obfuscation is only available with the original Hysteria core'),
+          { status: 400, code: 'HYSTERIA_GECKO_XRAY', fieldErrors: { obfsType: 'Gecko requires original core' } },
+        );
+      }
+      const amneziaXray = require('./amneziaXray');
+      await amneziaXray.syncClientsFromDb();
+      await amneziaXray.ensureXrayContainer();
+      await amneziaXray.reloadXrayConfig();
+      try {
+        await portPlan.applyPlan();
+      } catch (planErr) {
+        // eslint-disable-next-line no-console
+        console.error('Hysteria(xray) enable: portPlan.applyPlan failed:', planErr && planErr.message);
+        setPhase('degraded', planErr);
+      }
+      await regenerateClientConfigs();
+      const xrayUp = (await runCmd('docker', ['inspect', '-f', '{{.State.Running}}', 'amnezia-xray'])).stdout.trim() === 'true';
+      lastSmoke = { ok: !!xrayUp, via: 'xray-shared', at: Date.now() };
+      if (Date.now() > deadline) {
+        throw Object.assign(new Error('Hysteria (xray) enable timed out'), { status: 504, code: 'HYSTERIA_TIMEOUT' });
+      }
+      setPhase(xrayUp ? 'running' : 'degraded', xrayUp ? null : new Error('amnezia-xray not running'));
+      return getStatus();
+    }
 
     if (echEnabled) {
       await echKeygen.ensureEchMaterial({
@@ -1209,9 +1304,21 @@ async function enableInternal(opts = {}) {
 
 async function disableInternal() {
   setPhase('removing');
+  const wasXray = getCore() === 'xray';
   setDesired(false);
   try {
     await forceCleanup();
+    if (wasXray) {
+      try {
+        const amneziaXray = require('./amneziaXray');
+        await amneziaXray.syncClientsFromDb();
+        await amneziaXray.ensureXrayContainer();
+        await amneziaXray.reloadXrayConfig();
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('Hysteria disable: xray resync failed:', err && err.message);
+      }
+    }
     try {
       await require('./portPlan').applyPlan();
     } catch { /* nginx may be down */ }
@@ -1319,6 +1426,19 @@ async function reconcile() {
     if (!getSetting(PUBLIC_PORT_KEY, '')) {
       setSetting(PUBLIC_PORT_KEY, String(getPublicPort()));
     }
+    if (getCore() === 'xray') {
+      await removeHysteriaContainer();
+      const amneziaXray = require('./amneziaXray');
+      await amneziaXray.syncClientsFromDb();
+      await amneziaXray.ensureXrayContainer();
+      await amneziaXray.reloadXrayConfig();
+      await require('./portPlan').applyPlan();
+      const xrayUp = (await runCmd('docker', ['inspect', '-f', '{{.State.Running}}', 'amnezia-xray'])).stdout.trim() === 'true';
+      lastSmoke = { ok: xrayUp, via: 'xray-shared', at: Date.now() };
+      if (xrayUp) setPhase('running');
+      else setPhase('degraded', new Error('amnezia-xray not running'));
+      return;
+    }
     if (!(await dockerContainerRunning())) {
       setPhase('degraded', new Error('amnezia-hysteria container not running'));
       await syncClientsFromDb();
@@ -1372,6 +1492,11 @@ module.exports = {
   resetCredentials,
   getStatus,
   isAmneziaHysteriaAvailable,
+  isXrayCoreDesired,
+  buildXrayInboundConfig,
+  getCore,
+  getPublicPort,
+  CORES,
   syncClientsFromDb,
   ensureClientPasswords,
   getClientHysteriaPayload,

@@ -88,8 +88,14 @@ const TRANSPORT_FIELDS = {
     { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
   ],
   hysteria: [
+    { key: 'hysteriaVersion', type: 'select', optional: true, default: '2', scope: 'shared', labelKey: 'xrayTfHysteriaVersion', options: ['2'] },
+    { key: 'hysteriaAuth', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaAuth' },
+    { key: 'hysteriaUdpIdleTimeout', type: 'number', optional: true, default: 60, scope: 'shared', labelKey: 'xrayTfHysteriaUdpIdleTimeout' },
     { key: 'hysteriaUpMbps', type: 'number', optional: true, scope: 'client', labelKey: 'xrayTfHysteriaUpMbps' },
     { key: 'hysteriaDownMbps', type: 'number', optional: true, scope: 'client', labelKey: 'xrayTfHysteriaDownMbps' },
+    { key: 'hysteriaMasqueradeType', type: 'select', optional: true, default: '', scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeType', options: ['', 'proxy', 'string', 'file'] },
+    { key: 'hysteriaMasqueradeUrl', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeUrl', showIf: { hysteriaMasqueradeType: 'proxy' } },
+    { key: 'hysteriaMasqueradeContent', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHysteriaMasqueradeContent', showIf: { hysteriaMasqueradeType: 'string' } },
   ],
 };
 
@@ -233,10 +239,26 @@ window.XrayTransportUi = {
     closeXrayTransportProfileBank() {
       this.xrayTransportProfileBankOpen = false;
     },
+    defaultXrayTransportSettings(network) {
+      const net = String(network || this.amneziaXrayNetwork || 'tcp').toLowerCase();
+      const fields = TRANSPORT_FIELDS[net] || TRANSPORT_FIELDS.tcp;
+      const out = {};
+      for (const f of fields) {
+        if (f.default !== undefined) out[f.key] = f.default;
+      }
+      return out;
+    },
     applyXrayTransportProfile(entry) {
       if (!entry || !entry.settings) return;
-      const settings = { ...this.amneziaXrayTransportSettings, ...entry.settings };
-      this.amneziaXrayTransportSettings = settings;
+      const net = String(this.amneziaXrayNetwork || 'tcp').toLowerCase();
+      const fields = TRANSPORT_FIELDS[net] || TRANSPORT_FIELDS.tcp;
+      const allowed = new Set(fields.map((f) => f.key));
+      const next = this.defaultXrayTransportSettings(net);
+      for (const [key, val] of Object.entries(entry.settings || {})) {
+        if (!allowed.has(key)) continue;
+        next[key] = val;
+      }
+      this.amneziaXrayTransportSettings = next;
       this.xrayTransportActiveProfileId = entry.id || '';
       this.closeXrayTransportProfileBank();
     },
@@ -265,6 +287,7 @@ window.XrayTransportUi = {
     onXrayNetworkChange() {
       const net = String(this.amneziaXrayNetwork || 'tcp').toLowerCase();
       this.amneziaXrayTransportFields = TRANSPORT_FIELDS[net] || TRANSPORT_FIELDS.tcp;
+      this.amneziaXrayTransportSettings = this.defaultXrayTransportSettings(net);
       this.xrayTransportActiveProfileId = '';
       const allowed = allowedSecuritiesForNetwork(net);
       if (!allowed.includes(this.amneziaXraySecurity)) {

@@ -730,19 +730,34 @@ async function resolveCertMaterial(opts = {}) {
 }
 
 /**
- * Block panel cert reuse on the same *TCP* public port as panel HTTPS.
+ * Block panel cert reuse on the same *TCP* public port as panel HTTPS or mirror stub.
  * Hysteria is UDP — call sites must not use this for hysteria.
  */
 function assertPanelCertReuseAllowed(serviceId, publicPort) {
   if (serviceId === 'hysteria') return;
-  const panelPort = parseInt(String(config.PANEL_HTTPS_PORT || '443'), 10);
   const pub = parseInt(String(publicPort), 10);
+  if (!Number.isFinite(pub)) return;
+  const panelPort = parseInt(String(config.PANEL_HTTPS_PORT || '443'), 10);
   if (Number.isFinite(panelPort) && pub === panelPort) {
     const err = new Error(`${serviceId} cannot reuse panel certificate on the same public port (${pub})`);
     err.status = 400;
     err.code = 'CERT_PORT_CONFLICT';
     err.field = 'certSource';
     throw err;
+  }
+  try {
+    const mirror = require('./portPlan').mirrorPublicPort();
+    if (mirror != null && pub === mirror) {
+      const err = new Error(
+        `${serviceId} cannot reuse panel certificate on the mirror stub port (${pub})`,
+      );
+      err.status = 400;
+      err.code = 'CERT_PORT_CONFLICT';
+      err.field = 'certSource';
+      throw err;
+    }
+  } catch (err) {
+    if (err && err.code === 'CERT_PORT_CONFLICT') throw err;
   }
 }
 
