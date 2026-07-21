@@ -1,0 +1,113 @@
+{
+  "tcp": [
+    {
+      "id": "tcp-plain",
+      "name": "Plain TCP stream",
+      "settings": { "headerType": "none", "tcpCongestion": "bbr" }
+    },
+    {
+      "id": "tcp-http-cdn",
+      "name": "HTTP GET (CDN-like)",
+      "settings": {
+        "headerType": "http",
+        "httpVersion": "1.1",
+        "httpMethod": "GET",
+        "httpPath": "/",
+        "tcpCongestion": "bbr"
+      }
+    },
+    {
+      "id": "tcp-http-api",
+      "name": "HTTP POST API style",
+      "settings": {
+        "headerType": "http",
+        "httpVersion": "1.1",
+        "httpMethod": "POST",
+        "httpPath": "/api/v1/stream",
+        "tcpCongestion": "cubic"
+      }
+    }
+  ],
+  "xhttp": [
+    {
+      "id": "xhttp-auto",
+      "name": "XHTTP auto mode",
+      "settings": { "xhttpMode": "auto", "xhttpPath": "/", "tcpCongestion": "bbr" }
+    },
+    {
+      "id": "xhttp-stream-up",
+      "name": "Stream upload path",
+      "settings": { "xhttpMode": "stream-up", "xhttpPath": "/upload", "tcpCongestion": "bbr" }
+    },
+    {
+      "id": "xhttp-packet",
+      "name": "Packet mode (split)",
+      "settings": { "xhttpMode": "packet-up", "xhttpPath": "/x", "xhttpExtra": "/dl" }
+    }
+  ],
+  "ws": [
+    {
+      "id": "ws-root",
+      "name": "WebSocket root path",
+      "settings": { "wsPath": "/" }
+    },
+    {
+      "id": "ws-vless",
+      "name": "WebSocket /vless",
+      "settings": { "wsPath": "/vless" }
+    }
+  ],
+  "grpc": [
+    {
+      "id": "grpc-tunnel",
+      "name": "gRPC Gun service",
+      "settings": { "grpcServiceName": "GunService", "grpcMultiMode": false }
+    },
+    {
+      "id": "grpc-multi",
+      "name": "gRPC multi-mode",
+      "settings": { "grpcServiceName": "grpc.health.v1.Health", "grpcMultiMode": true }
+    }
+  ],
+  "kcp": [
+    {
+      "id": "kcp-srtp",
+      "name": "mKCP SRTP (video-like)",
+      "settings": { "kcpHeaderType": "srtp", "kcpMtu": 1350, "kcpCongestion": true }
+    },
+    {
+      "id": "kcp-wechat",
+      "name": "mKCP WeChat video",
+      "settings": { "kcpHeaderType": "wechat-video", "kcpMtu": 1350 }
+    },
+    {
+      "id": "kcp-wireguard",
+      "name": "mKCP WireGuard header",
+      "settings": { "kcpHeaderType": "wireguard", "kcpMtu": 1400, "kcpCongestion": true }
+    }
+  ],
+  "httpupgrade": [
+    {
+      "id": "hu-root",
+      "name": "HTTPUpgrade root",
+      "settings": { "httpupgradePath": "/" }
+    },
+    {
+      "id": "hu-cdn",
+      "name": "HTTPUpgrade /cdn",
+      "settings": { "httpupgradePath": "/cdn" }
+    }
+  ],
+  "hysteria": [
+    {
+      "id": "hy-balanced",
+      "name": "Balanced bandwidth",
+      "settings": { "hysteriaUpMbps": 50, "hysteriaDownMbps": 100 }
+    },
+    {
+      "id": "hy-mobile",
+      "name": "Mobile-friendly limits",
+      "settings": { "hysteriaUpMbps": 20, "hysteriaDownMbps": 50 }
+    }
+  ]
+}

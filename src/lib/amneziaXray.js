@@ -1238,13 +1238,24 @@ async function enableInternal(opts = {}) {
     setSetting(NETWORK_KEY, network);
     setSetting(CERT_SOURCE_KEY, certSource);
     setSetting(CERT_DOMAIN_KEY, certDomainOverride);
-    if (inventoryCert) {
+        if (inventoryCert) {
       setSetting(SSL_CERT_ID_KEY, inventoryCert.id);
     } else if (security === 'none') {
       setSetting(SSL_CERT_ID_KEY, '');
     }
+
+    const transportRaw = opts.transportSettings != null ? opts.transportSettings : null;
     if (opts.transportSettings != null || opts.network != null) {
-      const ts = opts.transportSettings != null ? opts.transportSettings : getTransportSettings();
+      const ts = transportRaw != null ? transportRaw : getTransportSettings();
+      const transportCheckEarly = xrayTransportSchema.validateTransportSettings(network, ts);
+      if (!transportCheckEarly.ok) {
+        const msg = Object.values(transportCheckEarly.fieldErrors || {}).join('; ') || 'Invalid transport settings';
+        throw Object.assign(new Error(msg), {
+          status: 400,
+          code: 'XRAY_TRANSPORT_VALIDATION',
+          fieldErrors: transportCheckEarly.fieldErrors,
+        });
+      }
       setTransportSettings(network, ts);
     } else {
       if (opts.wsPath != null) setSetting(WS_PATH_KEY, String(opts.wsPath).trim() || '/');
@@ -1377,16 +1388,24 @@ async function enableInternal(opts = {}) {
         : await generateRealityKeysIfMissing())
       : null;
     ensureClientUuids();
-    const obj = buildServerConfigObject({
-      port,
-      sni,
-      privateKey: keys && keys.privateKey,
-      shortId: keys && keys.shortId,
-      flow,
-      security,
-      network,
-    });
-    writeServerJson(obj);
+    let obj;
+    try {
+      obj = buildServerConfigObject({
+        port,
+        sni,
+        privateKey: keys && keys.privateKey,
+        shortId: keys && keys.shortId,
+        flow,
+        security,
+        network,
+      });
+      writeServerJson(obj);
+    } catch (buildErr) {
+      throw Object.assign(
+        new Error(buildErr && buildErr.message ? buildErr.message : 'Failed to build Xray server config'),
+        { status: 400, code: 'XRAY_CONFIG_BUILD' },
+      );
+    }
 
     await ensureXrayContainer();
     try {
@@ -1431,13 +1450,26 @@ async function enableInternal(opts = {}) {
     await regenerateClientConfigs();
     return getStatus();
   } catch (err) {
-    await forceCleanup();
+    try {
+      await forceCleanup();
+    } catch (cleanupErr) {
+      // eslint-disable-next-line no-console
+      console.error('Xray enable: forceCleanup failed:', cleanupErr && cleanupErr.message);
+    }
     setDesired(false);
     try {
       await require('./portPlan').applyPlan();
-    } catch { /* ignore */ }
+    } catch (planErr) {
+      // eslint-disable-next-line no-console
+      console.error('Xray enable: portPlan after failure failed:', planErr && planErr.message);
+    }
     setPhase('error', err);
-    await regenerateClientConfigs();
+    try {
+      await regenerateClientConfigs();
+    } catch (regErr) {
+      // eslint-disable-next-line no-console
+      console.error('Xray enable: regenerateClientConfigs failed:', regErr && regErr.message);
+    }
     throw err;
   }
 }
@@ -1606,6 +1638,12 @@ function stopReconcileTimer() {
 
 async function bootAmneziaXray() {
   startReconcileTimer();
+  try {
+    require('./xrayTransportProfileBank').ensureBankSeeded();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('Xray transport profile bank seed:', err && err.message ? err.message : err);
+  }
   await reconcile();
   try {
     // eslint-disable-next-line global-require

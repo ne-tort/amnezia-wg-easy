@@ -1346,6 +1346,39 @@ module.exports = class Server {
           throw sniHttpError(err);
         }
       }))
+      .get('/api/amnezia-xray/transport-profiles', defineEventHandler((event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        const q = getQuery(event) || {};
+        const network = q.network != null ? String(q.network).trim().toLowerCase() : '';
+        const xrayTransportProfileBank = require('./xrayTransportProfileBank');
+        return { profiles: xrayTransportProfileBank.listProfiles(network) };
+      }))
+      .post('/api/amnezia-xray/transport-profiles', defineEventHandler(async (event) => {
+        acl.requireCapability(event, acl.CAP.SYSTEM_XRAY);
+        const body = await readBody(event).catch(() => ({}));
+        const network = body && body.network != null ? String(body.network).trim().toLowerCase() : '';
+        const name = body && body.name != null ? String(body.name).trim() : '';
+        const settings = body && body.settings;
+        const xrayTransportProfileBank = require('./xrayTransportProfileBank');
+        const xrayTransportSchema = require('./xrayTransportSchema');
+        const sanitized = xrayTransportSchema.sanitizeTransportSettings(network, settings || {});
+        const check = xrayTransportSchema.validateTransportSettings(network, sanitized);
+        if (!check.ok) {
+          const msg = Object.values(check.fieldErrors || {}).join('; ') || 'Invalid transport settings';
+          throw httpError(400, msg);
+        }
+        try {
+          const saved = xrayTransportProfileBank.saveProfile(network, {
+            id: body && body.id,
+            name,
+            settings: sanitized,
+          });
+          return { success: true, profile: saved };
+        } catch (err) {
+          if (err && err.status === 400) throw httpError(400, err.message);
+          throw httpError(500, err.message || 'Failed to save transport profile');
+        }
+      }))
       .post('/api/tls/preflight-domain', defineEventHandler(async (event) => {
         acl.requireAnyCapability(event, [
           acl.CAP.SYSTEM_XRAY,

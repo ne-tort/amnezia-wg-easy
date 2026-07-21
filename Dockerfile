@@ -84,6 +84,7 @@ COPY config/roles.labels.json /app/config/roles.labels.json
 COPY config/sni-bank.seed.json /app/config/sni-bank.seed.json
 COPY config/sni-blocked.seed.json /app/config/sni-blocked.seed.json
 COPY config/mirror-bank.seed.json /app/config/mirror-bank.seed.json
+COPY config/xray-transport-profiles.seed.json /app/config/xray-transport-profiles.seed.json
 
 COPY scripts/cascade-in-container-postup.sh scripts/cascade-in-container-predown.sh /app/scripts/
 RUN chmod +x /app/scripts/cascade-in-container-postup.sh /app/scripts/cascade-in-container-predown.sh

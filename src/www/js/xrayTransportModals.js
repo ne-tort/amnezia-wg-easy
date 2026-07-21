@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * VLESS transport UI helpers (mirrors src/lib/xrayTransportSchema.js for browser).
+ * VLESS transport UI (mirrors src/lib/xrayTransportSchema.js for browser).
  */
 
 const SSL_CERT_AUTO = '__auto__';
@@ -26,77 +26,71 @@ const SECURITY_BY_TRANSPORT = {
   hysteria: ['tls'],
 };
 
+const TCP_CONGESTION = ['bbr', 'cubic', 'reno', 'bbr2'];
+const HTTP_VERSIONS = ['1.1', '2'];
+const HTTP_METHODS = ['GET', 'POST', 'PUT', 'HEAD', 'OPTIONS'];
+const DOMAIN_STRATEGIES = ['AsIs', 'UseIP', 'UseIPv4', 'UseIPv6'];
+const KCP_HEADER_TYPES = ['none', 'srtp', 'utp', 'wechat-video', 'wechat-audio', 'dtls', 'wireguard'];
+const XHTTP_MODES = ['auto', 'stream-one', 'stream-up', 'packet-up'];
+const TCP_HEADER_TYPES = ['none', 'http'];
+
 const SOCKOPT_FIELDS = [
-  { key: 'tcpFastOpen', type: 'bool', optional: true, group: 'socket', label: 'TCP Fast Open' },
-  { key: 'tcpCongestion', type: 'text', optional: true, group: 'socket', label: 'TCP congestion', placeholder: 'bbr' },
-  { key: 'domainStrategy', type: 'select', optional: true, group: 'socket', label: 'Domain strategy',
-    options: ['AsIs', 'UseIP', 'UseIPv4', 'UseIPv6'] },
-  { key: 'acceptProxyProtocol', type: 'bool', optional: true, group: 'socket', label: 'Accept PROXY protocol (inbound)' },
+  { key: 'tcpFastOpen', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfTcpFastOpen' },
+  { key: 'tcpCongestion', type: 'select', optional: true, scope: 'shared', labelKey: 'xrayTfTcpCongestion', options: TCP_CONGESTION, default: 'bbr' },
+  { key: 'domainStrategy', type: 'select', optional: true, scope: 'shared', labelKey: 'xrayTfDomainStrategy', options: DOMAIN_STRATEGIES },
+  { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
 ];
 
 const TRANSPORT_FIELDS = {
   tcp: [
-    { key: 'headerType', type: 'select', optional: true, default: 'none', group: 'basic', label: 'Header type',
-      options: ['none', 'http'] },
-    { key: 'httpVersion', type: 'text', optional: true, group: 'httpHeader', label: 'HTTP version', default: '1.1',
-      showIf: { headerType: 'http' } },
-    { key: 'httpMethod', type: 'text', optional: true, group: 'httpHeader', label: 'HTTP method', default: 'GET',
-      showIf: { headerType: 'http' } },
-    { key: 'httpPath', type: 'text', optional: true, group: 'httpHeader', label: 'HTTP path (comma-separated)',
-      default: '/', showIf: { headerType: 'http' } },
-    { key: 'httpHost', type: 'text', optional: true, group: 'httpHeader', label: 'HTTP Host header',
-      inheritFrom: 'sni', showIf: { headerType: 'http' } },
+    { key: 'headerType', type: 'select', optional: true, default: 'none', scope: 'shared', labelKey: 'xrayTfHeaderType', options: TCP_HEADER_TYPES },
+    { key: 'httpVersion', type: 'select', optional: true, scope: 'shared', labelKey: 'xrayTfHttpVersion', default: '1.1', options: HTTP_VERSIONS, showIf: { headerType: 'http' } },
+    { key: 'httpMethod', type: 'select', optional: true, scope: 'shared', labelKey: 'xrayTfHttpMethod', default: 'GET', options: HTTP_METHODS, showIf: { headerType: 'http' } },
+    { key: 'httpPath', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHttpPath', default: '/', showIf: { headerType: 'http' } },
+    { key: 'httpHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHttpHost', inheritFrom: 'sni', showIf: { headerType: 'http' } },
     ...SOCKOPT_FIELDS,
   ],
   ws: [
-    { key: 'wsPath', type: 'text', optional: true, default: '/', group: 'basic', label: 'Path' },
-    { key: 'wsHost', type: 'text', optional: true, group: 'basic', label: 'Host', inheritFrom: 'sni' },
-    { key: 'wsHeaders', type: 'json', optional: true, group: 'advanced', label: 'Extra headers (JSON map)' },
-    { key: 'acceptProxyProtocol', type: 'bool', optional: true, group: 'advanced', label: 'Accept PROXY protocol (inbound)' },
+    { key: 'wsPath', type: 'text', optional: true, default: '/', scope: 'shared', labelKey: 'xrayTfWsPath' },
+    { key: 'wsHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfWsHost', inheritFrom: 'sni' },
+    { key: 'wsHeaders', type: 'json', optional: true, scope: 'shared', labelKey: 'xrayTfWsHeaders' },
+    { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
   ],
   grpc: [
-    { key: 'grpcServiceName', type: 'text', optional: false, group: 'basic', label: 'Service name' },
-    { key: 'grpcMultiMode', type: 'bool', optional: true, group: 'basic', label: 'Multi mode' },
-    { key: 'grpcAuthority', type: 'text', optional: true, group: 'advanced', label: 'Authority', inheritFrom: 'sni' },
-    { key: 'grpcIdleTimeout', type: 'number', optional: true, group: 'advanced', label: 'Idle timeout (seconds)' },
+    { key: 'grpcServiceName', type: 'text', optional: false, scope: 'shared', labelKey: 'xrayTfGrpcServiceName' },
+    { key: 'grpcMultiMode', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfGrpcMultiMode' },
+    { key: 'grpcAuthority', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfGrpcAuthority', inheritFrom: 'sni' },
+    { key: 'grpcIdleTimeout', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfGrpcIdleTimeout' },
   ],
   kcp: [
-    { key: 'kcpMtu', type: 'number', optional: true, group: 'basic', label: 'MTU' },
-    { key: 'kcpTti', type: 'number', optional: true, group: 'basic', label: 'TTI' },
-    { key: 'kcpUplinkCapacity', type: 'number', optional: true, group: 'basic', label: 'Uplink capacity (MB)' },
-    { key: 'kcpDownlinkCapacity', type: 'number', optional: true, group: 'basic', label: 'Downlink capacity (MB)' },
-    { key: 'kcpReadBufferSize', type: 'number', optional: true, group: 'advanced', label: 'Read buffer (MB)' },
-    { key: 'kcpWriteBufferSize', type: 'number', optional: true, group: 'advanced', label: 'Write buffer (MB)' },
-    { key: 'kcpCongestion', type: 'bool', optional: true, group: 'advanced', label: 'Enable congestion' },
-    { key: 'kcpSeed', type: 'text', optional: true, group: 'advanced', label: 'Seed' },
-    { key: 'kcpHeaderType', type: 'select', optional: true, default: 'none', group: 'basic', label: 'Header type',
-      options: ['none', 'srtp', 'utp', 'wechat-video', 'wechat-audio', 'dtls', 'wireguard'] },
+    { key: 'kcpMtu', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpMtu' },
+    { key: 'kcpTti', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpTti' },
+    { key: 'kcpUplinkCapacity', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpUplinkCapacity' },
+    { key: 'kcpDownlinkCapacity', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpDownlinkCapacity' },
+    { key: 'kcpReadBufferSize', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpReadBufferSize' },
+    { key: 'kcpWriteBufferSize', type: 'number', optional: true, scope: 'shared', labelKey: 'xrayTfKcpWriteBufferSize' },
+    { key: 'kcpCongestion', type: 'bool', optional: true, scope: 'shared', labelKey: 'xrayTfKcpCongestion' },
+    { key: 'kcpSeed', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfKcpSeed' },
+    { key: 'kcpHeaderType', type: 'select', optional: true, default: 'none', scope: 'shared', labelKey: 'xrayTfKcpHeaderType', options: KCP_HEADER_TYPES },
   ],
   httpupgrade: [
-    { key: 'httpupgradeHost', type: 'text', optional: true, group: 'basic', label: 'Host', inheritFrom: 'sni' },
-    { key: 'httpupgradePath', type: 'text', optional: true, default: '/', group: 'basic', label: 'Path' },
-    { key: 'httpupgradeHeaders', type: 'json', optional: true, group: 'advanced', label: 'Extra headers (JSON map)' },
+    { key: 'httpupgradeHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfHttpupgradeHost', inheritFrom: 'sni' },
+    { key: 'httpupgradePath', type: 'text', optional: true, default: '/', scope: 'shared', labelKey: 'xrayTfHttpupgradePath' },
+    { key: 'httpupgradeHeaders', type: 'json', optional: true, scope: 'shared', labelKey: 'xrayTfHttpupgradeHeaders' },
   ],
   xhttp: [
-    { key: 'xhttpMode', type: 'select', optional: true, default: 'auto', group: 'basic', label: 'Mode',
-      options: ['auto', 'stream-one', 'stream-up', 'packet-up'] },
-    { key: 'xhttpHost', type: 'text', optional: true, group: 'basic', label: 'Host', inheritFrom: 'sni' },
-    { key: 'xhttpPath', type: 'text', optional: true, default: '/', group: 'basic', label: 'Path' },
-    { key: 'xhttpExtra', type: 'text', optional: true, group: 'advanced', label: 'Extra download path' },
-    { key: 'xhttpHeaders', type: 'json', optional: true, group: 'advanced', label: 'Extra headers (JSON map)' },
-    ...SOCKOPT_FIELDS,
+    { key: 'xhttpMode', type: 'select', optional: true, default: 'auto', scope: 'shared', labelKey: 'xrayTfXhttpMode', options: XHTTP_MODES },
+    { key: 'xhttpHost', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfXhttpHost', inheritFrom: 'sni' },
+    { key: 'xhttpPath', type: 'text', optional: true, default: '/', scope: 'shared', labelKey: 'xrayTfXhttpPath' },
+    { key: 'xhttpExtra', type: 'text', optional: true, scope: 'shared', labelKey: 'xrayTfXhttpExtra' },
+    { key: 'xhttpHeaders', type: 'json', optional: true, scope: 'shared', labelKey: 'xrayTfXhttpHeaders' },
+    ...SOCKOPT_FIELDS.filter((f) => f.key !== 'acceptProxyProtocol'),
+    { key: 'acceptProxyProtocol', type: 'bool', optional: true, scope: 'client', labelKey: 'xrayTfAcceptProxyProtocol' },
   ],
   hysteria: [
-    { key: 'hysteriaUpMbps', type: 'number', optional: true, group: 'basic', label: 'Upload (Mbps)' },
-    { key: 'hysteriaDownMbps', type: 'number', optional: true, group: 'basic', label: 'Download (Mbps)' },
+    { key: 'hysteriaUpMbps', type: 'number', optional: true, scope: 'client', labelKey: 'xrayTfHysteriaUpMbps' },
+    { key: 'hysteriaDownMbps', type: 'number', optional: true, scope: 'client', labelKey: 'xrayTfHysteriaDownMbps' },
   ],
-};
-
-const TRANSPORT_FIELD_GROUPS = {
-  basic: 'xrayTransportGroupBasic',
-  httpHeader: 'xrayTransportGroupHttpHeader',
-  advanced: 'xrayTransportGroupAdvanced',
-  socket: 'xrayTransportGroupSocket',
 };
 
 function allowedSecuritiesForNetwork(network) {
@@ -107,11 +101,20 @@ function flowSupportedForNetwork(network) {
   return network === 'tcp' || network === 'xhttp';
 }
 
+function fieldsByScope(fields, scope, types) {
+  return fields.filter((f) => {
+    const sc = f.scope || 'shared';
+    if (scope === 'client' ? sc !== 'client' : sc === 'client') return false;
+    if (types && !types.includes(f.type)) return false;
+    return true;
+  });
+}
+
 window.XrayTransportUi = {
   SSL_CERT_AUTO,
   XRAY_TRANSPORTS,
   SECURITY_BY_TRANSPORT,
-  TRANSPORT_FIELD_GROUPS,
+  TRANSPORT_FIELDS,
 
   initialState() {
     return {
@@ -119,6 +122,11 @@ window.XrayTransportUi = {
       amneziaXrayTransportSettings: {},
       amneziaXrayTransportFields: [],
       amneziaXrayTransportModalOpen: false,
+      xrayTransportProfileBankOpen: false,
+      xrayTransportProfileBankEntries: [],
+      xrayTransportProfileBankBusy: false,
+      xrayTransportProfileSaveBusy: false,
+      xrayTransportActiveProfileId: '',
     };
   },
 
@@ -145,16 +153,36 @@ window.XrayTransportUi = {
         : [];
       return fields.filter((f) => this.xrayTransportFieldVisible(f));
     },
-    xrayTransportModalGroups() {
-      const groups = ['basic', 'httpHeader', 'advanced', 'socket'];
-      return groups.filter((g) => this.xrayTransportModalFields.some((f) => f.group === g));
+    xrayTransportSharedSelectFields() {
+      return fieldsByScope(this.xrayTransportModalFields, 'shared', ['select']);
+    },
+    xrayTransportSharedInputFields() {
+      return fieldsByScope(this.xrayTransportModalFields, 'shared', ['text', 'number', 'json']);
+    },
+    xrayTransportSharedBoolFields() {
+      return fieldsByScope(this.xrayTransportModalFields, 'shared', ['bool']);
+    },
+    xrayTransportClientSelectFields() {
+      return fieldsByScope(this.xrayTransportModalFields, 'client', ['select']);
+    },
+    xrayTransportClientInputFields() {
+      return fieldsByScope(this.xrayTransportModalFields, 'client', ['text', 'number', 'json']);
+    },
+    xrayTransportClientBoolFields() {
+      return fieldsByScope(this.xrayTransportModalFields, 'client', ['bool']);
+    },
+    xrayTransportHasClientFields() {
+      return this.xrayTransportClientSelectFields.length
+        || this.xrayTransportClientInputFields.length
+        || this.xrayTransportClientBoolFields.length;
     },
   },
 
   methods: {
-    xrayTransportGroupLabel(group) {
-      const key = TRANSPORT_FIELD_GROUPS[group] || group;
-      return this.$t(key) || group;
+    xrayTransportFieldLabel(field) {
+      if (!field) return '';
+      const key = field.labelKey || field.key;
+      return this.$t(key) || field.label || key;
     },
     xrayTransportLabel(id) {
       const t = (this.amneziaXrayTransportList || []).find((x) => x.id === id);
@@ -189,9 +217,55 @@ window.XrayTransportUi = {
     closeXrayTransportModal() {
       this.amneziaXrayTransportModalOpen = false;
     },
+    async openXrayTransportProfileBank() {
+      this.xrayTransportProfileBankOpen = true;
+      this.xrayTransportProfileBankBusy = true;
+      try {
+        const net = String(this.amneziaXrayNetwork || 'tcp').toLowerCase();
+        const res = await this.api.getXrayTransportProfileBank(net);
+        this.xrayTransportProfileBankEntries = (res && res.profiles) || [];
+      } catch {
+        this.xrayTransportProfileBankEntries = [];
+      } finally {
+        this.xrayTransportProfileBankBusy = false;
+      }
+    },
+    closeXrayTransportProfileBank() {
+      this.xrayTransportProfileBankOpen = false;
+    },
+    applyXrayTransportProfile(entry) {
+      if (!entry || !entry.settings) return;
+      const settings = { ...this.amneziaXrayTransportSettings, ...entry.settings };
+      this.amneziaXrayTransportSettings = settings;
+      this.xrayTransportActiveProfileId = entry.id || '';
+      this.closeXrayTransportProfileBank();
+    },
+    async saveXrayTransportProfile() {
+      if (this.xrayTransportProfileSaveBusy) return;
+      const name = window.prompt(this.$t('xrayTransportProfileNamePrompt') || 'Profile name');
+      if (!name || !String(name).trim()) return;
+      this.xrayTransportProfileSaveBusy = true;
+      try {
+        const net = String(this.amneziaXrayNetwork || 'tcp').toLowerCase();
+        const payload = typeof this.buildXrayTransportSettingsPayload === 'function'
+          ? this.buildXrayTransportSettingsPayload()
+          : (this.amneziaXrayTransportSettings || {});
+        const res = await this.api.saveXrayTransportProfile({
+          network: net,
+          name: String(name).trim(),
+          settings: payload,
+        });
+        if (res && res.profile && res.profile.id) this.xrayTransportActiveProfileId = res.profile.id;
+      } catch (err) {
+        alert((err && err.message) || this.$t('xrayTransportProfileSaveFailed'));
+      } finally {
+        this.xrayTransportProfileSaveBusy = false;
+      }
+    },
     onXrayNetworkChange() {
       const net = String(this.amneziaXrayNetwork || 'tcp').toLowerCase();
       this.amneziaXrayTransportFields = TRANSPORT_FIELDS[net] || TRANSPORT_FIELDS.tcp;
+      this.xrayTransportActiveProfileId = '';
       const allowed = allowedSecuritiesForNetwork(net);
       if (!allowed.includes(this.amneziaXraySecurity)) {
         this.amneziaXraySecurity = allowed.includes('tls') ? 'tls' : allowed[0];

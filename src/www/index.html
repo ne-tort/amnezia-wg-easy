@@ -2083,48 +2083,115 @@
         <div v-if="amneziaXrayTransportModalOpen" class="modal-root">
           <div class="modal-backdrop" @click="closeXrayTransportModal"></div>
           <div class="modal-panel modal-panel-sm" @click.stop role="dialog" aria-modal="true">
-            <h3 class="modal-title">{{ $t('xrayTransportSettings') }} — {{ xrayTransportLabel(amneziaXrayNetwork) }}</h3>
+            <div class="modal-title-row">
+              <h3 class="modal-title modal-title-inline">{{ xrayTransportLabel(amneziaXrayNetwork) }}</h3>
+              <button type="button" class="icon-btn-sm" :title="$t('xrayTransportProfileBank')"
+                @click="openXrayTransportProfileBank">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                </svg>
+              </button>
+            </div>
             <div class="modal-body flex flex-col gap-4 max-h-[70vh] overflow-y-auto">
-              <template v-for="group in xrayTransportModalGroups">
-                <div :key="group" class="flex flex-col gap-2">
-                  <h4 class="text-sm font-medium text-gray-700 dark:text-neutral-300">{{ xrayTransportGroupLabel(group) }}</h4>
-                  <template v-for="field in xrayTransportModalFields.filter(f => f.group === group)">
-                    <div :key="field.key">
-                      <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">
-                        {{ field.label }}
-                        <span v-if="field.optional" class="text-xs text-gray-400">({{ $t('optional') }})</span>
-                      </label>
-                      <p v-if="field.inheritFrom === 'sni' && !amneziaXrayTransportSettings[field.key]"
-                        class="text-xs text-gray-500 dark:text-neutral-500 mb-1">
-                        {{ $t('xrayTransportInheritSni') }}: {{ xrayTransportInheritedValue(field) || '—' }}
-                      </p>
-                      <select v-if="field.type === 'select'" v-model="amneziaXrayTransportSettings[field.key]"
-                        class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
-                        <option v-if="field.optional" value="">{{ $t('default') || 'default' }}</option>
-                        <option v-for="opt in (field.options || [])" :key="String(opt)" :value="opt">{{ opt }}</option>
-                      </select>
-                      <label v-else-if="field.type === 'bool'" class="inline-flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" v-model="amneziaXrayTransportSettings[field.key]"
-                          class="rounded border-gray-300 dark:border-neutral-500" />
-                        <span class="text-sm">{{ field.label }}</span>
-                      </label>
-                      <textarea v-else-if="field.type === 'json'" v-model="amneziaXrayTransportSettings[field.key]" rows="3"
-                        class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono text-sm"
-                        :placeholder="'{}'"></textarea>
-                      <input v-else :type="field.type === 'number' ? 'number' : 'text'"
-                        v-model="amneziaXrayTransportSettings[field.key]"
-                        class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
-                        :placeholder="field.placeholder || field.default || ''" />
-                    </div>
-                  </template>
+              <template v-if="xrayTransportSharedSelectFields.length">
+                <div v-for="field in xrayTransportSharedSelectFields" :key="field.key" class="flex flex-col gap-1">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ xrayTransportFieldLabel(field) }}</label>
+                  <select v-model="amneziaXrayTransportSettings[field.key]"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                    <option v-if="field.optional" value="">{{ $t('xrayTfDefault') }}</option>
+                    <option v-for="opt in (field.options || [])" :key="String(opt)" :value="opt">{{ opt }}</option>
+                  </select>
                 </div>
               </template>
+              <template v-if="xrayTransportSharedBoolFields.length">
+                <div class="panel-check-row">
+                  <label v-for="field in xrayTransportSharedBoolFields" :key="field.key" class="panel-check">
+                    <input type="checkbox" v-model="amneziaXrayTransportSettings[field.key]" class="panel-check-input" />
+                    <span class="panel-check-box" aria-hidden="true"></span>
+                    <span class="panel-check-label">{{ xrayTransportFieldLabel(field) }}</span>
+                  </label>
+                </div>
+              </template>
+              <template v-if="xrayTransportSharedInputFields.length">
+                <div v-for="field in xrayTransportSharedInputFields" :key="field.key" class="flex flex-col gap-1">
+                  <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ xrayTransportFieldLabel(field) }}</label>
+                  <p v-if="field.inheritFrom === 'sni' && !amneziaXrayTransportSettings[field.key]"
+                    class="text-xs text-gray-500 dark:text-neutral-500">
+                    {{ $t('xrayTransportInheritSni') }}: {{ xrayTransportInheritedValue(field) || '—' }}
+                  </p>
+                  <textarea v-if="field.type === 'json'" v-model="amneziaXrayTransportSettings[field.key]" rows="3"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500 font-mono text-sm"
+                    placeholder="{}"></textarea>
+                  <input v-else :type="field.type === 'number' ? 'number' : 'text'"
+                    v-model="amneziaXrayTransportSettings[field.key]"
+                    class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500"
+                    :placeholder="field.default || ''" />
+                </div>
+              </template>
+              <div v-if="xrayTransportHasClientFields" class="flex flex-col gap-3 pt-2 border-t border-gray-200 dark:border-neutral-600">
+                <p class="text-sm font-medium text-gray-700 dark:text-neutral-300">{{ $t('xrayTransportClientBlock') }}</p>
+                <template v-if="xrayTransportClientSelectFields.length">
+                  <div v-for="field in xrayTransportClientSelectFields" :key="'c-' + field.key" class="flex flex-col gap-1">
+                    <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ xrayTransportFieldLabel(field) }}</label>
+                    <select v-model="amneziaXrayTransportSettings[field.key]"
+                      class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
+                      <option v-if="field.optional" value="">{{ $t('xrayTfDefault') }}</option>
+                      <option v-for="opt in (field.options || [])" :key="String(opt)" :value="opt">{{ opt }}</option>
+                    </select>
+                  </div>
+                </template>
+                <template v-if="xrayTransportClientBoolFields.length">
+                  <div class="panel-check-row">
+                    <label v-for="field in xrayTransportClientBoolFields" :key="'cb-' + field.key" class="panel-check">
+                      <input type="checkbox" v-model="amneziaXrayTransportSettings[field.key]" class="panel-check-input" />
+                      <span class="panel-check-box" aria-hidden="true"></span>
+                      <span class="panel-check-label">{{ xrayTransportFieldLabel(field) }}</span>
+                    </label>
+                  </div>
+                </template>
+                <template v-if="xrayTransportClientInputFields.length">
+                  <div v-for="field in xrayTransportClientInputFields" :key="'ci-' + field.key" class="flex flex-col gap-1">
+                    <label class="block text-sm text-gray-600 dark:text-neutral-400">{{ xrayTransportFieldLabel(field) }}</label>
+                    <input :type="field.type === 'number' ? 'number' : 'text'"
+                      v-model="amneziaXrayTransportSettings[field.key]"
+                      class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500" />
+                  </div>
+                </template>
+              </div>
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer flex-wrap">
               <button type="button" @click="closeXrayTransportModal"
-                class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('xrayInstallConfirm') }}</button>
+                class="bg-red-800 hover:bg-red-700 text-white py-2 px-4 rounded transition">{{ $t('xrayTransportOk') }}</button>
+              <button type="button" @click="saveXrayTransportProfile" :disabled="xrayTransportProfileSaveBusy"
+                class="bg-gray-600 hover:bg-gray-500 disabled:opacity-50 text-white py-2 px-4 rounded transition">{{ $t('xrayTransportProfileSave') }}</button>
               <button type="button" @click="closeXrayTransportModal"
                 class="bg-gray-200 dark:bg-neutral-600 text-gray-800 dark:text-neutral-200 py-2 px-4 rounded transition">{{ $t('xrayInstallCancel') }}</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Xray transport profile bank -->
+        <div v-if="xrayTransportProfileBankOpen" class="modal-root modal-root-over">
+          <div class="modal-backdrop" @click="closeXrayTransportProfileBank"></div>
+          <div class="modal-panel modal-panel-dns" @click.stop role="dialog" aria-modal="true">
+            <div class="modal-title-row">
+              <h3 class="modal-title modal-title-inline">{{ $t('xrayTransportProfileBank') }}</h3>
+              <button type="button" class="icon-btn-sm" @click="closeXrayTransportProfileBank">
+                <svg class="w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div class="modal-body">
+              <p v-if="xrayTransportProfileBankBusy" class="text-sm text-gray-500 dark:text-neutral-400 px-1 py-2">{{ $t('hysteriaMasqueradeLoading') }}</p>
+              <ul v-else-if="xrayTransportProfileBankEntries.length" class="dns-profile-list">
+                <li v-for="entry in xrayTransportProfileBankEntries" :key="entry.id">
+                  <button type="button" class="dns-profile-item" @click="applyXrayTransportProfile(entry)">
+                    <span class="masquerade-bank-domain">{{ entry.name }}</span>
+                  </button>
+                </li>
+              </ul>
+              <p v-else class="text-sm text-gray-500 dark:text-neutral-400 px-1 py-3">{{ $t('xrayTransportProfileBankEmpty') }}</p>
             </div>
           </div>
         </div>
@@ -3281,7 +3348,7 @@
   <script src="./js/api.js?v=20"></script>
   <script src="./js/i18n.js?v=20"></script>
   <script src="./js/sidecarPanels.js?v=10"></script>
-  <script src="./js/xrayTransportModals.js?v=1"></script>
+  <script src="./js/xrayTransportModals.js?v=2"></script>
   <script src="./js/sslManagerPanel.js?v=6"></script>
   <script src="./js/app.js?v=22"></script>
 </body>

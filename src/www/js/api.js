@@ -625,6 +625,15 @@ class API {
     return this.call({ method: 'get', path: '/amnezia-hysteria/masquerade-bank' });
   }
 
+  async getXrayTransportProfileBank(network) {
+    const q = network ? `?network=${encodeURIComponent(network)}` : '';
+    return this.call({ method: 'get', path: `/amnezia-xray/transport-profiles${q}` });
+  }
+
+  async saveXrayTransportProfile(body = {}) {
+    return this.call({ method: 'post', path: '/amnezia-xray/transport-profiles', body });
+  }
+
   async validatePortPlan({ service, ...fields } = {}) {
     return this.call({
       method: 'post',
