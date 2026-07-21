@@ -1409,7 +1409,7 @@ module.exports = class Server {
         const body = await readBody(event).catch(() => ({}));
         const service = body && body.service;
         if (!service) throw httpError(400, 'service is required');
-        const result = require('./sidecarValidate').validateInstall(String(service), body || {});
+        const result = await require('./sidecarValidate').validateInstallLive(String(service), body || {});
         if (!result.ok) {
           return { ok: false, fieldErrors: result.fieldErrors, code: result.code };
         }

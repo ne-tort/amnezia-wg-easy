@@ -769,7 +769,7 @@ async function probeListenInsideContainer(port) {
   const p = String(port);
   const ss = await runCmd('docker', [
     'exec', CONTAINER_NAME, 'sh', '-c',
-    `(command -v ss >/dev/null && ss -uln | grep -q ':${p} ') || (command -v netstat >/dev/null && netstat -uln | grep -q ':${p} ')`,
+    `(command -v ss >/dev/null && ss -uln | grep -Eq '[:.]${p}([[:space:]]|$)') || (command -v netstat >/dev/null && netstat -uln | grep -Eq '[:.]${p}([[:space:]]|$)')`,
   ], { timeout: 8_000 });
   if (ss.ok) return { ok: true, via: 'ss/netstat', out: 'listening' };
 
@@ -788,30 +788,21 @@ async function runSmoke() {
   const containerUp = await dockerContainerRunning();
   let versionOk = false;
   let versionOut = '';
-  let configTest = { ok: false, via: 'skip', out: 'container down' };
   let dial = { ok: false, via: 'skip', out: 'container down' };
   const port = LISTEN_PORT;
   if (containerUp) {
     const ver = await runCmd('docker', ['exec', CONTAINER_NAME, 'hysteria', 'version'], { timeout: 10_000 });
     versionOk = ver.ok;
     versionOut = (ver.stdout || ver.stderr || '').trim().slice(0, 120);
-    const test = await runCmd('docker', [
-      'exec', CONTAINER_NAME, 'hysteria', 'server', '-c', '/opt/amnezia/awg/hysteria/server.yaml', '--test',
-    ], { timeout: 15_000 });
-    configTest = {
-      ok: test.ok,
-      via: 'hysteria-test',
-      out: (test.stderr || test.stdout || (test.ok ? 'ok' : 'failed')).trim().slice(0, 160),
-    };
+    // Hysteria 2 has no `server --test`; treat process + UDP listen as health.
     dial = await probeListenInsideContainer(port);
   }
-  const ok = containerUp && versionOk && configTest.ok && dial.ok;
+  const ok = containerUp && versionOk && dial.ok;
   lastSmoke = {
     ok,
     containerUp,
     versionOk,
     versionOut,
-    configTest,
     dial,
     port,
     at: Date.now(),
@@ -912,12 +903,6 @@ async function syncClientsFromDb() {
   writeServerYaml(obj);
 
   if (await dockerContainerRunning()) {
-    const test = await runCmd('docker', [
-      'exec', CONTAINER_NAME, 'hysteria', 'server', '-c', '/opt/amnezia/awg/hysteria/server.yaml', '--test',
-    ], { timeout: 15_000 });
-    if (!test.ok) {
-      throw new Error((test.stderr || test.stdout || 'hysteria config test failed').trim().slice(0, 300));
-    }
     await reloadHysteriaConfig();
   }
   return { ok: true, clients: enabled.length };
@@ -997,7 +982,6 @@ async function forceCleanup() {
 
 async function enableInternal(opts = {}) {
   setPhase('installing');
-  setDesired(true);
   const deadline = Date.now() + ENABLE_TIMEOUT_MS;
   try {
     const sidecarValidate = require('./sidecarValidate');
@@ -1010,8 +994,15 @@ async function enableInternal(opts = {}) {
         fieldErrors: validation.fieldErrors,
       });
     }
-    const { resolveOptsSslCert } = require('./sidecarAutoCert');
-    opts = await resolveOptsSslCert(opts, 'hysteria');
+    const portPlan = require('./portPlan');
+    const occ = portPlan.validateOccupancyConflicts('hysteria', opts);
+    if (!occ.ok) {
+      throw Object.assign(new Error(Object.values(occ.fieldErrors || {}).join('; ') || 'Port conflict'), {
+        status: 409,
+        code: occ.code || 'HOST_UDP_PORT_BUSY',
+        fieldErrors: occ.fieldErrors,
+      });
+    }
 
     const publicPort = opts.publicPort != null
       ? parseInt(String(opts.publicPort).trim(), 10)
@@ -1022,6 +1013,16 @@ async function enableInternal(opts = {}) {
         code: 'HYSTERIA_BAD_PUBLIC_PORT',
       });
     }
+
+    const coreEarly = opts.core != null ? String(opts.core).trim().toLowerCase() : getCore();
+    await portPlan.assertHostUdpPortsAvailable([publicPort], {
+      owner: coreEarly === 'xray' ? 'xray' : 'hysteria',
+    });
+
+    setDesired(true);
+    const { resolveOptsSslCert } = require('./sidecarAutoCert');
+    opts = await resolveOptsSslCert(opts, 'hysteria');
+
     setSetting(PUBLIC_PORT_KEY, String(publicPort));
 
     const sslManager = require('./sslManager');
@@ -1181,11 +1182,7 @@ async function enableInternal(opts = {}) {
       );
     }
 
-    const portPlan = require('./portPlan');
-    await portPlan.assertHostUdpPortsAvailable([publicPort], {
-      owner: getCore() === 'xray' ? 'xray' : 'hysteria',
-    });
-
+    // UDP occupancy already asserted before setDesired
     const enabled = ensureClientPasswords();
     fs.mkdirSync(hysteriaHostDir(), { recursive: true });
 
@@ -1281,7 +1278,7 @@ async function enableInternal(opts = {}) {
       const smoke = await runSmoke();
       throw Object.assign(
         new Error(
-          `Hysteria did not become ready in time (listen=${smoke.dial && smoke.dial.out}; configTest=${smoke.configTest && smoke.configTest.out}; versionOk=${smoke.versionOk})`,
+          `Hysteria did not become ready in time (listen=${smoke.dial && smoke.dial.out}; versionOk=${smoke.versionOk})`,
         ),
         { code: 'HYSTERIA_TIMEOUT', status: 504 },
       );

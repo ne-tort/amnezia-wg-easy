@@ -387,18 +387,68 @@ function validateXray(body = {}) {
  * @param {Record<string, unknown>} body
  */
 function validateInstall(service, body = {}) {
+  let result;
   switch (service) {
-    case 'mieru': return validateMieru(body);
-    case 'hysteria': return validateHysteria(body);
-    case 'naive': return validateNaive(body);
-    case 'xray': return validateXray(body);
+    case 'mieru': result = validateMieru(body); break;
+    case 'hysteria': result = validateHysteria(body); break;
+    case 'naive': result = validateNaive(body); break;
+    case 'xray': result = validateXray(body); break;
     default:
       return { ok: false, fieldErrors: { _form: `Unknown service ${service}` } };
   }
+  if (!result.ok) return result;
+  const occ = portPlan.validateOccupancyConflicts(service, body || {});
+  if (!occ.ok) {
+    return {
+      ok: false,
+      code: occ.code,
+      fieldErrors: occ.fieldErrors,
+      occupancy: { proposed: occ.proposed, existing: occ.existing },
+    };
+  }
+  return {
+    ...result,
+    occupancy: { proposed: occ.proposed, existing: occ.existing },
+  };
+}
+
+/**
+ * Async follow-up: live host TCP/UDP bind checks (after sync validateInstall).
+ */
+async function validateInstallLive(service, body = {}) {
+  const sync = validateInstall(service, body);
+  if (!sync.ok) return sync;
+  const proposed = (sync.occupancy && sync.occupancy.proposed)
+    || portPlan.proposedClaimsForInstall(service, body);
+  const udpPorts = proposed.filter((c) => c.proto === 'udp').map((c) => c.port);
+  const tcpPorts = proposed.filter((c) => c.proto === 'tcp' && !c.demux).map((c) => c.port);
+  try {
+    if (udpPorts.length) {
+      const owner = service === 'hysteria' ? 'hysteria'
+        : (service === 'naive' ? 'naive'
+          : (service === 'mieru' ? 'mieru'
+            : (service === 'xray' ? 'xray' : 'any')));
+      await portPlan.assertHostUdpPortsAvailable(udpPorts, { owner });
+    }
+    if (tcpPorts.length) {
+      await portPlan.assertHostPortsAvailable(tcpPorts, { allowNginx: true });
+    }
+  } catch (err) {
+    const field = (err && err.code === 'SNI_CONFLICT') ? 'sni' : 'publicPort';
+    return {
+      ok: false,
+      code: (err && err.code) || 'HOST_PORT_BUSY',
+      fieldErrors: (err && err.fieldErrors) || {
+        [field]: (err && err.message) || 'Port is busy',
+      },
+    };
+  }
+  return sync;
 }
 
 module.exports = {
   validateInstall,
+  validateInstallLive,
   validateMieru,
   validateNaive,
   validateHysteria,

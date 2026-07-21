@@ -739,7 +739,6 @@ async function forceCleanup() {
 
 async function enableInternal(opts = {}) {
   setPhase('installing');
-  setDesired(true);
   const deadline = Date.now() + ENABLE_TIMEOUT_MS;
   try {
     const sidecarValidate = require('./sidecarValidate');
@@ -752,6 +751,17 @@ async function enableInternal(opts = {}) {
         fieldErrors: validation.fieldErrors,
       });
     }
+    const portPlanEarly = require('./portPlan');
+    const occ = portPlanEarly.validateOccupancyConflicts('naive', opts);
+    if (!occ.ok) {
+      throw Object.assign(new Error(Object.values(occ.fieldErrors || {}).join('; ') || 'Port conflict'), {
+        status: 409,
+        code: occ.code || 'HOST_PORT_BUSY',
+        fieldErrors: occ.fieldErrors,
+      });
+    }
+
+    setDesired(true);
 
     const tlsMaterial = require('./tlsMaterial');
     const sslManager = require('./sslManager');

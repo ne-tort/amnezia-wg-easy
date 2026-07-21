@@ -1143,6 +1143,7 @@ async function applyPlanUnlocked() {
   } else {
     await reloadNginx();
   }
+  persistOccupancySnapshot();
   return { ok: true, plan, recreated: needRecreate };
 }
 
@@ -1282,6 +1283,230 @@ function collectServiceHostnames(svc) {
   return out;
 }
 
+const OCCUPANCY_KEY = 'sidecar_port_occupancy';
+
+function serviceFamily(id) {
+  const s = String(id || '');
+  if (s === 'hysteria' || s.startsWith('hysteria')) return 'hysteria';
+  if (s === 'naive' || s.startsWith('naive')) return 'naive';
+  if (s.startsWith('mieru')) return 'mieru';
+  if (s === 'xray') return 'xray';
+  if (s === 'panel' || s === 'mirror') return s;
+  return s;
+}
+
+/**
+ * Snapshot of TCP/UDP port + SNI claims from app_settings (desired sidecars).
+ * @returns {{ id: string, proto: 'tcp'|'udp', port: number, sni: string, demux: boolean }[]}
+ */
+function listOccupancyClaims() {
+  const plan = computePlan();
+  /** @type {{ id: string, proto: 'tcp'|'udp', port: number, sni: string, demux: boolean }[]} */
+  const claims = [];
+
+  for (const s of collectServices()) {
+    if (!s.publicPort) continue;
+    const mode = plan.modes[s.id];
+    claims.push({
+      id: s.id,
+      proto: 'tcp',
+      port: s.publicPort,
+      sni: String(s.sni || '').toLowerCase(),
+      demux: mode === 'demux',
+    });
+  }
+  if (plan.mirrorExclusive && plan.mirrorExclusive.hostPort) {
+    claims.push({
+      id: 'mirror',
+      proto: 'tcp',
+      port: plan.mirrorExclusive.hostPort,
+      sni: '',
+      demux: false,
+    });
+  }
+  for (const u of plan.udpDirect || []) {
+    if (!u.publicPort) continue;
+    claims.push({
+      id: u.id,
+      proto: 'udp',
+      port: u.publicPort,
+      sni: '',
+      demux: false,
+    });
+  }
+  return claims;
+}
+
+function persistOccupancySnapshot() {
+  const claims = listOccupancyClaims();
+  try {
+    getDb().appSettings.set(OCCUPANCY_KEY, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      claims,
+    }));
+  } catch {
+    /* ignore */
+  }
+  return claims;
+}
+
+function portWouldDemux(publicPort, excludeId) {
+  const pub = parsePort(publicPort, 0);
+  if (!pub) return false;
+  if (pub === panelPublicPort()) return true;
+  const mirror = mirrorPublicPort();
+  if (mirror && pub === mirror) return true;
+  for (const s of collectServices()) {
+    if (excludeId && serviceFamily(s.id) === serviceFamily(excludeId)) continue;
+    if (s.publicPort === pub) return true;
+  }
+  return false;
+}
+
+function boolOpt(body, camel, snake, defaultValue) {
+  const raw = body && (body[camel] != null ? body[camel] : body[snake]);
+  if (raw == null) return defaultValue;
+  return raw === true || raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on';
+}
+
+/**
+ * Proposed claims for an install body (before settings are written).
+ */
+function proposedClaimsForInstall(service, body = {}) {
+  const svc = String(service || '').toLowerCase();
+  /** @type {{ id: string, proto: 'tcp'|'udp', port: number, sni: string, demux: boolean }[]} */
+  const out = [];
+
+  if (svc === 'hysteria') {
+    const port = parsePort(body.publicPort != null ? body.publicPort : body.public_port, 443);
+    out.push({ id: 'hysteria', proto: 'udp', port, sni: '', demux: false });
+    return out;
+  }
+
+  if (svc === 'naive') {
+    const port = parsePort(body.publicPort != null ? body.publicPort : body.public_port, 443);
+    const tcpOn = boolOpt(body, 'enableTcp', 'tcpEnabled', true);
+    const quicOn = boolOpt(body, 'enableQuic', 'quicEnabled', false);
+    let sni = String(body.sni || '').trim().toLowerCase();
+    const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
+    if (sslId && sslId !== '__auto__') {
+      try {
+        const row = require('./sslManager').getRaw(sslId);
+        if (row) sni = String(row.sni || row.domain || sni).trim().toLowerCase();
+      } catch { /* ignore */ }
+    }
+    if (tcpOn) {
+      const demux = portWouldDemux(port, 'naive');
+      out.push({ id: 'naive', proto: 'tcp', port, sni, demux });
+    }
+    if (quicOn) {
+      out.push({ id: 'naive-quic', proto: 'udp', port, sni: '', demux: false });
+    }
+    return out;
+  }
+
+  if (svc === 'mieru') {
+    const tcpOn = boolOpt(body, 'enableTcp', 'enable_tcp', true);
+    const udpOn = boolOpt(body, 'enableUdp', 'enable_udp', false);
+    if (tcpOn) {
+      const port = parsePort(
+        body.tcpPublicPort != null ? body.tcpPublicPort : (body.publicPort != null ? body.publicPort : 3080),
+        3080,
+      );
+      out.push({ id: 'mieru-tcp', proto: 'tcp', port, sni: '', demux: false });
+    }
+    if (udpOn) {
+      const port = parsePort(
+        body.udpPublicPort != null ? body.udpPublicPort : (body.publicPort != null ? body.publicPort : 3080),
+        3080,
+      );
+      out.push({ id: 'mieru-udp', proto: 'udp', port, sni: '', demux: false });
+    }
+    return out;
+  }
+
+  if (svc === 'xray') {
+    const port = parsePort(body.publicPort != null ? body.publicPort : body.public_port, 443);
+    let sni = String(body.sni || '').trim().toLowerCase();
+    const sslId = String(body.sslCertId || body.ssl_cert_id || '').trim();
+    if (sslId && sslId !== '__auto__') {
+      try {
+        const row = require('./sslManager').getRaw(sslId);
+        if (row) sni = String(row.sni || row.domain || sni).trim().toLowerCase();
+      } catch { /* ignore */ }
+    }
+    const network = String(body.network || 'tcp').toLowerCase();
+    const isUdp = network === 'kcp' || network === 'mkcp' || network === 'hysteria';
+    if (isUdp) {
+      out.push({ id: 'xray', proto: 'udp', port, sni: '', demux: false });
+    } else {
+      const demux = portWouldDemux(port, 'xray');
+      out.push({ id: 'xray', proto: 'tcp', port, sni, demux });
+    }
+    return out;
+  }
+
+  return out;
+}
+
+/**
+ * Sync occupancy conflict check against desired sidecars in app_settings.
+ * TCP+UDP on the same number are allowed. Demux peers may share TCP if SNI differs.
+ */
+function validateOccupancyConflicts(service, body = {}) {
+  const proposed = proposedClaimsForInstall(service, body);
+  if (!proposed.length) return { ok: true, proposed, existing: listOccupancyClaims() };
+
+  const family = serviceFamily(service);
+  const existing = listOccupancyClaims().filter((c) => serviceFamily(c.id) !== family);
+
+  for (const p of proposed) {
+    for (const e of existing) {
+      if (p.port !== e.port || p.proto !== e.proto) continue;
+
+      if (p.proto === 'udp') {
+        return {
+          ok: false,
+          code: 'HOST_UDP_PORT_BUSY',
+          fieldErrors: {
+            publicPort: `UDP ${p.port} already used by ${e.id}`,
+          },
+          proposed,
+          existing,
+        };
+      }
+
+      // TCP
+      if (p.demux && e.demux) {
+        if (p.sni && e.sni && p.sni === e.sni) {
+          return {
+            ok: false,
+            code: 'SNI_CONFLICT',
+            fieldErrors: {
+              sni: `SNI «${p.sni}» already used by ${e.id} on TCP ${p.port} (demux)`,
+            },
+            proposed,
+            existing,
+          };
+        }
+        continue;
+      }
+
+      return {
+        ok: false,
+        code: 'HOST_TCP_PORT_BUSY',
+        fieldErrors: {
+          publicPort: `TCP ${p.port} already used by ${e.id}${e.demux ? ' (demux)' : ''}`,
+        },
+        proposed,
+        existing,
+      };
+    }
+  }
+
+  return { ok: true, proposed, existing };
+}
+
 /**
  * SNI conflict when another demux peer already uses the same SNI (or same SSL cert host)
  * on the same public TCP port.
@@ -1356,6 +1581,10 @@ module.exports = {
   assertSniConflict,
   assertHostPortsAvailable,
   assertHostUdpPortsAvailable,
+  listOccupancyClaims,
+  persistOccupancySnapshot,
+  proposedClaimsForInstall,
+  validateOccupancyConflicts,
   isHostTcpPortInUse,
   isHostUdpPortInUse,
   collectUdpDirectServices,
