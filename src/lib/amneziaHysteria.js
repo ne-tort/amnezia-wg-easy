@@ -59,7 +59,8 @@ const DEFAULT_MASQUERADE = 'https://www.sbb.ch/';
 const MIRROR_BANK_SEED = path.join(__dirname, '..', '..', 'config', 'mirror-bank.seed.json');
 const MIRROR_BANK_SEED_IN_IMAGE = path.join(__dirname, '..', 'config', 'mirror-bank.seed.json');
 
-const ENABLE_TIMEOUT_MS = 180_000;
+const ENABLE_TIMEOUT_MS = 300_000;
+const SMOKE_WAIT_MS = 90_000;
 const RECONCILE_INTERVAL_MS = 30_000;
 
 /** @type {'off'|'installing'|'running'|'degraded'|'removing'|'error'} */
@@ -413,6 +414,28 @@ async function dockerContainerRunning() {
     'inspect', '-f', '{{.State.Running}}', CONTAINER_NAME,
   ]);
   return r.ok && r.stdout.trim() === 'true';
+}
+
+async function dockerContainerStatus() {
+  const r = await runCmd('docker', [
+    'inspect', '-f', '{{.State.Status}}', CONTAINER_NAME,
+  ]);
+  if (!r.ok) return '';
+  return String(r.stdout || '').trim().toLowerCase();
+}
+
+/** docker run -d can leave the container in "created" until the port bind finishes — start/wait. */
+async function waitForHysteriaRunning(timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const status = await dockerContainerStatus();
+    if (status === 'running') return true;
+    if (status === 'created' || status === 'exited' || status === 'dead') {
+      await runCmd('docker', ['start', CONTAINER_NAME], { timeout: 30_000 });
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return dockerContainerRunning();
 }
 
 async function resolveAwgVolumeName() {
@@ -773,12 +796,7 @@ function buildAmneziaHysteriaContainer(client) {
 
 async function probeListenInsideContainer(port) {
   const p = String(port);
-  const ss = await runCmd('docker', [
-    'exec', CONTAINER_NAME, 'sh', '-c',
-    `(command -v ss >/dev/null && ss -uln | grep -Eq '[:.]${p}([[:space:]]|$)') || (command -v netstat >/dev/null && netstat -uln | grep -Eq '[:.]${p}([[:space:]]|$)')`,
-  ], { timeout: 8_000 });
-  if (ss.ok) return { ok: true, via: 'ss/netstat', out: 'listening' };
-
+  // Host-side publish map is reliable even when the image has no ss/netstat.
   const inspect = await runCmd('docker', [
     'inspect', '-f',
     `{{range $p, $conf := .NetworkSettings.Ports}}{{if eq $p "${p}/udp"}}{{(index $conf 0).HostPort}}{{end}}{{end}}`,
@@ -787,7 +805,20 @@ async function probeListenInsideContainer(port) {
   if (inspect.ok && inspect.stdout.trim()) {
     return { ok: true, via: 'docker-ports', out: inspect.stdout.trim() };
   }
-  return { ok: false, via: 'probe', out: (ss.stderr || ss.stdout || 'not listening').trim().slice(0, 160) };
+
+  const ss = await runCmd('docker', [
+    'exec', CONTAINER_NAME, 'sh', '-c',
+    `(command -v ss >/dev/null && ss -uln | grep -Eq '[:.]${p}([[:space:]]|$)') || (command -v netstat >/dev/null && netstat -uln | grep -Eq '[:.]${p}([[:space:]]|$)')`,
+  ], { timeout: 8_000 });
+  if (ss.ok) return { ok: true, via: 'ss/netstat', out: 'listening' };
+
+  const status = await dockerContainerStatus();
+  if (status === 'running') {
+    const ver = await runCmd('docker', ['exec', CONTAINER_NAME, 'hysteria', 'version'], { timeout: 8_000 });
+    if (ver.ok) return { ok: true, via: 'process', out: 'hysteria running (udp)' };
+  }
+
+  return { ok: false, via: 'probe', out: (ss.stderr || ss.stdout || status || 'not listening').trim().slice(0, 160) };
 }
 
 async function runSmoke() {
@@ -817,8 +848,12 @@ async function runSmoke() {
 }
 
 async function removeHysteriaContainer() {
-  await runCmd('docker', ['stop', CONTAINER_NAME]);
-  await runCmd('docker', ['rm', '-fv', CONTAINER_NAME]);
+  await runCmd('docker', ['stop', CONTAINER_NAME], { timeout: 30_000 });
+  await runCmd('docker', ['rm', '-fv', CONTAINER_NAME], { timeout: 30_000 });
+  const left = await runCmd('docker', ['inspect', CONTAINER_NAME], { timeout: 5_000 });
+  if (left.ok) {
+    throw new Error('failed to remove amnezia-hysteria container');
+  }
 }
 
 async function containerManagedByUs() {
@@ -854,6 +889,7 @@ async function ensureHysteriaContainer() {
   if (running && await containerManagedByUs()) {
     const curPub = await inspectContainerPublicPort();
     if (curPub === publicPort) {
+      await waitForHysteriaRunning(30_000);
       return { reused: true };
     }
   }
@@ -881,6 +917,11 @@ async function ensureHysteriaContainer() {
   const run = await runCmd('docker', runArgs, { timeout: 60_000 });
   if (!run.ok) {
     throw new Error(run.stderr.trim() || 'docker run amnezia-hysteria failed');
+  }
+  const up = await waitForHysteriaRunning(60_000);
+  if (!up) {
+    const status = await dockerContainerStatus();
+    throw new Error(`amnezia-hysteria did not reach running state (status=${status || 'missing'})`);
   }
   return { reused: false };
 }
@@ -1264,7 +1305,15 @@ async function enableInternal(opts = {}) {
     }
 
     let ready = false;
-    while (Date.now() < deadline) {
+    const smokeDeadline = Date.now() + SMOKE_WAIT_MS;
+    while (Date.now() < smokeDeadline) {
+      if (Date.now() > deadline) {
+        throw Object.assign(new Error('Hysteria enable timed out during setup'), {
+          status: 504,
+          code: 'HYSTERIA_TIMEOUT',
+        });
+      }
+      await waitForHysteriaRunning(5_000);
       if (await dockerContainerRunning()) {
         const smoke = await runSmoke();
         if (smoke.ok) {
@@ -1445,6 +1494,7 @@ async function reconcile() {
     } else {
       await ensureHysteriaContainer();
     }
+    await waitForHysteriaRunning(30_000);
     await require('./portPlan').applyPlan();
     const smoke = await runSmoke();
     if (smoke.ok) setPhase('running');

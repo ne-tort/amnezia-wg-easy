@@ -723,7 +723,7 @@ window.SidecarPanels = {
             }
           }
         }
-        await this.withAmneziaDnsTimeout(this.api.enableAmneziaHysteria(body), 180000);
+        await this.withAmneziaDnsTimeout(this.api.enableAmneziaHysteria(body), 300000);
         await this.refreshAmneziaHysteriaStatus();
         await this.refresh();
       } catch (err) {
