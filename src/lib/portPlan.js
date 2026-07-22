@@ -1094,6 +1094,48 @@ function portsNeedRecreate(plan) {
   return desiredNginxHostPorts(plan).filter((p) => p !== 80);
 }
 
+/**
+ * Decide whether nginx must be recreated for the plan.
+ * Host port alone is ambiguous when PANEL_HTTPS_PORT===443:
+ *   demux leftover → 443:443 (container listens stream/empty on :443)
+ *   panel exclusive → 443:8443 (HTTP TLS on :8443)
+ * Without checking container-side ports, disable-Xray / redeploy leaves HTTPS dead.
+ *
+ * @param {ReturnType<typeof computePlan>} plan
+ * @param {number[]} hostPorts
+ * @param {number[]} containerPorts  Ports map keys inside the container (80, 443, 8443, …)
+ */
+function nginxPublishNeedsRecreate(plan, hostPorts, containerPorts) {
+  const current = Array.isArray(hostPorts) ? hostPorts : [];
+  const container = Array.isArray(containerPorts) ? containerPorts : [];
+  const want = portsNeedRecreate(plan);
+  const wantSet = new Set(want);
+
+  for (const p of want) {
+    if (!current.includes(p)) return true;
+  }
+  // Extra demux/old ports published that we no longer want
+  for (const p of current) {
+    if (p === 80) continue;
+    if (plan.panelExclusive && p === plan.panelExclusive.hostPort) continue;
+    if (plan.demuxPorts.some((d) => d.port === p)) continue;
+    if (!wantSet.has(p)) return true;
+  }
+  if (plan.panelExclusive && !current.includes(plan.panelExclusive.hostPort)) {
+    return true;
+  }
+  // Exclusive panel TLS must publish container :8443 (not leftover demux :443→:443).
+  if (plan.panelExclusive && !container.includes(PANEL_TLS_INTERNAL)) {
+    return true;
+  }
+  // Panel joined demux on its public port: must publish demux listen (443→443),
+  // not the old exclusive mapping (host→8443).
+  if (!plan.panelExclusive && plan.demuxPorts.some((d) => d.port === panelPublicPort())) {
+    if (container.includes(PANEL_TLS_INTERNAL)) return true;
+  }
+  return false;
+}
+
 /** Serialize applyPlan — concurrent recreate causes nginx name Conflict. */
 let applyPlanChain = Promise.resolve();
 
@@ -1133,34 +1175,7 @@ async function applyPlanUnlocked() {
 
   const current = await nginxHostTcpPorts();
   const containerPorts = await nginxContainerTcpPorts();
-  const want = portsNeedRecreate(plan);
-  const wantSet = new Set(want);
-
-  let needRecreate = false;
-  for (const p of want) {
-    if (!current.includes(p)) needRecreate = true;
-  }
-  // Extra demux ports published that we no longer want
-  for (const p of current) {
-    if (p === 80) continue;
-    if (plan.panelExclusive && p === plan.panelExclusive.hostPort) continue;
-    if (plan.demuxPorts.some((d) => d.port === p)) continue;
-    // leftover demux/old 443
-    if (!plan.panelExclusive || p !== plan.panelExclusive.hostPort) {
-      if (!wantSet.has(p)) needRecreate = true;
-    }
-  }
-  if (plan.panelExclusive && !current.includes(plan.panelExclusive.hostPort)) {
-    needRecreate = true;
-  }
-  // Panel joined demux on its public port: must publish demux listen (443→443),
-  // not the old exclusive mapping (host→8443). Host port alone is ambiguous when
-  // PANEL_HTTPS_PORT===443 — detect leftover container 8443 instead.
-  if (!plan.panelExclusive && plan.demuxPorts.some((d) => d.port === panelPublicPort())) {
-    if (containerPorts.includes(PANEL_TLS_INTERNAL)) {
-      needRecreate = true;
-    }
-  }
+  const needRecreate = nginxPublishNeedsRecreate(plan, current, containerPorts);
 
   if (needRecreate) {
     await recreateNginxForPlan(plan);
@@ -1627,6 +1642,7 @@ module.exports = {
   getStatusSummary,
   writeStreamConfigs,
   writeComposePortsFile,
+  nginxPublishNeedsRecreate,
   composePortsPath,
   syncNginxStreamDir,
   panelPublicPort,

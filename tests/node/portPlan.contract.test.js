@@ -345,3 +345,37 @@ test('computePlan: mirror stub + xray direct on same port → demux with mirror 
   assert.equal(demux.defaultUpstream, '127.0.0.1:8444');
   assert.ok(demux.routes.some((r) => r.service === 'xray' && r.sni === 'vpn.example.com'));
 });
+
+test('nginxPublishNeedsRecreate: demux leftover 443→443 must become exclusive 443→8443', () => {
+  const { portPlan } = loadPortPlan({ PANEL_HTTPS_PORT: '443', PANEL_DOMAIN: '104.252.53.104' });
+  const plan = portPlan.computePlan([panel(443, '104.252.53.104')]);
+  assert.deepEqual(plan.panelExclusive, { hostPort: 443, containerPort: 8443 });
+  assert.equal(plan.demuxPorts.length, 0);
+  // Host :443 already published, but container side is demux leftover :443 (not :8443)
+  assert.equal(
+    portPlan.nginxPublishNeedsRecreate(plan, [80, 443], [80, 443]),
+    true,
+  );
+  assert.equal(
+    portPlan.nginxPublishNeedsRecreate(plan, [80, 443], [80, 8443]),
+    false,
+  );
+});
+
+test('nginxPublishNeedsRecreate: exclusive leftover 8443 must become demux 443→443', () => {
+  const { portPlan } = loadPortPlan({ PANEL_HTTPS_PORT: '443' });
+  const plan = portPlan.computePlan([
+    panel(443, 'panel.example.com'),
+    xray(443),
+  ]);
+  assert.equal(plan.panelExclusive, null);
+  assert.ok(plan.demuxPorts.some((d) => d.port === 443));
+  assert.equal(
+    portPlan.nginxPublishNeedsRecreate(plan, [80, 443], [80, 8443]),
+    true,
+  );
+  assert.equal(
+    portPlan.nginxPublishNeedsRecreate(plan, [80, 443], [80, 443]),
+    false,
+  );
+});

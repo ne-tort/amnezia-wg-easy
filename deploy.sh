@@ -477,6 +477,37 @@ if [ "$compose_ok" -ne 1 ]; then
   exit 1
 fi
 
+# After demux→exclusive (or stale ports.yml), compose may leave nginx on 443→443 while
+# ports.yml already says 443→8443. Host port alone looks fine; HTTPS is dead.
+# Force-recreate when published container ports disagree with the override file.
+verify_nginx_publish_matches_ports_yml() {
+  local want_8443=0 want_demux=0
+  if grep -E '^\s+- "[^"]+:8443"' "$PORTS_FILE" >/dev/null 2>&1 \
+    || grep -E '^\s+- "\$\{PANEL_HTTPS_PORT[^"]*\}:8443"' "$PORTS_FILE" >/dev/null 2>&1; then
+    want_8443=1
+  fi
+  if grep -E '^\s+- "[0-9]+:[0-9]+"' "$PORTS_FILE" >/dev/null 2>&1; then
+    # same host:container port (demux listen), excluding :8443/:8444/:80
+    if grep -EEq '^\s+- "([0-9]+):\1"' "$PORTS_FILE"; then
+      want_demux=1
+    fi
+  fi
+  local container_ports
+  container_ports=$(docker inspect -f '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}' nginx 2>/dev/null || true)
+  if [[ "$want_8443" -eq 1 ]] && ! echo "$container_ports" | grep -q '8443/tcp'; then
+    echo "[deploy] nginx publish mismatch: ports.yml wants :8443 but container has [${container_ports}] — force-recreate"
+    docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_TLS_ARGS[@]}" up -d --no-deps --force-recreate nginx \
+      || docker compose "${COMPOSE_FILES[@]}" up -d --no-deps --force-recreate nginx || true
+    return
+  fi
+  if [[ "$want_demux" -eq 1 && "$want_8443" -eq 0 ]] && echo "$container_ports" | grep -q '8443/tcp'; then
+    echo "[deploy] nginx publish mismatch: demux ports.yml but container still publishes 8443 — force-recreate"
+    docker compose "${COMPOSE_FILES[@]}" "${COMPOSE_TLS_ARGS[@]}" up -d --no-deps --force-recreate nginx \
+      || docker compose "${COMPOSE_FILES[@]}" up -d --no-deps --force-recreate nginx || true
+  fi
+}
+verify_nginx_publish_matches_ports_yml
+
 # DNS prerequisites for panel UI toggle (docker.sock → same daemon as this deploy).
 if ! docker image inspect amnezia-dns >/dev/null 2>&1; then
   echo "[deploy] ERROR: amnezia-dns image missing after build" >&2
