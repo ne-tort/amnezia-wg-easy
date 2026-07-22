@@ -27,9 +27,13 @@ const DESIRED_KEY = 'amnezia_dns_desired';
 const PROFILE_KEY = 'amnezia_dns_profile';
 const PANEL_CONTAINER = 'amnezia-awg';
 const FORWARD_RECORDS_REL = path.join('amnezia-dns', 'forward-records.conf');
-const ENABLE_TIMEOUT_MS = 90_000;
 const SMOKE_DOMAIN = 'cloudflare.com';
-const RECONCILE_INTERVAL_MS = 30_000;
+
+const {
+  DOCKER_RESTART_POLICY,
+  RECONCILE_INTERVAL_MS,
+  ENABLE_TIMEOUT_MS,
+} = require('./sidecarOrchestrator');
 
 /** @type {import('node:child_process').ChildProcess|null} */
 let dnsmasqChild = null;
@@ -274,7 +278,7 @@ async function ensureUnboundContainer() {
   const run = await runCmd('docker', [
     'run', '-d',
     '--log-driver', 'none',
-    '--restart', 'always',
+    '--restart', DOCKER_RESTART_POLICY,
     '--network', network,
     '--ip', AMNEZIA_DNS_UPSTREAM,
     '--name', CONTAINER_NAME,
@@ -625,19 +629,24 @@ async function reconcile() {
     return getStatus();
   }
 
-  // desired on
+  // desired on — observe only; healing via explicit enable in UI
   try {
-    const smoke = await runSmoke();
+    const containerUp = await dockerContainerRunning();
+    const dnsmasqUp = isDnsmasqAlive();
+    let smoke = { ok: false };
+    if (containerUp && dnsmasqUp) {
+      smoke = await runSmoke();
+    }
+    lastSmoke = smoke;
     if (smoke.ok) {
-      if (!isDnsmasqAlive()) startDnsmasq();
       setPhase('running');
       return getStatus();
     }
-    if (phase !== 'installing') {
-      // eslint-disable-next-line no-console
-      console.warn('Amnezia DNS: unhealthy, reinstalling…', JSON.stringify(smoke));
-      await enableInternal();
-    }
+    let reason = 'DNS unhealthy';
+    if (!containerUp) reason = 'amnezia-dns container not running';
+    else if (!dnsmasqUp) reason = 'dnsmasq not running';
+    else if (smoke.error) reason = smoke.error;
+    setPhase('degraded', new Error(reason));
   } catch (err) {
     setPhase('degraded', err);
   }

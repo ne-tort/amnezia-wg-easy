@@ -59,9 +59,13 @@ const DEFAULT_MASQUERADE = 'https://www.sbb.ch/';
 const MIRROR_BANK_SEED = path.join(__dirname, '..', '..', 'config', 'mirror-bank.seed.json');
 const MIRROR_BANK_SEED_IN_IMAGE = path.join(__dirname, '..', 'config', 'mirror-bank.seed.json');
 
-const ENABLE_TIMEOUT_MS = 300_000;
-const SMOKE_WAIT_MS = 90_000;
-const RECONCILE_INTERVAL_MS = 30_000;
+const {
+  DOCKER_RESTART_POLICY,
+  RECONCILE_INTERVAL_MS,
+  ENABLE_TIMEOUT_MS,
+  SMOKE_WAIT_MS,
+  observeSidecarHealth,
+} = require('./sidecarOrchestrator');
 
 /** @type {'off'|'installing'|'running'|'degraded'|'removing'|'error'} */
 let phase = 'off';
@@ -901,7 +905,7 @@ async function ensureHysteriaContainer() {
   const runArgs = [
     'run', '-d',
     '--log-driver', 'none',
-    '--restart', 'unless-stopped',
+    '--restart', DOCKER_RESTART_POLICY,
     '--name', CONTAINER_NAME,
     '--label', 'amnezia.managed=1',
     '--label', 'amnezia.service=hysteria',
@@ -1475,30 +1479,19 @@ async function reconcile() {
       setSetting(PUBLIC_PORT_KEY, String(getPublicPort()));
     }
     if (getCore() === 'xray') {
-      await removeHysteriaContainer();
-      const amneziaXray = require('./amneziaXray');
-      await amneziaXray.syncClientsFromDb();
-      await amneziaXray.ensureXrayContainer();
-      await amneziaXray.reloadXrayConfig();
-      await require('./portPlan').applyPlan();
-      const xrayUp = (await runCmd('docker', ['inspect', '-f', '{{.State.Running}}', 'amnezia-xray'])).stdout.trim() === 'true';
-      lastSmoke = { ok: xrayUp, via: 'xray-shared', at: Date.now() };
-      if (xrayUp) setPhase('running');
-      else setPhase('degraded', new Error('amnezia-xray not running'));
+      const xrayObserve = await observeSidecarHealth('amnezia-xray', async () => {
+        const up = (await runCmd('docker', ['inspect', '-f', '{{.State.Running}}', 'amnezia-xray'])).stdout.trim() === 'true';
+        return { ok: up };
+      });
+      lastSmoke = { ok: !xrayObserve.unhealthy, via: 'xray-shared', at: Date.now() };
+      if (!xrayObserve.unhealthy) setPhase('running');
+      else setPhase('degraded', xrayObserve.reason);
       return;
     }
-    if (!(await dockerContainerRunning())) {
-      setPhase('degraded', new Error('amnezia-hysteria container not running'));
-      await syncClientsFromDb();
-      await ensureHysteriaContainer();
-    } else {
-      await ensureHysteriaContainer();
-    }
-    await waitForHysteriaRunning(30_000);
-    await require('./portPlan').applyPlan();
-    const smoke = await runSmoke();
-    if (smoke.ok) setPhase('running');
-    else setPhase('degraded', new Error(`smoke failed: ${smoke.dial && smoke.dial.out}`));
+    const { smoke, unhealthy, reason } = await observeSidecarHealth(CONTAINER_NAME, runSmoke);
+    lastSmoke = smoke;
+    if (!unhealthy) setPhase('running');
+    else setPhase('degraded', reason);
   } catch (err) {
     setPhase('degraded', err);
   }

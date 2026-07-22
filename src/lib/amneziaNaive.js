@@ -34,8 +34,12 @@ const SSL_CERT_ID_KEY = 'amnezia_naive_ssl_cert_id';
 const TCP_ENABLED_KEY = 'amnezia_naive_tcp_enabled';
 const QUIC_ENABLED_KEY = 'amnezia_naive_quic_enabled';
 
-const ENABLE_TIMEOUT_MS = 180_000;
-const RECONCILE_INTERVAL_MS = 30_000;
+const {
+  DOCKER_RESTART_POLICY,
+  RECONCILE_INTERVAL_MS,
+  ENABLE_TIMEOUT_MS,
+  observeSidecarHealth,
+} = require('./sidecarOrchestrator');
 
 /** @type {'off'|'installing'|'running'|'degraded'|'removing'|'error'} */
 let phase = 'off';
@@ -610,7 +614,7 @@ async function ensureNaiveContainer() {
   const runArgs = [
     'run', '-d',
     '--log-driver', 'none',
-    '--restart', 'unless-stopped',
+    '--restart', DOCKER_RESTART_POLICY,
     '--name', CONTAINER_NAME,
     '--label', 'amnezia.managed=1',
     '--label', 'amnezia.service=naive',
@@ -1032,17 +1036,10 @@ async function reconcile() {
     if (!getSetting(PUBLIC_PORT_KEY, '')) {
       setSetting(PUBLIC_PORT_KEY, String(getPublicPort()));
     }
-    if (!(await dockerContainerRunning())) {
-      setPhase('degraded', new Error('amnezia-naive container not running'));
-      await syncClientsFromDb();
-      await ensureNaiveContainer();
-    } else {
-      await ensureNaiveContainer();
-    }
-    await require('./portPlan').applyPlan();
-    const smoke = await runSmoke();
-    if (smoke.ok) setPhase('running');
-    else setPhase('degraded', new Error(`smoke failed: ${smoke.dial && smoke.dial.out}`));
+    const { smoke, unhealthy, reason } = await observeSidecarHealth(CONTAINER_NAME, runSmoke);
+    lastSmoke = smoke;
+    if (!unhealthy) setPhase('running');
+    else setPhase('degraded', reason);
   } catch (err) {
     setPhase('degraded', err);
   }

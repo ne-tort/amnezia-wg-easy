@@ -48,6 +48,13 @@ const TRANSPORT_JSON_KEY = 'amnezia_xray_transport_json';
 
 const xrayVlessConfig = require('./xrayVlessConfig');
 const xrayTransportSchema = require('./xrayTransportSchema');
+const {
+  DOCKER_RESTART_POLICY,
+  RECONCILE_INTERVAL_MS,
+  ENABLE_TIMEOUT_MS,
+  SMOKE_WAIT_MS,
+  observeSidecarHealth,
+} = require('./sidecarOrchestrator');
 
 const DEFAULT_SNI = 'www.sbb.ch';
 const DEFAULT_FP = 'chrome';
@@ -60,9 +67,6 @@ const FLOWS = Object.freeze([
   'xtls-rprx-vision-udp443',
   '',
 ]);
-
-const ENABLE_TIMEOUT_MS = 180_000;
-const RECONCILE_INTERVAL_MS = 30_000;
 
 /** @type {'off'|'installing'|'running'|'degraded'|'removing'|'error'} */
 let phase = 'off';
@@ -1091,7 +1095,7 @@ async function ensureXrayContainer() {
   const runArgs = [
     'run', '-d',
     '--log-driver', 'none',
-    '--restart', 'unless-stopped',
+    '--restart', DOCKER_RESTART_POLICY,
     '--cap-add=NET_ADMIN',
     '--name', CONTAINER_NAME,
     '--label', 'amnezia.managed=1',
@@ -1551,7 +1555,8 @@ async function enableInternal(opts = {}) {
     }
 
     let ready = false;
-    while (Date.now() < deadline) {
+    const smokeDeadline = Date.now() + SMOKE_WAIT_MS;
+    while (Date.now() < smokeDeadline && Date.now() < deadline) {
       if (await dockerContainerRunning()) {
         const smoke = await runSmoke();
         if (smoke.ok) {
@@ -1723,20 +1728,11 @@ async function reconcile() {
     const listenPort = resolveListenPort(getPort());
     if (String(listenPort) !== String(getPort())) {
       setSetting(PORT_KEY, String(listenPort));
-      await syncClientsFromDb();
     }
-    if (!(await dockerContainerRunning())) {
-      setPhase('degraded', new Error('amnezia-xray container not running'));
-      await syncClientsFromDb();
-      await ensureXrayContainer();
-    } else {
-      // Mode drift (e.g. MTProto joined same public port) → recreate
-      await ensureXrayContainer();
-    }
-    await require('./portPlan').applyPlan();
-    const smoke = await runSmoke();
-    if (smoke.ok) setPhase('running');
-    else setPhase('degraded', new Error(`smoke failed: ${smoke.dial && smoke.dial.out}`));
+    const { smoke, unhealthy, reason } = await observeSidecarHealth(CONTAINER_NAME, runSmoke);
+    lastSmoke = smoke;
+    if (!unhealthy) setPhase('running');
+    else setPhase('degraded', reason);
   } catch (err) {
     setPhase('degraded', err);
   }

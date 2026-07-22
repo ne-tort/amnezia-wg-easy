@@ -51,8 +51,12 @@ const DEFAULT_INTERNAL_PORT = 35000;
 const DEFAULT_PUBLIC_PORT = 3080;
 const CLOCK_SKEW_WARN_SEC = 30;
 
-const ENABLE_TIMEOUT_MS = 180_000;
-const RECONCILE_INTERVAL_MS = 30_000;
+const {
+  DOCKER_RESTART_POLICY,
+  RECONCILE_INTERVAL_MS,
+  ENABLE_TIMEOUT_MS,
+  observeSidecarHealth,
+} = require('./sidecarOrchestrator');
 
 /** @type {'off'|'installing'|'running'|'degraded'|'removing'|'error'} */
 let phase = 'off';
@@ -720,7 +724,7 @@ async function ensureMieruContainer() {
   const runArgs = [
     'run', '-d',
     '--log-driver', 'none',
-    '--restart', 'unless-stopped',
+    '--restart', DOCKER_RESTART_POLICY,
     '--name', CONTAINER_NAME,
     '--label', 'amnezia.managed=1',
     '--label', 'amnezia.service=mieru',
@@ -1084,13 +1088,11 @@ async function reconcile() {
     if (isUdpEnabled() && !getSetting(UDP_PUBLIC_PORT_KEY, '')) {
       setSetting(UDP_PUBLIC_PORT_KEY, String(getUdpPublicPort()));
     }
-    let needsSync = false;
     if (isTcpEnabled()) {
       const tcpListen = resolveTcpListenPort(getTcpListenPort());
       if (String(tcpListen) !== String(getTcpListenPort())) {
         setSetting(TCP_PORT_KEY, String(tcpListen));
         setSetting(PORT_KEY, String(tcpListen));
-        needsSync = true;
       }
     }
     if (isUdpEnabled()) {
@@ -1098,27 +1100,13 @@ async function reconcile() {
       if (String(udpListen) !== String(getUdpListenPort())) {
         setSetting(UDP_PORT_KEY, String(udpListen));
         if (!isTcpEnabled()) setSetting(PORT_KEY, String(udpListen));
-        needsSync = true;
       }
     }
-    if (needsSync) await syncClientsFromDb();
-    if (!(await dockerContainerRunning())) {
-      setPhase('degraded', new Error('amnezia-mieru container not running'));
-      await syncClientsFromDb();
-      await ensureMieruContainer();
-    } else {
-      await ensureMieruContainer();
-    }
-    try {
-      await require('./portPlan').applyPlan();
-    } catch (planErr) {
-      // eslint-disable-next-line no-console
-      console.error('Mieru reconcile: portPlan.applyPlan failed:', planErr && planErr.message);
-    }
     lastClockWarning = await detectClockWarning();
-    const smoke = await runSmoke();
-    if (smoke.ok) setPhase('running');
-    else setPhase('degraded', new Error(`smoke failed: ${smoke.dial && smoke.dial.out}`));
+    const { smoke, unhealthy, reason } = await observeSidecarHealth(CONTAINER_NAME, runSmoke);
+    lastSmoke = smoke;
+    if (!unhealthy) setPhase('running');
+    else setPhase('degraded', reason);
   } catch (err) {
     setPhase('degraded', err);
   }

@@ -714,13 +714,11 @@ new Vue({
     },
     ensureAmneziaDnsPoll() {
       if (this.amneziaDnsPollTimer) return;
+      this._amneziaDnsPhasePoll = this.amneziaDnsPhase;
+      const pollMs = typeof SIDECAR_POLL_MS !== 'undefined' ? SIDECAR_POLL_MS : 2500;
       this.amneziaDnsPollTimer = setInterval(() => {
-        this.refreshAmneziaDnsStatus().then((st) => {
-          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
-            this.refresh().catch(() => {});
-          }
-        });
-      }, 1000);
+        this.refreshAmneziaDnsStatus().then((st) => onSidecarPollStatus(this, 'amneziaDnsPhase', st));
+      }, pollMs);
     },
     stopAmneziaDnsPoll() {
       if (this.amneziaDnsPollTimer) {
@@ -942,13 +940,10 @@ new Vue({
     },
     ensureAmneziaXrayPoll() {
       if (this.amneziaXrayPollTimer) return;
+      this._amneziaXrayPhasePoll = this.amneziaXrayPhase;
       this.amneziaXrayPollTimer = setInterval(() => {
-        this.refreshAmneziaXrayStatus().then((st) => {
-          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
-            this.refresh().catch(() => {});
-          }
-        });
-      }, 1000);
+        this.refreshAmneziaXrayStatus().then((st) => onSidecarPollStatus(this, 'amneziaXrayPhase', st));
+      }, typeof SIDECAR_POLL_MS !== 'undefined' ? SIDECAR_POLL_MS : 2500);
     },
     stopAmneziaXrayPoll() {
       if (this.amneziaXrayPollTimer) {
@@ -979,12 +974,13 @@ new Vue({
     openAmneziaXrayInstall({ mode = 'install' } = {}) {
       this.amneziaXrayModalMode = mode;
       this.amneziaXrayFieldErrors = {};
-      // Prefill from persisted status; address defaults to how the panel was opened.
-      Promise.all([
-        this.refreshAmneziaXrayStatus(),
-        this.refreshSniCache({ ensureBg: true }),
-        this.refreshSslCerts ? this.refreshSslCerts() : Promise.resolve(),
-      ]).finally(() => {
+      this.amneziaXrayInstallOpen = true;
+      const tasks = [this.refreshAmneziaXrayStatus()];
+      if (mode !== 'manage') {
+        tasks.push(this.refreshSniCache({ ensureBg: true }));
+      }
+      if (this.refreshSslCerts) tasks.push(this.refreshSslCerts());
+      Promise.all(tasks).finally(() => {
         if (!String(this.amneziaXrayAddress || '').trim()) {
           this.amneziaXrayAddress = (typeof window !== 'undefined' && window.location && window.location.hostname)
             ? window.location.hostname
@@ -1001,7 +997,6 @@ new Vue({
         if (this.amneziaXraySslCertId && this.amneziaXraySslCertId !== '__auto__') {
           this.onXraySslCertChange();
         }
-        this.amneziaXrayInstallOpen = true;
       });
     },
     buildXrayInstallBody() {

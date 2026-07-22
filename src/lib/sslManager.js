@@ -19,6 +19,14 @@ const TYPES = Object.freeze(['self_signed', 'lets_encrypt', 'lets_encrypt_ip', '
 const LE_TYPES = Object.freeze(['lets_encrypt', 'lets_encrypt_ip']);
 const XRAY_IMAGE = 'amnezia-xray';
 const REALITY_CHECK_TTL_SEC = 24 * 60 * 60;
+const LIST_CACHE_MS = 30_000;
+
+/** @type {{ at: number, data: any } | null} */
+let listCache = null;
+
+function invalidateListCache() {
+  listCache = null;
+}
 
 const SIDECAR_CERT_FILTERS = Object.freeze({
   naive: ['lets_encrypt'],
@@ -366,16 +374,19 @@ async function syncPanel() {
   });
 }
 
-async function list() {
+async function list({ force = false } = {}) {
+  if (!force && listCache && (Date.now() - listCache.at) < LIST_CACHE_MS) {
+    return listCache.data;
+  }
   await syncPanel().catch(() => null);
   let rows = database().prepare(
     'SELECT * FROM ssl_certificates ORDER BY is_panel DESC, type ASC, domain ASC',
   ).all();
-  // Refresh expiry/fingerprint from live PEM so UI matches volume after renew/assign.
-  for (const row of rows) {
-    if (row.type === 'reality' || row.type === 'masquerade' || !row.storage_key) continue;
-    await refreshRowMetaFromVolume(row).catch(() => null);
-  }
+  // Refresh expiry/fingerprint from live PEM — parallel, non-blocking for list latency.
+  await Promise.all(rows.map((row) => {
+    if (row.type === 'reality' || row.type === 'masquerade' || !row.storage_key) return null;
+    return refreshRowMetaFromVolume(row).catch(() => null);
+  }));
   // Lazy Reality recheck for stale TTL — do not block list response.
   const now = nowSec();
   for (const row of rows) {
@@ -394,12 +405,14 @@ async function list() {
       if (preview && preview.publicIp) publicIp = String(preview.publicIp).trim();
     }
   } catch { /* optional */ }
-  return {
+  const data = {
     certs: rows.map((row) => rowToPublic(row, { includeSecrets: false })),
     certbotEmail: tlsMaterial.getCertbotEmail() || '',
     panelDomain: tlsMaterial.panelLiveDomain() || '',
     publicIp,
   };
+  listCache = { at: Date.now(), data };
+  return data;
 }
 
 async function generateRealityKeypair() {
@@ -429,6 +442,7 @@ function defaultSelfSignedHost() {
 }
 
 async function createSelfSigned(opts = {}) {
+  invalidateListCache();
   let domain = normalizeDomainInput(opts.domain, { optional: true });
   if (!domain) domain = defaultSelfSignedHost();
   const issued = await tlsMaterial.ensureSelfSignedCert(domain);
@@ -455,6 +469,7 @@ async function createSelfSigned(opts = {}) {
 }
 
 async function createLetsEncrypt(opts = {}) {
+  invalidateListCache();
   const host = normalizeDomainInput(opts.domain || opts.ip);
   const email = String(opts.email || tlsMaterial.getCertbotEmail() || '').trim();
   const force = opts.force === true;
@@ -516,6 +531,7 @@ async function applyRealityCheck(sni) {
 }
 
 async function createReality(opts = {}) {
+  invalidateListCache();
   const sni = normalizeDomainInput(opts.sni || opts.domain);
   if (!tlsMaterial.isFqdn(sni)) {
     throw httpError(400, 'Reality requires a valid FQDN SNI', 'SSL_BAD_DOMAIN');
@@ -574,6 +590,7 @@ async function recheckReality(id) {
 }
 
 async function regenerateReality(id) {
+  invalidateListCache();
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
   if (row.type !== 'reality') {
@@ -600,6 +617,7 @@ async function regenerateReality(id) {
 }
 
 function setAutoRenew(id, enabled) {
+  invalidateListCache();
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
   if (row.type === 'reality') {
@@ -612,6 +630,7 @@ function setAutoRenew(id, enabled) {
 }
 
 async function importPem(opts = {}) {
+  invalidateListCache();
   const domain = normalizeDomainInput(opts.domain);
   const certPem = String(opts.certPem || opts.cert_pem || '').trim();
   const keyPem = String(opts.keyPem || opts.key_pem || '').trim();
@@ -641,6 +660,7 @@ async function importPem(opts = {}) {
 }
 
 async function createMasquerade(opts = {}) {
+  invalidateListCache();
   let url = String(opts.url || opts.masqueradeUrl || opts.masquerade_url || '').trim();
   if (!url) throw httpError(400, 'Masquerade URL is required', 'SSL_MASQUERADE_URL');
   try {
@@ -676,6 +696,7 @@ async function createMasquerade(opts = {}) {
 }
 
 async function importPath(opts = {}) {
+  invalidateListCache();
   const domain = normalizeDomainInput(opts.domain);
   const certPath = String(opts.certPath || opts.cert_path || '').trim();
   const keyPath = String(opts.keyPath || opts.key_path || '').trim();
@@ -695,6 +716,7 @@ async function importPath(opts = {}) {
 }
 
 async function renew(id, opts = {}) {
+  invalidateListCache();
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
   if (!LE_TYPES.includes(row.type) && row.type !== 'self_signed') {
@@ -816,6 +838,7 @@ function peekCert(id) {
  * Persists storage_key as the redeploy reuse default (even when PANEL_DOMAIN is still old).
  */
 async function assignPanel(id) {
+  invalidateListCache();
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
   if (row.type === 'reality' || row.type === 'masquerade') {
@@ -851,6 +874,7 @@ async function assignPanel(id) {
 }
 
 async function remove(id) {
+  invalidateListCache();
   const row = getRaw(id);
   if (!row) throw httpError(404, 'Certificate not found', 'SSL_NOT_FOUND');
   if (isPanelRow(row)) {
@@ -871,6 +895,7 @@ module.exports = {
   LE_TYPES,
   SIDECAR_CERT_FILTERS,
   REALITY_CHECK_TTL_SEC,
+  invalidateListCache,
   list,
   get: getById,
   getRaw,

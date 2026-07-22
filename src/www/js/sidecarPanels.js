@@ -15,6 +15,21 @@ function sidecarBusyFromPhase(phase, busy) {
   return busy === true || phase === 'installing' || phase === 'removing';
 }
 
+const SIDECAR_POLL_MS = 2500;
+
+/** Refresh client list only when a sidecar install/remove job finishes. */
+function onSidecarPollStatus(vm, phaseKey, st) {
+  if (!st) return;
+  const trackKey = `_${phaseKey}Poll`;
+  const prev = vm[trackKey];
+  const cur = st.phase;
+  vm[trackKey] = cur;
+  if ((prev === 'installing' || prev === 'removing')
+    && ['running', 'off', 'error', 'degraded'].includes(cur)) {
+    vm.refresh().catch(() => {});
+  }
+}
+
 /** Extract human-readable warning from API status objects. */
 function formatSidecarWarning(value) {
   if (!value) return null;
@@ -486,13 +501,10 @@ window.SidecarPanels = {
     },
     ensureAmneziaMieruPoll() {
       if (this.amneziaMieruPollTimer) return;
+      this._amneziaMieruPhasePoll = this.amneziaMieruPhase;
       this.amneziaMieruPollTimer = setInterval(() => {
-        this.refreshAmneziaMieruStatus().then((st) => {
-          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
-            this.refresh().catch(() => {});
-          }
-        });
-      }, 1000);
+        this.refreshAmneziaMieruStatus().then((st) => onSidecarPollStatus(this, 'amneziaMieruPhase', st));
+      }, SIDECAR_POLL_MS);
     },
     stopAmneziaMieruPoll() {
       if (this.amneziaMieruPollTimer) {
@@ -519,11 +531,11 @@ window.SidecarPanels = {
     openAmneziaMieruInstall({ mode = 'install' } = {}) {
       this.amneziaMieruModalMode = mode;
       this.clearSidecarFieldErrors('mieru');
+      this.amneziaMieruInstallOpen = true;
       this.refreshAmneziaMieruStatus().finally(() => {
         if (!String(this.amneziaMieruAddress || '').trim()) {
           this.amneziaMieruAddress = sidecarDefaultAddress();
         }
-        this.amneziaMieruInstallOpen = true;
       });
     },
     async confirmAmneziaMieruInstall() {
@@ -647,13 +659,10 @@ window.SidecarPanels = {
     },
     ensureAmneziaHysteriaPoll() {
       if (this.amneziaHysteriaPollTimer) return;
+      this._amneziaHysteriaPhasePoll = this.amneziaHysteriaPhase;
       this.amneziaHysteriaPollTimer = setInterval(() => {
-        this.refreshAmneziaHysteriaStatus().then((st) => {
-          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
-            this.refresh().catch(() => {});
-          }
-        });
-      }, 1000);
+        this.refreshAmneziaHysteriaStatus().then((st) => onSidecarPollStatus(this, 'amneziaHysteriaPhase', st));
+      }, SIDECAR_POLL_MS);
     },
     stopAmneziaHysteriaPoll() {
       if (this.amneziaHysteriaPollTimer) {
@@ -680,6 +689,7 @@ window.SidecarPanels = {
     openAmneziaHysteriaInstall({ mode = 'install' } = {}) {
       this.amneziaHysteriaModalMode = mode;
       this.clearSidecarFieldErrors('hysteria');
+      this.amneziaHysteriaInstallOpen = true;
       Promise.all([
         this.refreshAmneziaHysteriaStatus(),
         this.refreshSslCerts ? this.refreshSslCerts() : Promise.resolve(),
@@ -689,7 +699,6 @@ window.SidecarPanels = {
         }
         if (this.amneziaHysteriaSslCertId) this.onHysteriaSslCertChange();
         this.syncHysteriaMasqueradeIdFromUrl();
-        this.amneziaHysteriaInstallOpen = true;
       });
     },
     async confirmAmneziaHysteriaInstall() {
@@ -820,13 +829,10 @@ window.SidecarPanels = {
     },
     ensureAmneziaNaivePoll() {
       if (this.amneziaNaivePollTimer) return;
+      this._amneziaNaivePhasePoll = this.amneziaNaivePhase;
       this.amneziaNaivePollTimer = setInterval(() => {
-        this.refreshAmneziaNaiveStatus().then((st) => {
-          if (st && (st.phase === 'running' || st.phase === 'off' || st.phase === 'error')) {
-            this.refresh().catch(() => {});
-          }
-        });
-      }, 1000);
+        this.refreshAmneziaNaiveStatus().then((st) => onSidecarPollStatus(this, 'amneziaNaivePhase', st));
+      }, SIDECAR_POLL_MS);
     },
     stopAmneziaNaivePoll() {
       if (this.amneziaNaivePollTimer) {
@@ -853,6 +859,7 @@ window.SidecarPanels = {
     openAmneziaNaiveInstall({ mode = 'install' } = {}) {
       this.amneziaNaiveModalMode = mode;
       this.clearSidecarFieldErrors('naive');
+      this.amneziaNaiveInstallOpen = true;
       Promise.all([
         this.refreshAmneziaNaiveStatus(),
         this.refreshSslCerts ? this.refreshSslCerts() : Promise.resolve(),
@@ -861,7 +868,6 @@ window.SidecarPanels = {
           this.amneziaNaiveAddress = sidecarDefaultAddress();
         }
         if (this.amneziaNaiveSslCertId) this.onNaiveSslCertChange();
-        this.amneziaNaiveInstallOpen = true;
       });
     },
     async confirmAmneziaNaiveInstall() {
