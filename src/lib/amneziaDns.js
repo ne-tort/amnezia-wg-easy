@@ -629,24 +629,35 @@ async function reconcile() {
     return getStatus();
   }
 
-  // desired on — observe only; healing via explicit enable in UI
+  // desired on — do not recreate Docker container; only keep in-panel dnsmasq
+  // (child process dies on panel restart and must be restarted locally).
   try {
     const containerUp = await dockerContainerRunning();
-    const dnsmasqUp = isDnsmasqAlive();
-    let smoke = { ok: false };
-    if (containerUp && dnsmasqUp) {
-      smoke = await runSmoke();
+    if (!containerUp) {
+      lastSmoke = { ok: false, containerUp: false, dnsmasqUp: isDnsmasqAlive(), at: Date.now() };
+      setPhase('degraded', new Error('amnezia-dns container not running'));
+      return getStatus();
     }
+    if (!isDnsmasqAlive()) {
+      startDnsmasq();
+      // Give dnsmasq a moment before smoke (bind + first query).
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    if (!isDnsmasqAlive()) {
+      lastSmoke = { ok: false, containerUp: true, dnsmasqUp: false, at: Date.now() };
+      setPhase('degraded', new Error('dnsmasq not running'));
+      return getStatus();
+    }
+    const smoke = await runSmoke();
     lastSmoke = smoke;
     if (smoke.ok) {
       setPhase('running');
       return getStatus();
     }
-    let reason = 'DNS unhealthy';
-    if (!containerUp) reason = 'amnezia-dns container not running';
-    else if (!dnsmasqUp) reason = 'dnsmasq not running';
-    else if (smoke.error) reason = smoke.error;
-    setPhase('degraded', new Error(reason));
+    const detail = (smoke.local && smoke.local.out)
+      || (smoke.upstream && smoke.upstream.out)
+      || 'DNS smoke failed';
+    setPhase('degraded', new Error(String(detail).slice(0, 200)));
   } catch (err) {
     setPhase('degraded', err);
   }
