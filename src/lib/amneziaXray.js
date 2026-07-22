@@ -1479,8 +1479,11 @@ async function enableInternal(opts = {}) {
     }
 
     const portPlan = require('./portPlan');
-    // Demux when panel or mirror stub already owns this public TCP port.
-    const tentativeMode = portPlan.inferTcpMode('xray', publicPort);
+    const needsUdpTransport = xrayTransportSchema.isUdpTransport(network);
+    // UDP transports never join TCP SNI demux (panel may already own the same number on TCP).
+    const tentativeMode = needsUdpTransport
+      ? 'direct'
+      : portPlan.inferTcpMode('xray', publicPort);
 
     const port = resolveListenPort(
       opts.port != null && String(opts.port).trim() !== '' ? opts.port : getPort(),
@@ -1498,7 +1501,9 @@ async function enableInternal(opts = {}) {
     setSetting(PORT_KEY, String(port));
     setSetting(ADDRESS_KEY, address);
 
-    if (tentativeMode === 'direct') {
+    if (needsUdpTransport) {
+      await portPlan.assertHostUdpPortsAvailable([publicPort], { owner: 'xray' });
+    } else if (tentativeMode === 'direct') {
       await portPlan.assertHostPortsAvailable([publicPort], { allowNginx: true });
     }
 

@@ -228,6 +228,18 @@ function isUdpTransport(network) {
   return mapTransportProto(network) === 'udp';
 }
 
+/**
+ * uTLS ClientHello fingerprint (fp) applies to Reality and TCP-TLS streams.
+ * Not used for security=none, and not for QUIC/Hysteria (different stack).
+ */
+function fingerprintSupported(network, security) {
+  const sec = String(security || '').toLowerCase();
+  const net = String(network || 'tcp').toLowerCase();
+  if (sec !== 'reality' && sec !== 'tls') return false;
+  if (net === 'hysteria') return false;
+  return true;
+}
+
 function getFieldsForUi(network) {
   return (FIELDS[network] || []).map((f) => ({ ...f }));
 }
@@ -254,6 +266,7 @@ module.exports = {
   flowSupported,
   mapTransportProto,
   isUdpTransport,
+  fingerprintSupported,
   getFieldsForUi,
   isEmptyValue,
 };

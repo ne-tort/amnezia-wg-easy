@@ -736,13 +736,17 @@ async function assertHostUdpPortsAvailable(ports, opts = {}) {
   const allowedNames = ownerContainers[owner] || (opts.allowSidecar === false ? [] : ownerContainers.any);
   const wgPort = parsePort(process.env.WG_PORT, 51820);
 
+  /** Match host-published UDP ports (not container-internal keys like 443/udp behind 4433:443). */
   const containerHoldsUdp = async (name, port) => {
     const r = await runCmd('docker', [
       'inspect', '-f',
-      '{{range $p, $conf := .NetworkSettings.Ports}}{{$p}} {{end}}',
+      '{{range $p, $conf := .NetworkSettings.Ports}}{{range $conf}}{{.HostPort}}/{{$p}} {{end}}{{end}}',
       name,
     ]);
-    return r.ok && new RegExp(`${port}/udp`).test(r.stdout);
+    if (!r.ok) return false;
+    // e.g. "4433/443/udp 3080/35001/udp" — require host port, not container port.
+    const re = new RegExp(`(?:^|\\s)${port}/\\d+/udp(?:\\s|$)`);
+    return re.test(r.stdout);
   };
 
   for (const port of ports) {

@@ -1003,7 +1003,6 @@ new Vue({
       const body = {
         address: String(this.amneziaXrayAddress).trim(),
         sni: String(this.amneziaXraySni || '').trim(),
-        fingerprint: this.amneziaXrayFingerprint,
         flow: this.amneziaXrayFlow,
         publicPort: Number(this.amneziaXrayPublicPort) || 443,
         security: this.amneziaXraySecurity,
@@ -1012,6 +1011,11 @@ new Vue({
           ? this.buildXrayTransportSettingsPayload()
           : (this.amneziaXrayTransportSettings || {}),
       };
+      if (typeof fingerprintSupportedFor === 'function'
+        ? fingerprintSupportedFor(body.network, body.security)
+        : (body.security !== 'none' && body.network !== 'hysteria')) {
+        body.fingerprint = this.amneziaXrayFingerprint;
+      }
       if (this.amneziaXraySecurity === 'reality' || this.amneziaXraySecurity === 'tls') {
         body.sslCertId = String(this.amneziaXraySslCertId || '__auto__').trim();
       }

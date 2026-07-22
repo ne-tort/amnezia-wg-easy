@@ -232,7 +232,11 @@ function buildStreamSettings(opts) {
     // that flag is client-only via pinnedPeerCertSha256 / URI allowInsecure).
     const alpn = normalizeAlpnList(opts.alpn, { network, forClient: opts.forClient === true });
     stream.tlsSettings = {};
-    if (opts.forClient === true && opts.fingerprint) {
+    if (
+      opts.forClient === true
+      && opts.fingerprint
+      && xrayTransportSchema.fingerprintSupported(network, security)
+    ) {
       stream.tlsSettings.fingerprint = opts.fingerprint;
     }
     if (alpn) stream.tlsSettings.alpn = alpn;
@@ -350,7 +354,9 @@ function buildVlessUrl(opts) {
   if (network !== 'tcp') params.set('type', network);
   if (flow) params.set('flow', flow);
   if (opts.sni) params.set('sni', opts.sni);
-  if (opts.fingerprint) params.set('fp', opts.fingerprint);
+  if (opts.fingerprint && xrayTransportSchema.fingerprintSupported(network, security)) {
+    params.set('fp', opts.fingerprint);
+  }
   if (security === 'reality') {
     if (opts.publicKey) params.set('pbk', opts.publicKey);
     if (opts.shortId) params.set('sid', opts.shortId);

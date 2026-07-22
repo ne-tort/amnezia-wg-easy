@@ -2034,7 +2034,7 @@
                 </select>
                 <p v-if="amneziaXrayFieldErrors.sslCertId" class="field-error">{{ sidecarFieldError(amneziaXrayFieldErrors, 'sslCertId') }}</p>
               </div>
-              <div>
+              <div v-if="showXrayFingerprintField">
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('xrayFingerprint') }}</label>
                 <select v-model="amneziaXrayFingerprint" :disabled="amneziaXrayModalMode === 'manage'" class="w-full rounded p-2 border-2 dark:bg-neutral-600 dark:text-neutral-200 border-gray-200 dark:border-neutral-500">
                   <option v-for="fp in amneziaXrayFingerprints" :key="fp" :value="fp">{{ fp }}</option>

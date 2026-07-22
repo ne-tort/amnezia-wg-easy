@@ -104,6 +104,15 @@ function flowSupportedForNetwork(network) {
   return network === 'tcp' || network === 'xhttp';
 }
 
+/** uTLS fingerprint: Reality/TCP-TLS only — not none, not Hysteria/QUIC. */
+function fingerprintSupportedFor(network, security) {
+  const sec = String(security || '').toLowerCase();
+  const net = String(network || 'tcp').toLowerCase();
+  if (sec !== 'reality' && sec !== 'tls') return false;
+  if (net === 'hysteria') return false;
+  return true;
+}
+
 function fieldsByScope(fields, scope, types) {
   return fields.filter((f) => {
     const sc = f.scope || 'shared';
@@ -149,6 +158,12 @@ window.XrayTransportUi = {
     showXrayFlowField() {
       return flowSupportedForNetwork(String(this.amneziaXrayNetwork || 'tcp').toLowerCase())
         && this.amneziaXraySecurity !== 'none';
+    },
+    showXrayFingerprintField() {
+      return fingerprintSupportedFor(
+        String(this.amneziaXrayNetwork || 'tcp').toLowerCase(),
+        String(this.amneziaXraySecurity || 'reality').toLowerCase(),
+      );
     },
     xrayTransportModalFields() {
       const fields = Array.isArray(this.amneziaXrayTransportFields) && this.amneziaXrayTransportFields.length

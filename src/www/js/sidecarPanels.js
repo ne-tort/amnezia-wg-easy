@@ -227,6 +227,8 @@ window.SidecarPanels = {
     sidecarFieldError(fieldErrors, field) {
       if (!fieldErrors || !fieldErrors[field]) return '';
       const raw = String(fieldErrors[field]);
+      // Prefer concrete API messages (port/SNI conflicts) over generic i18n labels.
+      if (/Host |UDP |TCP |port|SNI|used|busy|conflict/i.test(raw)) return raw;
       const key = `fieldError_${field}`;
       const translated = this.$t(key);
       return translated !== key ? translated : raw;
