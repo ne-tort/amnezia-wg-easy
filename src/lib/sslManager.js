@@ -29,7 +29,9 @@ function invalidateListCache() {
 }
 
 const SIDECAR_CERT_FILTERS = Object.freeze({
-  naive: ['lets_encrypt'],
+  // Publicly-trusted only (Chromium/Naive rejects self-signed by default).
+  // LE domain + LE bare-IP (shortlived iPAddress SAN) + imported CA PEMs.
+  naive: ['lets_encrypt', 'lets_encrypt_ip', 'manual'],
   hysteria: ['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'manual'],
   xray_reality: ['reality'],
   xray_tls: ['self_signed', 'lets_encrypt', 'lets_encrypt_ip', 'manual'],

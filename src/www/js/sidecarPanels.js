@@ -208,7 +208,8 @@ window.SidecarPanels = {
       return all;
     },
     naiveSslCertOptions() {
-      const list = (this.sslCerts || []).filter((c) => c && c.type === 'lets_encrypt');
+      const allowed = new Set(['lets_encrypt', 'lets_encrypt_ip', 'manual']);
+      const list = (this.sslCerts || []).filter((c) => c && allowed.has(c.type));
       const selected = this.sslFindCertById
         ? this.sslFindCertById(this.amneziaNaiveSslCertId)
         : (this.sslCerts || []).find((c) => c.id === this.amneziaNaiveSslCertId);

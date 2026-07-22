@@ -154,6 +154,26 @@ function isFqdn(host) {
   return s.includes('.');
 }
 
+/** Trusted Naive host: public FQDN or bare IP (LE IP SAN). */
+function isNaiveCertHost(host) {
+  const s = String(host || '').trim().toLowerCase();
+  if (!s) return false;
+  const portPlan = require('./portPlan');
+  if (portPlan.isIpLiteral(s)) return true;
+  return isFqdn(s);
+}
+
+/** Caddy site address — bracket IPv6 literals. */
+function caddySiteHost(host) {
+  const s = String(host || '').trim().toLowerCase();
+  if (!s) return s;
+  const portPlan = require('./portPlan');
+  if (portPlan.isIpLiteral(s) && s.includes(':') && !s.startsWith('[')) {
+    return `[${s}]`;
+  }
+  return s;
+}
+
 function setPhase(next, err = null) {
   phase = next;
   if (err != null) lastError = String(err.message || err);
@@ -346,6 +366,7 @@ function ensureClientPasswords() {
  */
 function buildCaddyfileObject(opts) {
   const sni = String(opts.sni || '').trim().toLowerCase();
+  const siteHost = caddySiteHost(sni);
   const certDomain = String(opts.certDomain || sni).trim().toLowerCase() || sni;
   const port = opts.port || INTERNAL_PORT;
   const certBase = `/etc/letsencrypt/live/${certDomain}`;
@@ -372,7 +393,7 @@ function buildCaddyfileObject(opts) {
     '  }',
     '}',
     '',
-    `:${port}, ${sni} {`,
+    `:${port}, ${siteHost} {`,
     `  tls ${certBase}/fullchain.pem ${certBase}/privkey.pem`,
     '  encode',
     '  forward_proxy {',
@@ -773,8 +794,8 @@ async function enableInternal(opts = {}) {
       || getSetting(SSL_CERT_ID_KEY, '');
     const inventoryCert = sslManager.requireSidecarCert(sslCertId, 'naive');
     const sni = tlsMaterial.normalizeHostname(inventoryCert.sni || inventoryCert.domain || '');
-    if (!sni || !tlsMaterial.isFqdn(sni)) {
-      throw Object.assign(new Error('Naive requires a real domain (FQDN) certificate'), {
+    if (!isNaiveCertHost(sni)) {
+      throw Object.assign(new Error('Naive requires a trusted certificate for a domain or IP'), {
         status: 400,
         code: 'NAIVE_BAD_SNI',
       });

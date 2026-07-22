@@ -2479,6 +2479,7 @@
                   <option v-for="c in naiveSslCertOptions" :key="c.id" :value="c.id">{{ sslCertSelectLabel(c) }}</option>
                 </select>
                 <p v-if="amneziaNaiveSni" class="text-xs text-gray-500 dark:text-neutral-400 mt-1">SNI: {{ amneziaNaiveSni }}</p>
+                <p class="text-xs text-gray-500 dark:text-neutral-400 mt-1">{{ $t('naiveCertHint') }}</p>
                 <p v-if="amneziaNaiveFieldErrors.sslCertId" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'sslCertId') }}</p>
                 <p v-if="amneziaNaiveFieldErrors.sni" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'sni') }}</p>
               </div>
@@ -2500,7 +2501,6 @@
                   <span class="panel-check-label">{{ $t('naiveEnableQuic') }}</span>
                 </label>
               </div>
-              <p class="text-xs text-gray-500 dark:text-neutral-400">{{ $t('naiveQuicHint') }}</p>
               <p v-if="amneziaNaiveFieldErrors.enableTcp" class="field-error">{{ sidecarFieldError(amneziaNaiveFieldErrors, 'enableTcp') }}</p>
               <div>
                 <label class="block text-sm text-gray-600 dark:text-neutral-400 mb-1">{{ $t('naiveProbeDomain') }}</label>

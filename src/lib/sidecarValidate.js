@@ -221,11 +221,16 @@ function validateNaive(body = {}) {
   const certCheck = validateSslCertId(body, 'naive');
   if (!certCheck.ok) return certCheck;
   if (certCheck.auto) {
-    return errField('sslCertId', 'Select a Let\'s Encrypt FQDN certificate', 'SSL_CERT_REQUIRED');
+    return errField('sslCertId', 'Select a trusted certificate (Let\'s Encrypt domain or IP)', 'SSL_CERT_REQUIRED');
   }
   const sni = tlsMaterial.normalizeHostname(certCheck.cert.sni || certCheck.cert.domain || body.sni || '');
-  if (!sni || !tlsMaterial.isFqdn(sni)) {
-    return errField('sni', 'Naive requires a Let\'s Encrypt FQDN certificate', 'NAIVE_BAD_SNI');
+  const portPlan = require('./portPlan');
+  const hostOk = !!(sni && (tlsMaterial.isFqdn(sni) || portPlan.isIpLiteral(sni)));
+  if (!hostOk) {
+    return errField('sni', 'Naive requires a trusted certificate for a domain or IP', 'NAIVE_BAD_SNI');
+  }
+  if (certCheck.cert.type === 'self_signed') {
+    return errField('sslCertId', 'Self-signed certificates are not accepted for Naive', 'SSL_CERT_TYPE');
   }
   const probe = String(body.probeResistanceDomain || body.probe_resistance_domain || '').trim();
   if (probe && probe.toLowerCase() === sni) {
